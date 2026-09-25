@@ -2,14 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="chat.css">
 </head>
 <body>
 
 <div id="setup" class="overlay hidden">
   <div class="panel">
-    <h1>绑定模型接口</h1>
+    <h1>🐳 绑定 API</h1>
     <p class="sub">先绑定模型接口，我才能开口说话</p>
     <label>模型 Provider</label>
     <select id="provider">
@@ -29,6 +28,7 @@
       <option value="cet4">四级词汇</option>
       <option value="cet6">六级词汇</option>
     </select>
+
     <label>AI 助手权限（操控电脑，每次需你确认）</label>
     <select id="assistant">
       <option value="off">关闭</option>
@@ -36,44 +36,13 @@
       <option value="normal">常规 · 可打开网页/应用/文件</option>
       <option value="web">网页操控 · 自动打开页面/点击/输入/抓取</option>
     </select>
-    <hr class="sep">
-    <label>朗读音色风格</label>
-    <select id="ttsStyle">
-      <option value="tsundere">傲娇少女（推荐）</option>
-      <option value="cute">元气可爱</option>
-      <option value="gentle">温柔小声</option>
-      <option value="cool">清冷御姐</option>
-      <option value="custom">自定义</option>
-    </select>
-    <label>朗读音色（优先自然女声）</label>
-    <select id="ttsVoice">
-      <option value="">自动选择最佳音色（推荐）</option>
-    </select>
-    <label>语速 <span id="ttsRateVal" class="val">1.02</span></label>
-    <input id="ttsRate" type="range" min="0.60" max="1.40" step="0.02" value="1.02">
-    <label>音调 <span id="ttsPitchVal" class="val">1.18</span></label>
-    <input id="ttsPitch" type="range" min="0.70" max="1.60" step="0.02" value="1.18">
-    <hr class="sep">
-    <label class="check-row"><input id="voiceWakeEnabled" type="checkbox" checked> 后台语音唤醒（默认：你好大肥鱼）</label>
-    <label>唤醒词（逗号分隔，可多个）</label>
-    <input id="wakeWords" placeholder="你好大肥鱼, 大肥鱼, 你好大飞鱼">
-    <label>唤醒灵敏度 <span id="wakeSensitivityVal" class="val">0.68</span></label>
-    <input id="wakeSensitivity" type="range" min="0.50" max="0.95" step="0.01" value="0.68">
-    <label>唤醒后识别语言</label>
-    <select id="voiceCommandLang">
-      <option value="en-US">English · 英语指令</option>
-      <option value="zh-CN">中文 · 中文指令</option>
-    </select>
-    <label>AI 回复语言</label>
-    <select id="replyLanguage">
-      <option value="en">English（默认）</option>
-      <option value="zh">中文</option>
-    </select>
-    <div class="row">
-      <button id="ttsPreview" class="ghost">试听音色</button>
-      <button id="ttsSave" class="ghost">保存语音/唤醒设置</button>
+    <label>立绘（免打包更换）</label>
+    <div class="row" style="margin-top:6px">
+      <button id="artOpen" class="ghost">打开立绘文件夹</button>
+      <button id="artReset" class="ghost">恢复默认立绘</button>
     </div>
-    <div id="ttsMsg" class="msg"></div>
+    <div class="sub" style="margin:8px 0 0">把透明底 PNG 命名为 <b>pet-character.png</b> 放进文件夹即可，桌宠会自动换图（约 3 秒内），不用重启、不用重新打包。</div>
+
     <div class="row">
       <button id="save" class="primary">绑定并开始</button>
       <button id="skip" class="ghost">稍后再说</button>
@@ -84,7 +53,7 @@
 
 <div id="persona" class="overlay hidden">
   <div class="panel">
-    <h1>人设</h1>
+    <h1>👤 人设</h1>
     <p class="sub">写你自己的设定，保存后立即生效</p>
     <label>名字</label>
     <input id="pName" placeholder="大肥鱼">
@@ -106,7 +75,7 @@
 
 <div id="diary" class="overlay hidden">
   <div class="panel">
-    <h1>记忆</h1>
+    <h1>📖 记忆日记</h1>
     <p class="sub">长期记忆按天归档；中期记忆是今天的会话</p>
     <div id="diaryBody"></div>
     <div class="row"><button id="diaryClose" class="ghost">关闭</button></div>
@@ -115,7 +84,7 @@
 
 <div id="vocab" class="overlay hidden">
   <div class="panel">
-    <h1>生词本</h1>
+    <h1>📒 生词本</h1>
     <p class="sub">点对话里带虚线的单词即可收藏；跟读读错的词也能点一下加入</p>
     <div id="vocabBody"></div>
     <div class="row">
@@ -125,39 +94,69 @@
   </div>
 </div>
 
+<div id="voice" class="overlay hidden">
+  <div class="panel">
+    <h1>🎙 音色</h1>
+    <p class="sub">桌宠说的是英语，所以这里都是英文神经音色（联网合成，同一句会缓存，之后秒出）</p>
+    <label>音色</label>
+    <select id="vVoice"></select>
+    <label>语气</label>
+    <select id="vStyle"></select>
+    <label>语速（0.5 慢 – 1.5 快）</label>
+    <input id="vRate" type="range" min="0.5" max="1.5" step="0.05" value="1">
+    <label>音调（0.5 低 – 1.5 高）</label>
+    <input id="vPitch" type="range" min="0.5" max="1.5" step="0.05" value="1">
+    <div class="row" style="margin-top:10px">
+      <button id="vPreview" class="ghost">试听</button>
+      <button id="vSave" class="primary">保存</button>
+      <button id="vCancel" class="ghost">关闭</button>
+    </div>
+    <div id="vMsg" class="msg"></div>
+  </div>
+</div>
+
+<div id="micPerm" class="overlay hidden">
+  <div class="panel">
+    <h1>🎤 需要麦克风权限</h1>
+    <p class="sub">桌宠想听见你说话，但系统还没把麦克风权限给它。</p>
+    <div class="sub" id="micPermReason" style="color:#b4543a"></div>
+    <ol class="sub" style="line-height:1.9;padding-left:20px">
+      <li>点下面的按钮打开系统设置</li>
+      <li>把「<b>允许应用访问你的麦克风</b>」打开</li>
+      <li>往下找到本应用，把它也打开</li>
+      <li>回到这里点「我已授权」</li>
+    </ol>
+    <div class="row">
+      <button id="micPermOpen" class="primary">打开系统麦克风设置</button>
+      <button id="micPermRetry" class="ghost">我已授权</button>
+      <button id="micPermTest" class="ghost">🔍 语音自检</button>
+      <button id="micPermDl" class="ghost">⬇ 下载语音模型</button>
+      <button id="micPermClose" class="ghost">关闭</button>
+    </div>
+    <div id="micPermMsg" class="msg"></div>
+  </div>
+</div>
+
 <div id="main" class="hidden">
   <header>
-    <img class="avatar" src="../assets/pet-character.png" alt="大肥鱼">
-    <div class="head-meta">
-      <div class="title">大肥鱼</div>
-      <div class="subtitle">傲娇鲸鱼女仆 · 英语陪练</div>
-    </div>
-    <div id="moodBar" class="moodbar">
-      <span class="heart">好感 <b id="affVal">--</b></span>
-      <span class="mood">心情 <b id="moodVal">--</b></span>
-    </div>
+    <div class="title">🐳 大肥鱼</div>
+    <div id="moodBar" class="moodbar">❤️ -- · 😊 --</div>
     <div id="dshBar" class="dshbar"></div>
+    <div id="micState" class="micstate" title="麦克风状态 —— 点一下重新检测">🎤 未检测</div>
     <div class="tools">
-      <span id="vocabBtn" class="tool" title="生词本">生词</span>
-      <span id="diaryBtn" class="tool" title="记忆">日记</span>
-      <span id="personaBtn" class="tool" title="人设">人设</span>
-      <span id="ttsBtn" class="tool on" title="左键开关朗读 · 右键设置音色">朗读</span>
-      <span id="settingsBtn" class="tool" title="设置">设置</span>
+      <span id="vocabBtn" class="tool" title="生词本">📒</span>
+      <span id="diaryBtn" class="tool" title="记忆日记">📖</span>
+      <span id="personaBtn" class="tool" title="人设">👤</span>
+      <span id="ttsBtn" class="tool on" title="朗读开关">🔊</span>
+      <span id="voiceBtn" class="tool" title="音色">🎙</span>
+      <span id="endBtn" class="tool" title="结束本次会话">⏹</span>
+      <span id="settingsBtn" class="tool" title="设置">⚙️</span>
     </div>
   </header>
-
-  <div id="quickActions">
-    <button class="quick" data-act="pat">摸摸头</button>
-    <button class="quick" data-act="feed">投喂</button>
-    <button class="quick" data-act="listen">跟读</button>
-    <button class="quick" data-act="review">复习单词</button>
-  </div>
-
   <div id="msgs"></div>
   <div id="choices"></div>
-
   <div id="composer">
-    <button id="mic" title="点击录音">录音</button>
+    <button id="mic" title="点击录音">🎤</button>
     <div id="recStatus" class="hidden">
       <div class="waves"><span></span><span></span><span></span><span></span><span></span></div>
       <span id="recHint">再点一次发送 · 上滑取消</span>
@@ -167,7 +166,7 @@
   </div>
 </div>
 
-<script src="tts.js"></script>
+<script src="asr-recorder.js"></script>
 <script src="chat.js"></script>
 </body>
 </html>

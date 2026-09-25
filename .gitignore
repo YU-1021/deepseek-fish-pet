@@ -1,21 +1,32 @@
-# dependencies
+# ---- 依赖 ----
 node_modules/
-.pw-browsers/*
-!.pw-browsers/README.txt
+app/node_modules/
 
-# build output
+# ---- 构建产物 ----
 app/dist/
 release/
 dist/
+app/.pw-browsers/*
+!app/.pw-browsers/README.txt
 *.exe
 *.blockmap
-*.yml
 
-# local runtime data
+# vendor 里的可执行文件是程序的一部分，必须进仓库
+!app/vendor/whisper/*.exe
+
+# ---- 本地运行数据 / 日志 ----
 app/shots/
 *.log
+debug.log
 
-# test artifacts
-_portable_test*
-_test*/
+# ---- 本地快照、备份、素材包（体积大 / 与源码无关，不进仓库）----
+snapshots/
+app-modified-backup/
+*.zip
+ref/*.mp4
+ref/_extracted/
 
+# ---- 系统垃圾 ----
+Thumbs.db
+desktop.ini
+.DS_Store

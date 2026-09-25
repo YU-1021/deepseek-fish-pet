@@ -2,28 +2,14 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="stage">
-    <div id="bubble" role="dialog" aria-live="polite"></div>
-
-    <div id="pet-area">
-      <img id="pet" src="../assets/sprites/dafeiyu/正面.png" draggable="false" alt="">
-      <div id="fx" aria-hidden="true"></div>
-    </div>
-
-    <div id="function-panel" class="hidden" aria-label="桌宠功能">
-      <button id="fn-chat" title="打开对话">聊天</button>
-    </div>
-
-    <div id="feed-panel" class="hidden">
-      <div class="feed-row"></div>
-      <button id="feed-close" title="关闭">✕</button>
-    </div>
+  <div id="wrap">
+    <img id="pet" draggable="false" alt=""><!-- src 由 renderer 用 dataUrl 设置：file:// 的图会污染 canvas，读不了 alpha -->
+    <div id="bubble"></div>
   </div>
-  <script src="tts.js"></script>
+  <script src="asr-recorder.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

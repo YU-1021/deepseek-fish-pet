@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, screen, session, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const config = require('./src/config');
@@ -9,43 +9,25 @@ const assistant = require('./src/assistant');
 const web = require('./src/web');
 const dsh = require('./src/dsh');
 const vocab = require('./src/vocab');
-const edgeTts = require('./src/edgeTts');
-const winAsr = require('./src/winAsr');
-app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+const tts = require('./src/tts');
+const asr = require('./src/asr');
+const chatlog = require('./src/chatlog');
+
+const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
 let petWin = null;
 let chatWin = null;
-let tray = null;
-let sessionArr = [];
-let sessionStart = Date.now();
 let didSummarize = false;
+let allowChatClose = false;
 
-/* ---------------- 桌宠状态 ---------------- */
-let petMode = 'wander';
-let petScale = 1;
-let petSkin = 'dafeiyu';
-let moveTimer = null;
-let wanderTarget = null;
-let wanderCooldownUntil = 0;
-let dragPausedUntil = 0;
-let lastDirectionSent = '';
-let petMoving = false;
-
-const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
 const loadPosition = () => { try { return JSON.parse(fs.readFileSync(posFile(), 'utf8')); } catch { return null; } };
 const savePosition = (x, y) => { try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {} };
-const bundledPersonaFile = () => path.join(__dirname, 'persona.json');
-const personaFile = () => path.join(app.getPath('userData'), 'persona.json');
-const loadPersona = () => {
-  let bundled = {};
-  let saved = {};
-  try { bundled = JSON.parse(fs.readFileSync(bundledPersonaFile(), 'utf8')); } catch {}
-  try { saved = JSON.parse(fs.readFileSync(personaFile(), 'utf8')); } catch {}
-  return { ...bundled, ...saved };
-};
-const shotDir = () => path.join(app.getPath('userData'), 'shots');
-const dayStr = (ts) => { const d = new Date(ts); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+const personaFile = () => path.join(__dirname, 'persona.json');
+const loadPersona = () => { try { return JSON.parse(fs.readFileSync(personaFile(), 'utf8')); } catch { return {}; } };
+
+/* 记忆系统：依赖注入（记忆层不硬依赖 llm/config/persona，方便以后替换或单测） */
+memory.init({ llm, config, persona: loadPersona });
 
 const VOCAB = {
   high_school: 'high-school level (simple, common words)',
@@ -61,52 +43,11 @@ function buildSystemPrompt(cfg) {
   if (tier !== 'off') {
     let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n';
     if (tier === 'web') {
-      tools += '- web_open|<url>\n- web_click|<CSS selector>\n- web_type|<selector>||<text>\n- web_read\n';
+      tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
     actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. The user must approve before it runs. Otherwise omit the line entirely.\n';
   }
-
-  const mem = memory.load();
-  const longs = (mem.long || []).slice(-5);
-  const meds = (mem.medium || []).slice(-6);
-  let memCtx = '';
-  if (longs.length) memCtx += '\n# Long-term memory (your diary from recent days)\n' + longs.map((e) => `- [${e.date}] ${String(e.diary || '').slice(0, 3000)}`).join('\n') + '\n';
-  if (meds.length) memCtx += '\n# Recent sessions (today)\n' + meds.map((e) => `- ${String(e.summary || '').slice(0, 200)}`).join('\n') + '\n';
-
-  const replyZh = cfg.replyLanguage === 'zh';
-  const langRule = replyZh
-    ? '- You MUST reply in natural Chinese, 1-3 short sentences. Do NOT reply in English, even if the user writes in English or previous messages were English.'
-    : '- You MUST reply in natural English, 1-3 short sentences. Do NOT reply in Chinese.';
-  const outputFormat = replyZh ? [
-    '# Output format — reply with EXACTLY these lines, no markdown, no extra text:',
-    'EN: <你的中文回复，1-3 个短句>',
-    'ZH: <English translation of your reply>',
-    'WORDS:',
-    'C1: <下一句用户可能说的中文回复>',
-    'C1ZH: <English translation of C1>',
-    'C2: <另一句用户可能说的中文回复>',
-    'C2ZH: <English translation of C2>',
-    '',
-    'Rules:',
-    '- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).',
-    '- WORDS: 留空即可。',
-    '- Do not use markdown, code fences, or anything else.'
-  ].join('\n') : [
-    '# Output format — reply with EXACTLY these lines, no markdown, no extra text:',
-    'EN: <your English reply, 1-3 short sentences>',
-    'ZH: <完整中文翻译>',
-    'WORDS: <word1>=<IPA1>=<中文意思1>, <word2>=<IPA2>=<中文意思2>',
-    'C1: <a short English reply the user could say next>',
-    'C1ZH: <中文翻译 of C1>',
-    'C2: <another short English reply the user could say next>',
-    'C2ZH: <中文翻译 of C2>',
-    '',
-    'Rules:',
-    '- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).',
-    '- WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.',
-    '- Do not use markdown, code fences, or anything else.'
-  ].join('\n');
-
+  const memCtx = memory.buildContext();
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -123,7 +64,7 @@ ${p.hidden_setting || ''}
 Never mention, hint at, or allude to this on your own.
 
 # Language rules
-${langRule}
+- ALWAYS speak English, natural spoken English, 1-3 short sentences.
 - Vocabulary level: ${VOCAB[cfg.vocabLevel] || VOCAB.high_school}.
 
 # Current relationship state (internal — never mention these numbers directly)
@@ -131,365 +72,220 @@ ${langRule}
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
 ${memCtx}${actionSec}
-${outputFormat}`;
+# Output format — reply with EXACTLY these lines, no markdown, no extra text:
+EN: <your English reply, 1-3 short sentences>
+ZH: <完整中文翻译>
+WORDS: <word1>=<IPA1>=<中文意思1>, <word2>=<IPA2>=<中文意思2>
+C1: <a short English reply the user could say next>
+C1ZH: <中文翻译 of C1>
+C2: <another short English reply the user could say next>
+C2ZH: <中文翻译 of C2>
+
+Rules:
+- Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
+- WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.
+- Do not use markdown, code fences, or anything else.`;
 }
 
 async function genReply(cfg, messages) {
-  const raw = await llm.requestWithRetry(cfg, messages, { retries: 5, delayMs: 3000 });
+  const raw = await llm.request(cfg, messages);
   const reply = llm.parseReply(raw);
   if (!reply.en) reply.en = "Hmm, I'm not sure what to say... n-not that I care!";
   return { reply, raw };
 }
 
-/* ---------------- 桌宠窗口 ---------------- */
 function createPet() {
   const saved = loadPosition();
-  const cfg = config.load();
-  petMode = ['idle', 'follow', 'wander'].includes(cfg.petMode) ? cfg.petMode : 'wander';
-  petScale = Number(cfg.petScale) || 1;
-  petSkin = cfg.petSkin || 'dafeiyu';
-  const work = screen.getPrimaryDisplay().workArea;
+  const wa = screen.getPrimaryDisplay().workAreaSize;
   const opts = {
-    width: 420, height: 540,
+    width: 380, height: 460,
     transparent: true, frame: false, alwaysOnTop: true, resizable: false,
-    hasShadow: false, skipTaskbar: true, show: false,
-    backgroundColor: '#00000000',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
+    hasShadow: false, skipTaskbar: false,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   };
   if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-    opts.x = clamp(saved.x, work.x - 220, work.x + work.width - 100);
-    opts.y = clamp(saved.y, work.y - 40, work.y + work.height - 100);
-  } else {
-    opts.x = Math.round(work.x + work.width - 440);
-    opts.y = Math.round(work.y + work.height - 560);
+    opts.x = Math.min(Math.max(saved.x, -140), wa.width - 140);
+    opts.y = Math.min(Math.max(saved.y, 0), wa.height - 140);
   }
   petWin = new BrowserWindow(opts);
   petWin.setAlwaysOnTop(true, 'screen-saver');
   petWin.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  petWin.once('ready-to-show', () => {
-    if (!petWin || petWin.isDestroyed()) return;
-    petWin.showInactive();
-    petWin.webContents.send('pet:mode', petMode);
-    petWin.webContents.send('pet:scale', petScale);
-    petWin.webContents.send('pet:skin', petSkin);
-    maybeStartMovement();
-  });
+  petWin.on('moved', scheduleSavePos);
+  hitInfo = null; hitIgnoring = null; holdInteractive = false;
+  startHitLoop();
+
   petWin.webContents.on('context-menu', () => {
-    Menu.buildFromTemplate(buildPetMenu()).popup({ window: petWin });
+    Menu.buildFromTemplate([
+      { label: '🐟 投喂小鱼干', click: () => petWin.webContents.send('pet:feed') },
+      { label: '🖐 摸摸头', click: () => petWin.webContents.send('pet:pat') },
+      { label: '🎤 麦克风检测', click: () => petWin.webContents.send('pet:miccheck') },
+      { type: 'separator' },
+      { label: '打开对话', click: () => createChat() },
+      { label: '结束本次会话', click: () => { createChat(); setTimeout(() => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('memory:endAsk'); }, 700); } },
+      { type: 'separator' },
+      { label: '退出桌宠', click: () => app.quit() }
+    ]).popup({ window: petWin });
   });
-  petWin.on('closed', () => { petWin = null; stopMovement(); });
 }
 
+/* ---------------- 聊天记录 / 谁在说话 ----------------
+   回声问题的根因：回复同时推给桌宠和返回给对话窗，两边各自 TTS 一遍，
+   两股音频错开一瞬 → 听起来就是回音。规则改为「谁问的谁出声」。 */
+function isFromChat(e) {
+  try { return !!(chatWin && !chatWin.isDestroyed() && e && e.sender && e.sender.id === chatWin.webContents.id); } catch { return false; }
+}
+function sessionId() { try { return memory.session.info().id; } catch { return ''; } }
+
+/* 把一条消息记进"看得见的聊天记录"（最小化/重开还能看到） */
+function logTurn(text, reply) {
+  const sid = sessionId();
+  if (text) chatlog.add(sid, { who: 'me', text });
+  if (reply && reply.en) chatlog.add(sid, { who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
+}
+
+/* 把桌宠这边主动说的话同步到对话窗（不发声，只显示，保持记录完整） */
+function relayToChat(msg) {
+  if (!chatWin || chatWin.isDestroyed()) return;
+  try { chatWin.webContents.send('chat:log', msg); } catch {}
+}
+
+ipcMain.handle('chat:log:all', () => chatlog.all(sessionId()));
+
 function createChat() {
-  if (chatWin && !chatWin.isDestroyed()) { chatWin.show(); chatWin.focus(); return; }
+  if (chatWin && !chatWin.isDestroyed()) { chatWin.show(); chatWin.restore(); chatWin.focus(); return; }
   chatWin = new BrowserWindow({
-    width: 560, height: 780, minWidth: 420, minHeight: 560, title: '大肥鱼 · 对话',
-    autoHideMenuBar: true, backgroundColor: '#f3f6fb', show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, backgroundThrottling: false }
+    width: 500, height: 720, title: '大肥鱼 · 对话', autoHideMenuBar: true,
+    backgroundColor: '#f3f6fb',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true }
   });
   chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
-  chatWin.once('ready-to-show', () => chatWin.show());
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('chat:opened');
+
+  // 点 × 默认只是「最小化」，不真的关掉会话；要结束会话请用窗口里的「结束本次会话」
+  chatWin.on('close', (e) => {
+    if (allowChatClose) return;
+    e.preventDefault();
+    try { chatWin.minimize(); } catch {}
+    if (petWin && !petWin.isDestroyed()) petWin.webContents.send('chat:closed');
+  });
+  chatWin.on('minimize', () => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('chat:closed'); });
+  chatWin.on('restore', () => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('chat:opened'); });
   chatWin.on('closed', () => {
     chatWin = null;
     if (petWin && !petWin.isDestroyed()) petWin.webContents.send('chat:closed');
   });
 }
 
-/* ---------------- 托盘 & 菜单 ---------------- */
-function createTray() {
-  if (tray) return;
-  try {
-    const raw = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png'));
-    const img = raw.isEmpty() ? nativeImage.createEmpty() : raw.resize({ width: 16, height: 16 });
-    tray = new Tray(img);
-    tray.setToolTip('大肥鱼桌宠');
-    tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true)));
-    tray.on('click', togglePetVisible);
-  } catch {}
-}
-
-function togglePetVisible() {
-  if (!petWin || petWin.isDestroyed()) return;
-  if (petWin.isVisible()) petWin.hide();
-  else { petWin.showInactive(); petWin.webContents.send('pet:say-hello'); }
-}
-
-function sendPetAction(type, payload = {}) {
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:action', { type, ...payload });
-}
-
-function buildPetMenu(trayMode) {
-  const visible = !!(petWin && !petWin.isDestroyed() && petWin.isVisible());
-  const modeItems = [
-    ['idle', '原地待机'],
-    ['follow', '跟随鼠标'],
-    ['wander', '自动散步']
-  ].map(([m, label]) => ({ label, type: 'radio', checked: petMode === m, click: () => setPetMode(m) }));
-  const scaleItems = [
-    [0.75, '小'],
-    [1, '中'],
-    [1.25, '大'],
-    [1.5, '特大']
-  ].map(([v, label]) => ({ label, type: 'radio', checked: Math.abs(petScale - v) < 0.01, click: () => setPetScale(v) }));
-  const skinItems = [
-    ['dafeiyu', '大肥鱼三视图（默认）'],
-    ['deepseek', 'DeepSeek 立绘'],
-    ['cute', '可爱占位立绘'],
-    ['melon', '忧郁占位立绘'],
-    ['default', '默认占位立绘']
-  ].map(([v, label]) => ({ label, type: 'radio', checked: petSkin === v, click: () => setPetSkin(v) }));
-  const voiceWakeOn = config.load().voiceWakeEnabled !== false;
-  const template = [
-    { label: visible ? '隐藏桌宠' : '显示桌宠', click: togglePetVisible },
-    { label: '打开对话', click: createChat },
-    { label: '语音唤醒', type: 'checkbox', checked: voiceWakeOn, click: (item) => setVoiceWake(item.checked) },
-    { type: 'separator' },
-    { label: '摸摸头', click: () => sendPetAction('pat') },
-    { label: '投喂小鱼干', click: () => sendPetAction('feed', { food: '🐟' }) },
-    { type: 'separator' },
-    { label: '桌宠模式', submenu: modeItems },
-    { label: '立绘风格', submenu: skinItems },
-    { label: '桌宠大小', submenu: scaleItems },
-    { label: '回到屏幕中央', click: resetPetPosition },
-    { type: 'separator' },
-    { label: '退出桌宠', click: () => app.quit() }
-  ];
-  if (trayMode) template.shift();
-  return template;
-}
-
-function resetPetPosition() {
-  if (!petWin || petWin.isDestroyed()) return;
-  const wa = screen.getPrimaryDisplay().workArea;
-  const b = petWin.getBounds();
-  const x = Math.round(wa.x + wa.width - b.width - 40);
-  const y = Math.round(wa.y + wa.height - b.height - 24);
-  petWin.setPosition(x, y, false);
-  savePosition(x, y);
-}
-
-/* ---------------- 移动逻辑 ---------------- */
-function stopMovement() {
-  if (moveTimer) { clearInterval(moveTimer); moveTimer = null; }
-  wanderTarget = null;
-  setPetMoving(false);
-}
-
-function setPetMoving(v) {
-  v = !!v;
-  if (v === petMoving) return;
-  petMoving = v;
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:moving', v);
-}
-
-function maybeStartMovement() {
-  stopMovement();
-  if (petMode === 'idle') return;
-  moveTimer = setInterval(moveTick, 50);
-}
-
-function setPetMode(mode) {
-  if (!['idle', 'follow', 'wander'].includes(mode)) mode = 'idle';
-  petMode = mode;
-  wanderTarget = null;
-  wanderCooldownUntil = Date.now() + 350;
-  config.save({ petMode: mode });
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:mode', mode);
-  setPetMoving(false);
-  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
-  maybeStartMovement();
-}
-
-function setPetScale(scale) {
-  scale = clamp(Number(scale) || 1, 0.75, 1.5);
-  petScale = scale;
-  config.save({ petScale: scale });
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:scale', scale);
-  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
-}
-
-function setPetSkin(skin) {
-  if (!['dafeiyu', 'deepseek', 'cute', 'melon', 'default'].includes(skin)) skin = 'dafeiyu';
-  petSkin = skin;
-  config.save({ petSkin: skin });
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:skin', skin);
-  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
-}
-
-function setVoiceWake(enabled) {
-  const next = config.save({ voiceWakeEnabled: !!enabled });
-  for (const win of [petWin, chatWin]) {
-    if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
-  }
-  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(buildPetMenu(true))); } catch {} }
-  if (next.voiceWakeEnabled !== false) startVoiceWake('wake');
-  else winAsr.stop();
-}
-
-function startVoiceWake(initialMode = 'wake') {
-  const cfg = config.load();
-  if (cfg.voiceWakeEnabled === false) { winAsr.stop(); return; }
-  winAsr.start({ ...cfg, initialMode });
-}
-
-winAsr.on('wake', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:wake', msg); });
-winAsr.on('command', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:command', msg); });
-winAsr.on('error', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:error', msg); });
-winAsr.on('status', (msg) => { if (petWin && !petWin.isDestroyed()) petWin.webContents.send('voice:status', msg); });
-
-function moveTick() {
-  if (!petWin || petWin.isDestroyed() || !petWin.isVisible()) { setPetMoving(false); return; }
-  if (Date.now() < dragPausedUntil || petMode === 'idle') { setPetMoving(false); return; }
-  if (petMode === 'follow') moveFollow();
-  else if (petMode === 'wander') moveWander();
-}
-
-function moveFollow() {
-  const cursor = screen.getCursorScreenPoint();
-  const b = petWin.getBounds();
-  const wa = screen.getPrimaryDisplay().workArea;
-  const targetX = clamp(cursor.x - Math.round(b.width * 0.72), wa.x - 80, wa.x + wa.width - b.width + 80);
-  const targetY = clamp(cursor.y + 28, wa.y - 60, wa.y + wa.height - b.height + 60);
-  const dx = targetX - b.x, dy = targetY - b.y;
-  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) { setPetMoving(false); return; }
-  setPetMoving(true);
-  const ease = 0.16;
-  petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
-  sendDirection(dx, dy);
-}
-
-function chooseWanderTarget() {
-  const b = petWin.getBounds();
-  const wa = screen.getPrimaryDisplay().workArea;
-  const padX = 50, padY = 80;
-  const minX = wa.x + padX;
-  const maxX = Math.max(minX, wa.x + wa.width - b.width - padX);
-  const minY = wa.y + padY;
-  const maxY = Math.max(minY, wa.y + wa.height - b.height - padY);
-  wanderTarget = { x: minX + Math.random() * (maxX - minX), y: minY + Math.random() * (maxY - minY) };
-  sendDirection(wanderTarget.x - b.x, wanderTarget.y - b.y);
-}
-
-function moveWander() {
-  if (Date.now() < wanderCooldownUntil) { setPetMoving(false); return; }
-  const b = petWin.getBounds();
-  if (!wanderTarget) { setPetMoving(false); chooseWanderTarget(); return; }
-  const dx = wanderTarget.x - b.x, dy = wanderTarget.y - b.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 6) {
-    wanderTarget = null;
-    setPetMoving(false);
-    wanderCooldownUntil = Date.now() + 5000 + Math.random() * 5000;
-    return;
-  }
-  setPetMoving(true);
-  const ease = Math.min(0.075, 3.2 / Math.max(dist, 1));
-  petWin.setPosition(Math.round(b.x + dx * ease), Math.round(b.y + dy * ease), false);
-  sendDirection(dx, dy);
-}
-
-function sendDirection(dx, dy) {
-  if (!petWin || petWin.isDestroyed()) return;
-  dy = Number(dy) || 0;
-  if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
-  let dir;
-  if (Math.abs(dx) >= Math.abs(dy)) dir = dx < 0 ? 'left' : 'right';
-  else dir = dy < 0 ? 'up' : 'down';
-  if (dir === lastDirectionSent) return;
-  lastDirectionSent = dir;
-  petWin.webContents.send('pet:direction', dir);
+/* 真正关掉对话窗口（由页面上的「结束本次会话」按钮触发） */
+function closeChatForReal() {
+  allowChatClose = true;
+  if (chatWin && !chatWin.isDestroyed()) chatWin.close();
+  allowChatClose = false;
 }
 
 /* ---------------- 记忆 ---------------- */
-async function consolidateLongTerm() {
-  const m = memory.load();
-  const today = dayStr(Date.now());
-  const old = m.medium.filter((e) => e.date !== today);
-  if (!old.length) return;
-  const byDay = {};
-  for (const e of old) (byDay[e.date] = byDay[e.date] || []).push(e.summary);
-  const cfg = config.load();
-  const p = loadPersona();
-  const sysPrompt = `你是日记代笔。请以「${p.name || '大肥鱼'}」的第一人称视角，把下面的会话摘要写成一篇中文日记。
-世界观：${p.world_setting || '现代都市，你是住在主人电脑里的桌宠。'}
-人物设定：${p.character_setting || '蓝发鲸鱼女仆，傲娇、温柔、嘴硬。'}
-性格：${p.personality || '傲娇、温柔、嘴硬'}
-要求：语气、称呼、口头禅**完全贴合上述人设**（人设改了，日记风格也要跟着改）；自然、简短，150 字以内；只输出日记正文，不要标题、不要 markdown。`;
-  for (const [date, sums] of Object.entries(byDay)) {
-    let diary = sums.join('\n\n');
-    if (cfg.apiKey) {
-      try {
-        const raw = await llm.request(cfg, [
-          { role: 'system', content: sysPrompt },
-          { role: 'user', content: `日期：${date}\n\n` + sums.join('\n') }
-        ]);
-        if (raw && raw.trim()) diary = raw.trim().slice(0, 800);
-      } catch {}
-    }
-    m.long.push({ date, diary, ts: Date.now() });
-  }
-  m.medium = m.medium.filter((e) => e.date === today);
-  memory.save(m);
-}
-
-async function summarizeSession() {
-  if (sessionArr.length < 2) return;
-  const m = memory.load();
-  const entry = { date: dayStr(sessionStart), turns: sessionArr.length, ts: Date.now(), summary: '' };
-  const cfg = config.load();
-  if (cfg.apiKey) {
-    const convo = sessionArr.map((x) => (x.role === 'user' ? 'User: ' : '大肥鱼: ') + x.content).join('\n');
-    try {
-      const raw = await llm.request(cfg, [
-        { role: 'system', content: '把这段对话压缩成中文要点摘要（聊了什么、用户状态、重要事实），120字以内，只输出纯文本。' },
-        { role: 'user', content: convo }
-      ]);
-      entry.summary = String(raw).trim().slice(0, 500);
-    } catch {}
-  }
-  if (!entry.summary) entry.summary = sessionArr.slice(-6).map((x) => x.content).join(' / ').slice(0, 300);
-  m.medium.push(entry);
-  memory.save(m);
-}
+/* 具体实现都在 src/memory/ 下（session / medium / long / permanent / context / jobs）。
+   这里只调门面：
+     memory.onAppStart()    启动：迁移、恢复草稿、衰减、熔炼日记、晋升、保留策略
+     memory.buildContext()  每轮注入的记忆块（顺序固定，利于前缀缓存）
+     memory.pickHistory()   历史按 token 预算裁剪 + 老回合压缩
+     memory.onTurn()        一轮对话入库（含 compact 精简版）
+     memory.onSessionEnd()  收尾：写中期摘要 + 抽永久记忆候选
+*/
 
 /* ---------------- IPC ---------------- */
-ipcMain.on('drag-start', () => { dragPausedUntil = Date.now() + 3000; });
-ipcMain.on('drag-move', (_e, p) => {
-  if (!petWin || !p) return;
-  dragPausedUntil = Date.now() + 1200;
-  petWin.setPosition(Math.round(p.x), Math.round(p.y));
+/* 位置保存（拖拽结束、窗口移动后防抖落盘） */
+let posSaveTimer = null;
+function scheduleSavePos() {
+  clearTimeout(posSaveTimer);
+  posSaveTimer = setTimeout(() => {
+    if (!petWin || petWin.isDestroyed()) return;
+    const [x, y] = petWin.getPosition();
+    savePosition(x, y);
+  }, 400);
+}
+/* 拖拽：渲染层 mousemove 只当触发器；坐标由主进程读 getCursorScreenPoint()，
+   那是物理光标的真值，不受窗口移动影响 → 不会漂移。 */
+let dragWin = null, dragAnchor = null, dragLast = null;
+function dragStep() {
+  if (!petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
+  const c = screen.getCursorScreenPoint();
+  const tx = Math.round(dragWin.x + (c.x - dragAnchor.x));
+  const ty = Math.round(dragWin.y + (c.y - dragAnchor.y));
+  if (dragLast && dragLast.x === tx && dragLast.y === ty) return;
+  dragLast = { x: tx, y: ty };
+  petWin.setPosition(tx, ty);
+}
+ipcMain.on('drag-start', () => {
+  if (!petWin || petWin.isDestroyed()) return;
+  const [x, y] = petWin.getPosition();
+  dragWin = { x, y };
+  dragAnchor = screen.getCursorScreenPoint();
+  dragLast = null;
 });
-ipcMain.on('drag-end', (_e, p) => {
-  if (p) savePosition(p.x, p.y);
-  dragPausedUntil = Date.now() + 900;
-});
+ipcMain.on('drag-tick', () => dragStep());
+ipcMain.on('drag-end', () => { dragWin = null; dragAnchor = null; dragLast = null; scheduleSavePos(); });
 ipcMain.on('quit', () => app.quit());
+/* 语音/识别失败等错误写进 debug.log —— 方便远程收集试用者的现场 */
+ipcMain.on('log:error', (_e, m) => dbg('[r] ' + String(m).slice(0, 500)));
 ipcMain.on('chat:open', () => createChat());
-ipcMain.on('pet:action', (_e, action) => {
-  if (!action || typeof action !== 'object') return;
-  sendPetAction(action.type || 'pat', action);
-});
-ipcMain.on('pet:set-scale', (_e, scale) => setPetScale(scale));
-ipcMain.on('voice:start', (_e, payload) => startVoiceWake(payload && payload.initialMode === 'command' ? 'command' : 'wake'));
-ipcMain.on('voice:stop', () => winAsr.stop());
-ipcMain.on('tts:stop', () => {
-  for (const win of [petWin, chatWin]) {
-    if (win && !win.isDestroyed()) win.webContents.send('tts:stop');
+ipcMain.on('chat:close', () => closeChatForReal());
+
+/* ---------------- 本地语音识别（whisper.cpp，离线） ---------------- */
+ipcMain.handle('asr:status', () => asr.status(config.load().asrModel));
+ipcMain.handle('asr:download', async (_e, name) => {
+  const model = String(name || config.load().asrModel || 'tiny.en');
+  const push = (p) => {
+    const msg = 'asr:progress';
+    if (petWin && !petWin.isDestroyed()) petWin.webContents.send(msg, p);
+    if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send(msg, p);
+  };
+  try {
+    await asr.downloadModel(model, push);
+    if (model !== config.load().asrModel) config.save({ asrModel: model });
+    return { ok: true, status: asr.status(model) };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
   }
+});
+ipcMain.handle('asr:transcribe', async (_e, buf) => {
+  const cfg = config.load();
+  try {
+    const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    if (!b || b.length < 1000) return { ok: true, text: '' };
+    const text = await asr.transcribe(b, cfg.asrModel || 'tiny.en');
+    // 只有非语音标注（哼唱/音乐/静音）没有实际内容的话直接丢掉，别白花一次对话
+    if (!/[a-z]{2}/i.test(text)) return { ok: true, text: '' };
+    return { ok: true, text };
+  } catch (e) {
+    dbg('[asr] ' + String((e && e.message) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+/* ---------------- 麦克风权限 ---------------- */
+/* 语音识别报"没授权/没设备"时，把对话窗弹出来并显示授权面板 */
+ipcMain.on('mic:needPermission', (_e, reason) => {
+  createChat();
+  const send = () => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('mic:permission', reason || ''); };
+  setTimeout(send, 600);
+  setTimeout(send, 1500);
+});
+ipcMain.handle('mic:openSettings', async () => {
+  try {
+    if (process.platform === 'win32') await shell.openExternal('ms-settings:privacy-microphone');
+    else await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 });
 ipcMain.on('pet:resize', (_e, p) => {
   if (!petWin) return;
-  const h = Math.round(Number(p?.h ?? p) || 0);
-  const w = Math.round(Number(p?.w) || 0);
   const wa = screen.getPrimaryDisplay().workArea;
-  const newH = Math.round(clamp(h, 140, wa.height));
-  const newW = Math.round(clamp(w || 420, 280, 620));
-  let [x, y] = petWin.getPosition();
-  x = Math.round(clamp(x, wa.x - newW + 100, wa.x + wa.width - 100));
+  const h = Math.round(Math.min(Math.max(Number(p?.h ?? p) || 220, 120), wa.height));
+  const [x, y] = petWin.getPosition();
   let newY = y;
-  if (y + newH > wa.y + wa.height) newY = Math.max(wa.y, wa.y + wa.height - newH);
-  petWin.setBounds({ x, y: newY, width: newW, height: newH });
+  if (y + h > wa.y + wa.height) newY = Math.max(wa.y, wa.y + wa.height - h);
+  petWin.setBounds({ x, y: newY, width: 380, height: h });
 });
 
 let shotN = 0;
@@ -498,7 +294,7 @@ ipcMain.on('pet:shot', () => {
     if (!petWin || petWin.isDestroyed()) return;
     try {
       const img = await petWin.webContents.capturePage();
-      const dir = shotDir();
+      const dir = path.join(__dirname, 'shots');
       fs.mkdirSync(dir, { recursive: true });
       shotN = (shotN % 10) + 1;
       fs.writeFileSync(path.join(dir, `shot-${String(shotN).padStart(2, '0')}.png`), img.toPNG());
@@ -512,7 +308,7 @@ ipcMain.on('chat:shot', () => {
     if (!chatWin || chatWin.isDestroyed()) return;
     try {
       const img = await chatWin.webContents.capturePage();
-      const dir = shotDir();
+      const dir = path.join(__dirname, 'shots');
       fs.mkdirSync(dir, { recursive: true });
       chatShotN = (chatShotN % 6) + 1;
       fs.writeFileSync(path.join(dir, `chat-${String(chatShotN).padStart(2, '0')}.png`), img.toPNG());
@@ -521,29 +317,7 @@ ipcMain.on('chat:shot', () => {
 });
 
 ipcMain.handle('config:get', () => config.load());
-ipcMain.handle('config:set', (_e, patch) => {
-  const next = config.save(patch || {});
-  const keys = ['ttsEnabled', 'ttsStyle', 'ttsVoice', 'ttsRate', 'ttsPitch', 'voiceWakeEnabled', 'wakeWords', 'wakeSensitivity', 'wakeLang', 'voiceCommandLang', 'replyLanguage'];
-  if (patch && keys.some((k) => Object.prototype.hasOwnProperty.call(patch, k))) {
-    for (const win of [petWin, chatWin]) {
-      if (win && !win.isDestroyed()) win.webContents.send('tts:config', next);
-    }
-    if (next.voiceWakeEnabled !== false) startVoiceWake('wake');
-    else winAsr.stop();
-  }
-  return next;
-});
-
-ipcMain.handle('tts:edge', async (_e, payload) => {
-  const result = await edgeTts.synthesize(payload && payload.text, payload || {});
-  if (result && result.file) {
-    try {
-      const buf = fs.readFileSync(result.file);
-      result.dataUrl = 'data:audio/mpeg;base64,' + buf.toString('base64');
-    } catch {}
-  }
-  return result;
-});
+ipcMain.handle('config:set', (_e, patch) => config.save(patch || {}));
 
 ipcMain.handle('config:test', async (_e, patch) => {
   const cfg = { ...config.load(), ...(patch || {}) };
@@ -554,24 +328,46 @@ ipcMain.handle('config:test', async (_e, patch) => {
   return { ok: true, sample: String(sample).slice(0, 80) };
 });
 
-ipcMain.handle('chat:send', async (_e, payload) => {
+ipcMain.handle('chat:send', async (e, payload) => {
   const cfg = config.load();
   const text = String(payload?.text || '').trim();
   if (!text) return { en: '', zh: '', words: [], choices: [] };
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
-    ...sessionArr.slice(-20)
+    ...memory.pickHistory(),
+    { role: 'user', content: text }
   ];
-  messages.push(cfg.replyLanguage === 'zh'
-    ? { role: 'system', content: '本轮必须使用中文回复。无论之前的对话是什么语言，都必须使用自然中文回答。' }
-    : { role: 'system', content: 'Always answer in English in this turn.' });
-  messages.push({ role: 'user', content: text });
   const { reply, raw } = await genReply(cfg, messages);
   if (reply.en) {
-    sessionArr.push({ role: 'user', content: text }, { role: 'assistant', content: raw });
+    memory.onTurn(text, raw, reply.en);
     mood.adjust({ affection: 1, mood: 2 });
   }
+  const fromChat = isFromChat(e);
+  try { dbg('[chat] send from=' + (fromChat ? 'chat' : 'pet') + ' len=' + text.length); } catch {}
+  logTurn(text, reply);
+  // 谁问的谁说话：对话窗发起的 → 对话窗读，桌宠只显示气泡不出声（反之同理）
+  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { ...reply, silent: fromChat });
+  if (!fromChat) {
+    relayToChat({ who: 'me', text });
+    if (reply.en) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
+  }
+  return reply;
+});
+
+ipcMain.handle('chat:react', async (_e, kind) => {
+  const cfg = config.load();
+  const action = kind === 'feed'
+    ? '主人刚刚投喂了你一条小鱼干，你正在吃。'
+    : '主人正用手在你的头上左右来回抚摸。';
+  const messages = [
+    { role: 'system', content: buildSystemPrompt(cfg) },
+    ...memory.pickHistory(1500),
+    { role: 'user', content: `（场景：${action}）请完全按你当前的人设，用英语说一句即时的反应，只要 1 句，不要旁白、不要解释。同时给出中文翻译、音标，以及 2 个预制回复。` }
+  ];
+  const { reply } = await genReply(cfg, messages);
+  logTurn('', reply);
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', reply);
+  if (reply.en) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
   return reply;
 });
 
@@ -579,13 +375,13 @@ ipcMain.handle('chat:greet', async () => {
   const cfg = config.load();
   const messages = [
     { role: 'system', content: buildSystemPrompt(cfg) },
-    { role: 'user', content: cfg.replyLanguage === 'zh'
-        ? '你的主人刚打开电脑。请用中文说一句简短的开场白问候。'
-        : '你的主人刚打开电脑。请用英语说一句简短的开场白问候。' }
+    { role: 'user', content: '你的主人刚打开电脑。请用英语说一句简短的开场白问候。' }
   ];
   const { reply, raw } = await genReply(cfg, messages);
-  if (reply.en) sessionArr.push({ role: 'assistant', content: raw });
-  if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', reply);
+  if (reply.en) memory.onAssistant(raw, reply.en);
+  logTurn('', reply);
+  // 不推 pet:say：这次是桌宠自己调用并直接展示返回值，再推一次会渲染两遍、读两遍
+  if (reply.en) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
   return reply;
 });
 
@@ -596,13 +392,18 @@ ipcMain.handle('persona:set', (_e, patch) => {
   return next;
 });
 
-ipcMain.handle('memory:get', () => memory.load());
+/* 📖 日记面板只暴露「长期记忆」；中期记忆对用户隐藏 */
+ipcMain.handle('memory:get', () => ({ long: memory.long.list(), session: memory.session.info() }));
+ipcMain.handle('memory:session', () => memory.session.info());
 ipcMain.handle('memory:delete', (_e, ref) => {
-  const m = memory.load();
-  if (ref && ref.kind === 'long') m.long = (m.long || []).filter((e) => e.ts !== ref.ts);
-  else if (ref && ref.kind === 'medium') m.medium = (m.medium || []).filter((e) => e.ts !== ref.ts);
-  memory.save(m);
-  return m;
+  if (ref && ref.kind === 'long') memory.long.removeAt(ref.ts);
+  return { long: memory.long.list() };
+});
+/* 结束本次会话：写中期摘要 + 抽永久记忆候选 → 清草稿、开新会话 */
+ipcMain.handle('memory:endSession', async () => {
+  const r = await memory.onSessionEnd().catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
+  if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('memory:ended', r);
+  return r;
 });
 ipcMain.handle('mood:get', () => mood.load());
 ipcMain.handle('mood:adjust', (_e, d) => mood.adjust(d || {}));
@@ -611,11 +412,151 @@ ipcMain.handle('vocab:list', () => vocab.load());
 ipcMain.handle('vocab:add', (_e, w) => vocab.add(w || {}));
 ipcMain.handle('vocab:del', (_e, w) => vocab.del(w));
 ipcMain.handle('vocab:review', (_e, w, ok) => vocab.review(w, ok));
+
+/* ---------------- 语音合成（音色） ---------------- */
+ipcMain.handle('tts:voices', () => ({
+  voices: tts.VOICES,
+  styles: Object.entries(tts.STYLES).map(([id, v]) => ({ id, label: v.label, rate: v.rate, pitch: v.pitch })),
+  defaultVoice: tts.DEFAULT_VOICE,
+  defaultStyle: tts.DEFAULT_STYLE,
+}));
+ipcMain.handle('tts:speak', async (e, payload) => {
+  const cfg = config.load();
+  const p = payload || {};
+  if (cfg.ttsEnabled === false && !p.force) return { ok: false, error: '朗读已关闭' };
+  // 回声排查：同一句话如果两个窗口都来要语音，日志里会看到两条 from= 不同的记录
+  try { dbg('[tts] speak from=' + (isFromChat(e) ? 'chat' : 'pet') + ' len=' + String(p.text || '').length); } catch {}
+  try {
+    return await tts.synthesize(p.text, {
+      voice: p.voice || cfg.ttsVoice,
+      style: p.style || cfg.ttsStyle,
+      rate: p.rate || cfg.ttsRate,
+      pitch: p.pitch || cfg.ttsPitch,
+    });
+  } catch (e) {
+    dbg('[tts:speak] ERR=' + String((e && e.stack) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+/* ---------------- 外部立绘（免打包换图） + 命中区块图 ---------------- */
+const artDir = () => path.join(app.getPath('userData'), 'art');
+
+let artCache = null;   // { key, dataUrl } —— 立绘只在变化时才重新传 dataUrl
+ipcMain.handle('art:get', () => {
+  let file = null, mtime = 0, custom = false;
+  try {
+    const f = path.join(artDir(), 'pet-character.png');
+    mtime = fs.statSync(f).mtimeMs;
+    file = f; custom = true;
+  } catch {
+    try {
+      const f = path.join(__dirname, 'assets', 'pet-character.png');
+      mtime = fs.statSync(f).mtimeMs;
+      file = f;
+    } catch { return { ok: false }; }
+  }
+  const key = file + '|' + mtime;
+  if (!artCache || artCache.key !== key) {
+    let dataUrl = null;
+    try { dataUrl = 'data:image/png;base64,' + fs.readFileSync(file).toString('base64'); } catch {}
+    artCache = { key, dataUrl };
+  }
+  // dataUrl 必须给：渲染层要把它画进 canvas 做像素级命中判定（file:// 的图会污染 canvas，读不了像素）
+  return { ok: true, custom, mtime, dataUrl: artCache.dataUrl };
+});
+
+/* 命中区块图（归一化多边形）。外部 art/pet-regions.json 优先，方便换立绘时一起换 */
+let regionsCache = null;
+ipcMain.handle('art:regions', () => {
+  if (regionsCache) return regionsCache;
+  const candidates = [path.join(artDir(), 'pet-regions.json'), path.join(__dirname, 'assets', 'pet-regions.json')];
+  for (const f of candidates) {
+    try {
+      const j = JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, ''));
+      if (j && Array.isArray(j.regions)) { regionsCache = j; return j; }
+    } catch {}
+  }
+  regionsCache = { version: 1, regions: [] };
+  return regionsCache;
+});
+
+/* ---------------- 命中判定 / 透明区点穿 ----------------
+ * 渲染层把立绘 alpha 压成 1bit 小掩码发过来；这里按全局光标位置轮询：
+ * 光标不在立绘实心像素上时让窗口鼠标穿透（不挡桌面图标），在实心上时才接鼠标。
+ * 为什么不用渲染层的 mousemove 判定：Electron 的 setIgnoreMouseEvents(true,{forward:true})
+ * 在本机实测不转发 mousemove（渲染层一条都收不到），所以只能主进程轮询全局光标。
+ */
+let hitInfo = null;          // { w, h, mask, left, top, width, height }
+let hitTimer = null;
+let hitIgnoring = null;      // 当前是否处于穿透状态
+let holdInteractive = false; // 按住鼠标期间强制可交互
+
+ipcMain.on('pet:hitmask', (_e, info) => {
+  try {
+    if (!info || !info.mask) { hitInfo = null; return; }
+    hitInfo = {
+      w: Number(info.w) | 0, h: Number(info.h) | 0,
+      mask: Buffer.from(String(info.mask), 'base64'),
+      left: Number(info.left) || 0, top: Number(info.top) || 0,
+      width: Number(info.width) || 0, height: Number(info.height) || 0,
+    };
+    hitIgnoring = null;   // 掩码更新后立刻重新判定一次
+  } catch { hitInfo = null; }
+});
+ipcMain.on('pet:hold', (_e, on) => { holdInteractive = !!on; if (on) applyIgnore(false); });
+ipcMain.on('pet:setInteractive', (_e, on) => { applyIgnore(!on); });
+
+function solidAtCursor() {
+  if (!hitInfo || !hitInfo.width || !hitInfo.height) return true;   // 还没掩码时保守：接鼠标
+  if (!petWin || petWin.isDestroyed()) return true;
+  const c = screen.getCursorScreenPoint();
+  const [wx, wy] = petWin.getPosition();
+  const lx = c.x - wx - hitInfo.left;
+  const ly = c.y - wy - hitInfo.top;
+  if (lx < 0 || ly < 0 || lx >= hitInfo.width || ly >= hitInfo.height) return false;
+  const mx = Math.min(hitInfo.w - 1, Math.floor(lx / hitInfo.width * hitInfo.w));
+  const my = Math.min(hitInfo.h - 1, Math.floor(ly / hitInfo.height * hitInfo.h));
+  const idx = my * hitInfo.w + mx;
+  return ((hitInfo.mask[idx >> 3] >> (idx & 7)) & 1) === 1;
+}
+
+function applyIgnore(ignore) {
+  if (!petWin || petWin.isDestroyed()) return;
+  if (hitIgnoring === ignore) return;
+  hitIgnoring = ignore;
+  try { petWin.setIgnoreMouseEvents(ignore, { forward: true }); } catch {}
+}
+
+function startHitLoop() {
+  clearInterval(hitTimer);
+  hitTimer = setInterval(() => {
+    if (!petWin || petWin.isDestroyed()) { clearInterval(hitTimer); hitTimer = null; return; }
+    if (holdInteractive) { applyIgnore(false); return; }
+    applyIgnore(!solidAtCursor());
+  }, 30);
+}
+ipcMain.handle('art:open', async () => {
+  const d = artDir();
+  try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  const target = path.join(d, 'pet-character.png');
+  if (!fs.existsSync(target)) {
+    try { fs.copyFileSync(path.join(__dirname, 'assets', 'pet-character.png'), target); } catch {}
+  }
+  await shell.openPath(d);
+  return d;
+});
+ipcMain.handle('art:reset', () => {
+  try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
+  return true;
+});
 ipcMain.handle('assistant:run', async (_e, a) => {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
   const result = await assistant.run(a.tool, a.arg);
-  sessionArr.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${result}` });
+  // 工具结果可能很长（列目录 / 抓网页），入库前先截断，别把上下文撑爆
+  const cut = memory.tokens.clip(String(result || ''), ((config.load().memory || {}).toolResultChars) || 500);
+  memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
   return { ok: true, result };
 });
 
@@ -625,18 +566,17 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (petWin && !petWin.isDestroyed()) { petWin.showInactive(); petWin.focus(); }
+    if (petWin && !petWin.isDestroyed()) { petWin.show(); petWin.focus(); }
   });
 
   app.whenReady().then(() => {
+    dbg('[boot] v' + app.getVersion() + ' electron=' + process.versions.electron + ' chrome=' + process.versions.chrome);
     session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
       cb(permission === 'media');
     });
     mood.startupDecay();
-    consolidateLongTerm().catch(() => {});
+    memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
     createPet();
-    createTray();
-    if (config.load().voiceWakeEnabled !== false) setTimeout(() => startVoiceWake('wake'), 800);
     if (!config.load().apiKey) createChat();
   });
 
@@ -645,18 +585,21 @@ if (!gotLock) {
     e.preventDefault();
     (async () => {
       try { await web.close(); } catch {}
-      try { await summarizeSession(); } catch {}
+      try { await memory.onSessionEnd(); } catch {}
       didSummarize = true;
       app.quit();
     })();
   });
 
-  app.on('will-quit', () => {
-    stopMovement();
-    winAsr.stop();
-    try { tray?.destroy(); } catch {}
-    tray = null;
-  });
-
   app.on('window-all-closed', () => app.quit());
+
+  // 开发模式热更新：改渲染层自动刷新窗口；改主进程/模块自动重启（打包版不生效）
+  if (!app.isPackaged) {
+    const deb = (fn, ms) => { let t = null; return () => { clearTimeout(t); t = setTimeout(fn, ms || 500); }; };
+    const reloadAll = deb(() => { BrowserWindow.getAllWindows().forEach((w) => { try { w.webContents.reload(); } catch {} }); });
+    const relaunch = deb(() => { try { app.relaunch(); } catch {} app.exit(0); });
+    try { fs.watch(path.join(__dirname, 'renderer'), { recursive: true }, reloadAll); } catch {}
+    try { fs.watch(path.join(__dirname, 'src'), { recursive: true }, relaunch); } catch {}
+    try { fs.watch(__dirname, (_ev, f) => { if (f === 'main.js' || f === 'preload.js' || f === 'persona.json') relaunch(); }); } catch {}
+  }
 }

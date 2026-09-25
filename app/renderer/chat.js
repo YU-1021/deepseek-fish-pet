@@ -32,136 +32,41 @@ function renderEn(text, words) {
   }).join('');
 }
 
+/* ---------------- 聊天记录：最小化 / 关掉再打开也能看到之前说过什么 ---------------- */
+async function loadLog() {
+  try {
+    const h = await window.petAPI.chatLog();
+    const entries = (h && h.entries) || [];
+    if (!entries.length) return false;
+    $('msgs').innerHTML = '';
+    for (const it of entries) {
+      if (it.who === 'me') addUser(it.text);
+      else if (it.who === 'pet') addPet(it.en, it.zh, it.words);
+    }
+    const last = [...entries].reverse().find((x) => x.who === 'pet' && x.choices && x.choices.length);
+    if (last) renderChoices(last.choices);
+    return true;
+  } catch { return false; }
+}
+
 /* ---------------- 初始化 ---------------- */
 (async function init() {
   cfg = await window.petAPI.configGet();
   ttsOn = cfg.ttsEnabled !== false;
   $('ttsBtn').classList.toggle('on', ttsOn);
-  initTtsControls();
-  if (!cfg.apiKey) showSetup(true); else { showMain(); greet(); }
+  if (!cfg.apiKey) showSetup(true);
+  else {
+    showMain();
+    const had = await loadLog();
+    if (!had) greet();      // 有历史记录就别再重复开场白了
+  }
   refreshMood();
 })();
-
-/* ---------------- 朗读音色设置 ---------------- */
-function applyTtsToForm() {
-  const style = cfg.ttsStyle || 'tsundere';
-  const st = (window.DayuTTS && window.DayuTTS.STYLES[style]) || { rate: 1.02, pitch: 1.18 };
-  $('ttsStyle').value = style;
-  $('ttsRate').value = cfg.ttsRate != null ? cfg.ttsRate : st.rate;
-  $('ttsPitch').value = cfg.ttsPitch != null ? cfg.ttsPitch : st.pitch;
-  $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
-  $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
-  $('voiceWakeEnabled').checked = cfg.voiceWakeEnabled !== false;
-  $('wakeWords').value = Array.isArray(cfg.wakeWords) ? cfg.wakeWords.join(', ') : (cfg.wakeWords || '你好大肥鱼, 大肥鱼, 你好大飞鱼');
-  $('wakeSensitivity').value = cfg.wakeSensitivity != null ? cfg.wakeSensitivity : 0.68;
-  $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
-  $('voiceCommandLang').value = cfg.voiceCommandLang || 'en-US';
-  $('replyLanguage').value = cfg.replyLanguage === 'zh' ? 'zh' : 'en';
-  populateTtsVoices();
-}
-function populateTtsVoices() {
-  const sel = $('ttsVoice');
-  if (!sel) return;
-  const current = cfg.ttsVoice || '';
-  const voices = window.DayuTTS ? window.DayuTTS.listVoices(cfg) : [];
-  const opts = ['<option value="">自动选择最佳音色（推荐）</option>'];
-  voices.forEach((v) => {
-    const id = v.voiceURI || v.name;
-    const label = `${v.name}${v.lang ? ' · ' + v.lang : ''}${v.localService ? '' : ' · 在线'}`;
-    opts.push(`<option value="${esc(id)}">${esc(label)}</option>`);
-  });
-  sel.innerHTML = opts.join('');
-  sel.value = current;
-  if (current && sel.value !== current) {
-    const alt = Array.from(sel.options).find((o) => o.textContent.includes(current));
-    if (alt) sel.value = alt.value;
-  }
-}
-function applyTtsStyle(style) {
-  const st = window.DayuTTS?.STYLES?.[style];
-  if (!st || style === 'custom') return;
-  $('ttsRate').value = st.rate;
-  $('ttsPitch').value = st.pitch;
-  $('ttsRateVal').textContent = Number(st.rate).toFixed(2);
-  $('ttsPitchVal').textContent = Number(st.pitch).toFixed(2);
-}
-function initTtsControls() {
-  applyTtsToForm();
-  if (window.speechSynthesis) {
-    window.speechSynthesis.onvoiceschanged = () => populateTtsVoices();
-    setTimeout(populateTtsVoices, 500);
-  }
-  $('ttsStyle').addEventListener('change', () => {
-    const st = $('ttsStyle').value;
-    if (st !== 'custom') applyTtsStyle(st);
-  });
-  ['ttsRate', 'ttsPitch'].forEach((id) => {
-    $(id).addEventListener('input', () => {
-      $('ttsRateVal').textContent = Number($('ttsRate').value).toFixed(2);
-      $('ttsPitchVal').textContent = Number($('ttsPitch').value).toFixed(2);
-      $('ttsStyle').value = 'custom';
-    });
-  });
-  $('wakeSensitivity').addEventListener('input', () => {
-    $('wakeSensitivityVal').textContent = Number($('wakeSensitivity').value).toFixed(2);
-  });
-  $('replyLanguage').addEventListener('change', async () => {
-    cfg = await window.petAPI.configSet({ replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en' });
-    $('ttsMsg').textContent = 'AI 回复语言已切换';
-    setTimeout(() => { $('ttsMsg').textContent = ''; }, 1800);
-  });
-  $('ttsSave').addEventListener('click', saveTtsConfig);
-  $('ttsPreview').addEventListener('click', () => {
-    const text = 'Hmph! I am NOT a freeloader fat fish. ...Anyway, good morning, Master.';
-    speakPreview(text);
-  });
-}
-function parseWakeWords() {
-  return String($('wakeWords').value || '')
-    .split(/[,，;；\s]+/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .slice(0, 8);
-}
-async function saveTtsConfig() {
-  const patch = {
-    ttsStyle: $('ttsStyle').value,
-    ttsVoice: $('ttsVoice').value,
-    ttsRate: Number($('ttsRate').value),
-    ttsPitch: Number($('ttsPitch').value),
-    ttsEnabled: ttsOn,
-    voiceWakeEnabled: $('voiceWakeEnabled').checked,
-    wakeWords: parseWakeWords(),
-    wakeSensitivity: Number($('wakeSensitivity').value),
-    wakeLang: 'zh-CN',
-    voiceCommandLang: $('voiceCommandLang').value,
-    replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en'
-  };
-  cfg = await window.petAPI.configSet(patch);
-  $('ttsMsg').textContent = '语音设置已保存 ✅';
-  setTimeout(() => { $('ttsMsg').textContent = ''; }, 2200);
-}
-function speakPreview(text) {
-  const previewCfg = {
-    ...cfg,
-    ttsStyle: $('ttsStyle').value,
-    ttsVoice: $('ttsVoice').value,
-    ttsRate: Number($('ttsRate').value),
-    ttsPitch: Number($('ttsPitch').value)
-  };
-  try { window.petAPI.ttsStop?.(); } catch {}
-  setTimeout(() => {
-    if (window.DayuTTS) window.DayuTTS.speak(text, previewCfg, () => {});
-  }, 80);
-}
 
 async function refreshMood() {
   try {
     const m = await window.petAPI.moodGet();
-    const aff = Math.round(m.affection ?? 0), mo = Math.round(m.mood ?? 0);
-    $('affVal').textContent = aff + ' / 100';
-    $('moodVal').textContent = mo + ' / 100';
-    $('moodBar').title = `好感度 ${aff} · 心情 ${mo}`;
+    $('moodBar').textContent = `❤️ ${m.affection} · 😊 ${m.mood}`;
   } catch {}
 }
 
@@ -170,14 +75,14 @@ async function refreshDsh() {
     const s = await window.petAPI.dshState();
     if (!s || !s.ok) { $('dshBar').textContent = ''; return; }
     const map = { working: '执行中', thinking: '思考中', idle: '空闲' };
-    $('dshBar').textContent = `DSH ${map[s.state] || ''}${s.tool ? ' · ' + s.tool : ''}${s.active ? '' : '（已停）'}`;
+    $('dshBar').textContent = `🖥 DSH ${map[s.state] || ''}${s.tool ? ' · ' + s.tool : ''}${s.active ? '' : '（已停）'}`;
   } catch {}
 }
 setInterval(refreshDsh, 5000);
 
 function showSetup(prefill) {
   $('setup').classList.remove('hidden');
-  ['persona', 'diary'].forEach((x) => $(x).classList.add('hidden'));
+  ['persona', 'diary', 'voice', 'micPerm'].forEach((x) => $(x).classList.add('hidden'));
   $('main').classList.add('hidden');
   if (prefill) {
     $('apiBase').value = cfg.apiBase || 'https://api.deepseek.com/v1';
@@ -186,22 +91,13 @@ function showSetup(prefill) {
     $('vocabLevel').value = cfg.vocabLevel || 'high_school';
     $('assistant').value = cfg.assistant || 'off';
     $('provider').value = 'custom';
-    applyTtsToForm();
   }
 }
 function showMain() {
-  ['setup', 'persona', 'diary'].forEach((x) => $(x).classList.add('hidden'));
+  ['setup', 'persona', 'diary', 'voice'].forEach((x) => $(x).classList.add('hidden'));
   $('main').classList.remove('hidden');
   $('input').focus();
 }
-
-if (window.petAPI.onTtsStop) window.petAPI.onTtsStop(() => { try { window.DayuTTS?.stop(); } catch {} });
-if (window.petAPI.onTtsConfig) window.petAPI.onTtsConfig((next) => {
-  cfg = { ...cfg, ...(next || {}) };
-  ttsOn = cfg.ttsEnabled !== false;
-  $('ttsBtn').classList.toggle('on', ttsOn);
-  applyTtsToForm();
-});
 
 /* ---------------- 绑定 API ---------------- */
 $('provider').addEventListener('change', (e) => {
@@ -215,7 +111,7 @@ $('save').addEventListener('click', async () => {
   $('save').disabled = true; $('setupMsg').textContent = '正在测试连接…';
   try {
     await window.petAPI.configTest({ apiBase, apiKey, model });
-    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value, ttsStyle: $('ttsStyle').value, ttsVoice: $('ttsVoice').value, ttsRate: Number($('ttsRate').value), ttsPitch: Number($('ttsPitch').value), ttsEnabled: ttsOn, replyLanguage: $('replyLanguage').value === 'zh' ? 'zh' : 'en' });
+    cfg = await window.petAPI.configSet({ apiBase, apiKey, model, vocabLevel: $('vocabLevel').value, assistant: $('assistant').value });
     $('setupMsg').textContent = '';
     showMain(); greet();
   } catch (e) { $('setupMsg').textContent = '连接失败：' + e.message; }
@@ -223,6 +119,16 @@ $('save').addEventListener('click', async () => {
 });
 $('skip').addEventListener('click', () => { showMain(); greet(); });
 $('settingsBtn').addEventListener('click', () => showSetup(true));
+
+/* ---------------- 立绘文件夹（免打包换图） ---------------- */
+$('artOpen').addEventListener('click', async () => {
+  try { const d = await window.petAPI.artOpen(); $('setupMsg').textContent = '已打开：' + d; }
+  catch (e) { $('setupMsg').textContent = '打开失败：' + e.message; }
+});
+$('artReset').addEventListener('click', async () => {
+  try { await window.petAPI.artReset(); $('setupMsg').textContent = '已恢复默认立绘'; }
+  catch (e) { $('setupMsg').textContent = '失败：' + e.message; }
+});
 
 /* ---------------- 人设 ---------------- */
 $('personaBtn').addEventListener('click', async () => {
@@ -247,35 +153,36 @@ $('pSave').addEventListener('click', async () => {
 });
 $('pCancel').addEventListener('click', () => $('persona').classList.add('hidden'));
 
-/* ---------------- 记忆日记 ---------------- */
+/* ---------------- 记忆日记（只展示长期记忆，中期记忆隐藏） ---------------- */
 async function renderDiary() {
   const m = await window.petAPI.memoryGet();
   const body = $('diaryBody');
   const long = [...(m.long || [])].reverse();
-  const mid = [...(m.medium || [])].reverse();
-  let html = `<div class="dstat">📚 长期记忆 <b>${long.length}</b> 天 · 今日会话 <b>${mid.length}</b> 段</div>`;
-  if (!long.length && !mid.length) html += '<div class="dempty">还没有记忆。多聊几天，我就会把它们写成日记啦。</div>';
-  if (mid.length) {
-    html += '<div class="dsec">今天的会话（中期记忆）</div>';
-    for (const e of mid) {
-      html += `<div class="dentry mid"><div class="dhead"><span>📝 ${esc(e.date)}</span><button class="ddel" data-kind="medium" data-ts="${e.ts}">删除</button></div><div class="dtext">${esc(e.summary)}</div></div>`;
-    }
-  }
-  if (long.length) {
-    html += '<div class="dsec">日记（长期记忆 · 按天）</div>';
-    for (const e of long) {
-      html += `<div class="dentry"><div class="dhead"><span>🗓 ${esc(e.date)}</span><button class="ddel" data-kind="long" data-ts="${e.ts}">删除</button></div><div class="dtext">${esc(e.diary)}</div></div>`;
-    }
+  const ses = m.session || {};
+  let html = `<div class="dstat">📚 日记 <b>${long.length}</b> 天 · 本次会话 <b>${ses.count || 0}</b> 条对话</div>`;
+  if (!long.length) html += '<div class="dempty">还没有日记。多聊几天，我就会把它们写成日记啦。</div>';
+  for (const e of long) {
+    html += `<div class="dentry"><div class="dhead"><span>🗓 ${esc(e.date)}</span><button class="ddel" data-kind="long" data-ts="${e.ts}">删除</button></div><div class="dtext">${esc(e.diary)}</div></div>`;
   }
   body.innerHTML = html;
   body.querySelectorAll('.ddel').forEach((b) => b.addEventListener('click', async () => {
-    await window.petAPI.memoryDelete({ kind: b.dataset.kind, ts: Number(b.dataset.ts) });
+    await window.petAPI.memoryDelete({ kind: 'long', ts: Number(b.dataset.ts) });
     renderDiary();
   }));
 }
 
 $('diaryBtn').addEventListener('click', () => { $('diary').classList.remove('hidden'); renderDiary(); });
 $('diaryClose').addEventListener('click', () => $('diary').classList.add('hidden'));
+
+/* ---------------- 结束本次会话 ---------------- */
+$('endBtn').addEventListener('click', async () => {
+  const ok = confirm('结束本次会话？\n\n我会把这段对话收进记忆（写摘要 + 抽取长期要点），然后关掉对话窗。\n（平时点右上角 × 只会最小化，不会丢会话）');
+  if (!ok) return;
+  const btn = $('endBtn');
+  btn.textContent = '⏳';
+  try { await window.petAPI.memoryEndSession(); } catch (e) {}
+  window.petAPI.chatClose();
+});
 
 /* ---------------- 生词本 ---------------- */
 let vocabData = [];
@@ -336,7 +243,7 @@ document.addEventListener('click', async (e) => {
   const w = el.textContent.trim();
   if (!w) return;
   await window.petAPI.vocabAdd({ w, ipa: el.dataset.ipa || '', zh: el.dataset.zh || '' });
-  addSys(`生词本：已加入 ${w}`);
+  addSys(`📒 已加入生词本：${w}`);
 });
 
 /* ---------------- 消息渲染 ---------------- */
@@ -346,18 +253,10 @@ function addUser(text) {
   d.className = 'msg user'; d.textContent = text;
   $('msgs').appendChild(d); scroll();
 }
-function addPet(en, zh, words, opts = {}) {
+function addPet(en, zh, words) {
   const d = document.createElement('div');
-  d.className = 'msg pet' + (opts.typing ? ' typing' : '');
-  if (opts.typing) {
-    d.innerHTML = '<img class="msg-avatar" src="../assets/pet-character.png" alt=""><div class="msg-content"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div>';
-  } else {
-    const ws = (words || []).filter((w) => w && w.w);
-    const hint = ws.length ? `<div class="ipa-hint">${ws.map((w) => `${esc(w.w)} ${esc(w.ipa || '')}`).join(' · ')}</div>` : '';
-    d.innerHTML = '<img class="msg-avatar" src="../assets/pet-character.png" alt="">' +
-      `<div class="msg-content"><div class="en">${renderEn(en, words)}</div>` +
-      (zh ? `<div class="zh">${esc(zh)}</div>` : '') + hint + '</div>';
-  }
+  d.className = 'msg pet';
+  d.innerHTML = `<div class="en">${renderEn(en, words)}</div>` + (zh ? `<div class="zh">${esc(zh)}</div>` : '');
   $('msgs').appendChild(d); scroll();
   return d;
 }
@@ -381,7 +280,7 @@ function addSys(text) {
 function renderAction(msgEl, action) {
   const bar = document.createElement('div');
   bar.className = 'actionbar';
-  bar.innerHTML = `<span class="atool">助手 · ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
+  bar.innerHTML = `<span class="atool">🤖 ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
   const allow = document.createElement('button'); allow.textContent = '允许'; allow.className = 'allow';
   const deny = document.createElement('button'); deny.textContent = '拒绝'; deny.className = 'deny';
   bar.appendChild(allow); bar.appendChild(deny);
@@ -391,7 +290,7 @@ function renderAction(msgEl, action) {
     bar.remove();
     try {
       const r = await window.petAPI.assistantRun(action);
-      addSys('助手：' + r.result);
+      addSys('🤖 ' + r.result);
     } catch (e) { addErr('助手执行失败：' + e.message); }
   });
   deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); });
@@ -422,18 +321,6 @@ document.addEventListener('mouseover', (e) => {
 });
 document.addEventListener('mousemove', (e) => { if (tip && tip.classList.contains('show')) positionTip(e); });
 
-/* ---------------- 顶部快捷操作 ---------------- */
-document.querySelectorAll('#quickActions .quick').forEach((btn) => {
-  btn.addEventListener('click', async () => {
-    const act = btn.dataset.act;
-    if (act === 'pat') window.petAPI.action?.('pat');
-    else if (act === 'feed') window.petAPI.action?.('feed');
-    else if (act === 'listen') { if (!recording) startRec(); else finalize(); }
-    else if (act === 'review') { $('vocab').classList.remove('hidden'); startReview(); }
-    addSys(`已把「${btn.textContent.trim()}」告诉大肥鱼`);
-  });
-});
-
 /* ---------------- 对话 ---------------- */
 async function send(text) {
   text = String(text || '').trim();
@@ -441,7 +328,7 @@ async function send(text) {
   busy = true;
   $('input').value = ''; $('choices').innerHTML = '';
   addUser(text);
-  const pending = addPet('', '', [], { typing: true });
+  const pending = addPet('…', '', []);
   try {
     const reply = await window.petAPI.chatSend({ text });
     pending.remove();
@@ -461,25 +348,102 @@ $('input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send($('input').value); }
 });
 
-/* ---------------- TTS ---------------- */
-function speak(_text) {
-  // AI 回复统一由桌宠窗口播放，聊天窗口不再本地播放，避免双声重叠。
+/* ---------------- TTS（Edge 神经音色，失败时退回系统语音） ---------------- */
+let curAudio = null;
+let speakSeq = 0;
+
+function stopSpeech() {
+  speakSeq++;
+  if (curAudio) { try { curAudio.pause(); } catch {} curAudio = null; }
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
+}
+
+async function speak(text) {
+  if (!ttsOn || !text) return;
+  stopSpeech();
+  const seq = speakSeq;
+  try {
+    const res = await window.petAPI.ttsSpeak({ text, force: true });
+    if (seq !== speakSeq) return;
+    if (res && res.ok && res.dataUrl) {
+      const a = new Audio(res.dataUrl);
+      curAudio = a;
+      const fin = () => { if (curAudio === a) curAudio = null; };
+      a.onended = fin; a.onerror = fin;
+      await a.play();
+      return;
+    }
+    if (res && res.error) console.warn('[TTS]', res.error);
+  } catch (e) { console.warn('[TTS]', e); }
+  if (seq !== speakSeq || !window.speechSynthesis) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US'; u.rate = 0.95; u.pitch = 1.15;
+    window.speechSynthesis.speak(u);
+  } catch {}
 }
 $('ttsBtn').addEventListener('click', async () => {
   ttsOn = !ttsOn;
   $('ttsBtn').classList.toggle('on', ttsOn);
-  if (!ttsOn) window.speechSynthesis?.cancel();
+  if (!ttsOn) stopSpeech();
   await window.petAPI.configSet({ ttsEnabled: ttsOn });
 });
-// 右键朗读按钮：打开音色设置
-$('ttsBtn').addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  showSetup(true);
+
+/* ---------------- 音色选择 ---------------- */
+let voiceMeta = { voices: [], styles: [] };
+async function openVoice() {
+  voiceMeta = await window.petAPI.ttsVoices();
+  const vv = $('vVoice'), vs = $('vStyle');
+  vv.innerHTML = (voiceMeta.voices || []).map((v) => `<option value="${esc(v.id)}">${esc(v.label)}</option>`).join('');
+  vs.innerHTML = (voiceMeta.styles || []).map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('');
+  vv.value = cfg.ttsVoice || voiceMeta.defaultVoice || 'zh-CN-XiaoxiaoNeural';
+  vs.value = cfg.ttsStyle || voiceMeta.defaultStyle || 'tsundere';
+  $('vRate').value = Number(cfg.ttsRate) || 1;
+  $('vPitch').value = Number(cfg.ttsPitch) || 1;
+  $('vMsg').textContent = '';
+  $('voice').classList.remove('hidden');
+}
+$('voiceBtn').addEventListener('click', openVoice);
+$('vStyle').addEventListener('change', () => {
+  const s = (voiceMeta.styles || []).find((x) => x.id === $('vStyle').value);
+  if (s && Number(s.rate) > 0) $('vRate').value = s.rate;
+  if (s && Number(s.pitch) > 0) $('vPitch').value = s.pitch;
+});
+$('vCancel').addEventListener('click', () => $('voice').classList.add('hidden'));
+$('vPreview').addEventListener('click', async () => {
+  const text = 'Hey! I am NOT a freeloader fat fish! Do you want to play with me?';
+  $('vMsg').textContent = '正在合成…（第一次慢一点）';
+  stopSpeech();
+  try {
+    const res = await window.petAPI.ttsSpeak({
+      text, force: true,
+      voice: $('vVoice').value, style: $('vStyle').value,
+      rate: Number($('vRate').value), pitch: Number($('vPitch').value),
+    });
+    if (!res || !res.ok) throw new Error((res && res.error) || '合成失败');
+    $('vMsg').textContent = res.cached ? '试听中（缓存）' : '试听中…';
+    const a = new Audio(res.dataUrl);
+    curAudio = a;
+    a.onended = () => { if (curAudio === a) curAudio = null; };
+    a.onerror = a.onended;
+    await a.play();
+  } catch (e) { $('vMsg').textContent = '失败：' + (e.message || e); }
+});
+$('vSave').addEventListener('click', async () => {
+  cfg = await window.petAPI.configSet({
+    ttsVoice: $('vVoice').value, ttsStyle: $('vStyle').value,
+    ttsRate: Number($('vRate').value), ttsPitch: Number($('vPitch').value), ttsEnabled: true,
+  });
+  ttsOn = true; $('ttsBtn').classList.add('on');
+  $('vMsg').textContent = '已保存 ✅ 试试跟我说话';
+  setTimeout(() => $('voice').classList.add('hidden'), 700);
 });
 
 /* ---------------- 麦克风：点击发送 / 上滑后点任意位置取消 ---------------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, recCanceled = false, recFinal = '', recInterim = '', recStartY = 0, recording = false, cancelMode = false, finalized = false;
+let recMode = '';        // whisper = 本地离线识别 / web = 浏览器在线识别
+let asrBusy = false;     // 正在送本地识别（避免重复触发）
 
 function setRecUI(on) {
   $('recStatus').classList.toggle('hidden', !on);
@@ -488,23 +452,82 @@ function setRecUI(on) {
   $('mic').classList.toggle('rec', on);
 }
 
+/* 麦克风状态：能不能录、授没授权 */
+let micState = 'unknown';   // granted / denied / error / unknown
+let micFails = 0;           // 连续失败次数：连败两次就弹授权面板，避免"悄悄录不了"
+
+function setMicBadge() {
+  const el = $('micState');
+  if (!el) return;
+  const map = { granted: '🎤 正常', denied: '🎤 未授权', error: '🎤 异常', unknown: '🎤 未检测' };
+  el.textContent = map[micState] || '';
+  el.dataset.state = micState;
+}
+
+async function checkMic(quiet) {
+  $('micState') && ($('micState').textContent = '🎤 检测中…');
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach((t) => t.stop());
+    micState = 'granted'; micFails = 0; setMicBadge();
+    if (!quiet) addErr('✅ 麦克风正常，可以说话了');
+    return 'granted';
+  } catch (e) {
+    const name = (e && e.name) || '';
+    micState = (name === 'NotAllowedError' || name === 'SecurityError') ? 'denied' : 'error';
+    setMicBadge();
+    if (!quiet) showMicPerm(name);
+    return micState;
+  }
+}
+
+/* 彻底释放识别器：先摘掉回调再 abort，避免 abort 触发的事件被当成新一次失败 */
+function releaseRec() {
+  const r = rec;
+  rec = null;
+  if (!r) return;
+  try { r.onerror = null; r.onend = null; r.onresult = null; } catch {}
+  try { r.abort(); } catch {}
+}
+
 function finalize() {
   if (finalized) return;
   finalized = true;
   const t = (recFinal + ' ' + recInterim).replace(/\s+/g, ' ').trim();
-  try { rec?.stop(); } catch {}
-  rec = null; recording = false; cancelMode = false;
+  releaseRec();
+  recording = false; cancelMode = false;
   setRecUI(false);
   if (t && !recCanceled) send(t);
 }
 
+function recFailed(err) {
+  finalized = true;
+  releaseRec();
+  recording = false; cancelMode = false;
+  setRecUI(false);
+  micFails++;
+  try { window.petAPI.logErr('chat asr fail: ' + (err || '?') + ' fails=' + micFails + ' SR=' + !!SR + ' lang=' + navigator.language); } catch {}
+  if (String(err).startsWith('whisper')) {   // 本地识别报错跟麦克风权限无关，别误报成"未授权"
+    micState = 'error'; setMicBadge();
+    addErr('本地识别失败：' + String(err).replace(/^whisper:/, '') + '（可在自检里看引擎状态）');
+    return;
+  }
+  const hard = (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture');
+  micState = hard ? 'denied' : 'error';
+  setMicBadge();
+  if (hard || micFails >= 2) showMicPerm(err || ('连续 ' + micFails + ' 次失败'));
+  else addErr('语音识别失败：' + (err || '未知'));
+}
+
 function startRec() {
-  if (!SR) { addErr('语音识别不可用'); return; }
+  if (!SR) { showMicPerm('这个环境没有提供语音识别接口'); return; }
+  releaseRec();   // 关键：先把上一次彻底 abort，否则麦克风一直被旧实例占着，连败后就起不来
   recCanceled = false; recFinal = ''; recInterim = ''; cancelMode = false; finalized = false;
   rec = new SR();
   rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
   rec.onresult = (e) => {
     if (finalized) return;
+    micFails = 0; if (micState !== 'granted') { micState = 'granted'; setMicBadge(); }
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const r = e.results[i];
       if (r.isFinal) recFinal += r[0].transcript + ' ';
@@ -512,35 +535,249 @@ function startRec() {
     }
   };
   rec.onend = () => finalize();
-  rec.onerror = () => {
-    if (finalized) return;
-    finalized = true; rec = null; recording = false; cancelMode = false;
-    setRecUI(false);
-    addErr('语音识别失败（可能没麦克风或未授权）');
-  };
-  try { rec.start(); } catch { rec = null; setRecUI(false); addErr('语音识别启动失败'); return; }
+  rec.onerror = (ev) => { if (!finalized) recFailed((ev && ev.error) || ''); };
+  try { rec.start(); } catch (e) { recFailed('start:' + ((e && e.message) || e)); return; }
   recording = true;
   setRecUI(true);
   $('recHint').textContent = '再点一次发送 · 上滑取消';
 }
 
+/* ---------------- 统一入口：优先本地 whisper（离线，不依赖网络） ---------------- */
+async function asrInfo() {
+  try { return await window.petAPI.asrStatus(); } catch { return null; }
+}
+async function startTalk() {
+  if (recording || asrBusy) return;
+  if (window.PetASR && window.PetASR.supported()) {
+    const st = await asrInfo();
+    if (st && st.hasModel && st.binary) {
+      try {
+        await window.PetASR.pushStart();
+        recording = true; recMode = 'whisper'; cancelMode = false; finalized = false;
+        setRecUI(true);
+        $('recHint').textContent = '松开发送 · 本地识别（离线）';
+        return;
+      } catch (e) {
+        try { window.petAPI.logErr('whisper pushStart fail: ' + ((e && e.message) || e)); } catch {}
+      }
+    } else if (st && st.binary && !st.hasModel) {
+      showMicPerm('');
+      $('micPermMsg').textContent = '本地语音模型还没下载（点「⬇ 下载语音模型」，约 75MB，只需一次）。这次先用在线识别。';
+    }
+  }
+  recMode = 'web';
+  startRec();
+  if (recording) $('recHint').textContent = '松开发送 · 在线识别';
+}
+async function stopTalk(cancel) {
+  if (!recording || asrBusy) return;
+  if (recMode !== 'whisper') { recCanceled = !!cancel; finalize(); return; }
+  let wav = null;
+  try { wav = window.PetASR.pushStop(); } catch {}
+  if (cancel || !wav) { recording = false; setRecUI(false); $('recHint').textContent = ''; return; }
+  asrBusy = true;
+  $('recHint').textContent = '识别中…';
+  const r = await window.petAPI.asrTranscribe(wav);
+  asrBusy = false;
+  recording = false; cancelMode = false;
+  setRecUI(false);
+  $('recHint').textContent = '';
+  if (r && r.ok) {
+    if (r.text) send(r.text);
+    else addErr('没听清，再说一次？');
+  } else {
+    recFailed('whisper:' + ((r && r.error) || '?'));
+  }
+}
+
+/* ---------------- 麦克风权限面板 ---------------- */
+function showMicPerm(reason) {
+  try {
+    $('micPermReason').textContent = reason ? ('系统返回：' + reason) : '';
+    $('micPermMsg').textContent = '';
+    if ($('main').classList.contains('hidden')) showMain();
+    $('micPerm').classList.remove('hidden');
+  } catch {}
+}
+$('micPermOpen').addEventListener('click', async () => {
+  $('micPermMsg').textContent = '已打开系统设置，把麦克风权限打开后回来点「我已授权」';
+  try { await window.petAPI.micOpenSettings(); } catch {}
+});
+$('micPermRetry').addEventListener('click', async () => {
+  $('micPermMsg').textContent = '正在检测…';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    $('micPermMsg').textContent = '✅ 麦克风可用，按住空格就能说话了';
+    setTimeout(() => $('micPerm').classList.add('hidden'), 1300);
+  } catch (e) {
+    $('micPermMsg').textContent = '还是不行：' + ((e && e.name) || e) + '，确认系统设置里这一项已允许。';
+  }
+});
+$('micPermClose').addEventListener('click', () => $('micPerm').classList.add('hidden'));
+
+/* 下载本地语音模型（只需一次，之后完全离线） */
+$('micPermDl') && $('micPermDl').addEventListener('click', async () => {
+  const btn = $('micPermDl');
+  const st = await asrInfo();
+  const name = (st && st.model) || 'tiny.en';
+  btn.disabled = true;
+  $('micPermMsg').textContent = '正在下载 ' + name + ' …（约 75MB，中途别关窗口）';
+  try {
+    const r = await window.petAPI.asrDownload(name);
+    $('micPermMsg').textContent = (r && r.ok)
+      ? ('✅ 语音模型已就绪（' + name + '），现在可以完全离线识别了，按住空格试试。')
+      : ('❌ 下载失败：' + ((r && r.error) || '未知') + '\n→ 可重试；或手动把 ggml-' + name + '.bin 放进数据目录的 asr 文件夹。');
+  } catch (e) {
+    $('micPermMsg').textContent = '❌ 下载失败：' + ((e && e.message) || e);
+  } finally { btn.disabled = false; }
+});
+if (window.petAPI.onAsrProgress) window.petAPI.onAsrProgress((p) => {
+  try {
+    const mb = (n) => (n / 1048576).toFixed(1);
+    const pct = p && p.total ? Math.round((p.got / p.total) * 100) : null;
+    $('micPermMsg').textContent = '正在下载语音模型：' + mb((p && p.got) || 0) + ' / ' + (p && p.total ? mb(p.total) + ' MB' : '…') + (pct != null ? '（' + pct + '%）' : '');
+  } catch {}
+});
+
+/* 语音自检：不需要说话，直接判定问题出在哪一环 */
+async function runAsrSelfTest(render) {
+  const say = (t) => { try { render(t); } catch {} };
+  say('① 检查麦克风权限…');
+  let mic = 'granted';
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach((t) => t.stop());
+  } catch (e) { mic = (e && e.name) || 'error'; }
+  if (mic !== 'granted') {
+    say('❌ 麦克风权限：' + mic + '\n→ 点「打开系统麦克风设置」把权限打开');
+    try { window.petAPI.logErr('asr selftest mic=' + mic); } catch {}
+    return { mic, verdict: 'mic-denied' };
+  }
+
+  const st = await asrInfo();
+  if (st) {
+    const engTxt = st.binary ? '✅ 已就绪' : '❌ 缺少 whisper-cli.exe';
+    const modTxt = st.hasModel ? ('✅ ' + st.model + ' 已就绪') : '❌ 未下载（点「⬇ 下载语音模型」）';
+    say('② 本地识别引擎（离线，不走网络）\n引擎文件：' + engTxt + '\n语音模型：' + modTxt);
+    try { window.petAPI.logErr('asr selftest whisper binary=' + st.binary + ' model=' + st.model + ' hasModel=' + st.hasModel); } catch {}
+    if (st.binary && st.hasModel) {
+      say('✅ 本地识别可用（离线）\n按住空格说话，松开即识别；不依赖任何在线服务。');
+      return { mic, whisper: true, model: st.model, verdict: 'ok-local' };
+    }
+    if (!st.binary) {
+      say('❌ 本地引擎文件缺失（whisper-cli.exe）\n→ 程序文件不完整，需要重新安装/解压完整的应用目录。');
+      return { mic, whisper: false, verdict: 'no-binary' };
+    }
+  }
+
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    say('❌ 本地模型没下载，而且这个环境也没有在线识别接口\n→ 点「⬇ 下载语音模型」补上本地模型即可。');
+    try { window.petAPI.logErr('asr selftest no-SR'); } catch {}
+    return { mic, sr: false, verdict: 'no-api' };
+  }
+
+  say('③ 检查在线识别服务（约 10 秒，**不用说话**）…');
+  const reason = await new Promise((resolve) => {
+    let r;
+    try { r = new SR(); } catch (e) { return resolve('ctor:' + ((e && e.message) || e)); }
+    r.lang = 'en-US'; r.continuous = false; r.interimResults = true;
+    let done = false;
+    const fin = (x) => { if (!done) { done = true; resolve(x); } };
+    r.onresult = () => { try { r.stop(); } catch {} fin('got-result'); };
+    r.onerror = (e) => fin('error:' + ((e && e.error) || ''));
+    r.onend = () => fin('ended');
+    try { r.start(); } catch (e) { fin('start-throw:' + ((e && e.message) || e)); }
+    setTimeout(() => { try { r.stop(); } catch {} fin('timeout'); }, 10000);
+  });
+
+  let verdict;
+  if (reason === 'error:network' || reason === 'error:service-not-allowed') {
+    verdict = '❌ 语音识别**服务连不上**（network）\n→ 这是识别引擎依赖在线服务导致的，国内网络常见。需要换识别方案。';
+  } else if (reason === 'error:not-allowed') {
+    verdict = '❌ 语音识别**权限被拒**\n→ 去系统设置给麦克风权限。';
+  } else if (reason === 'error:audio-capture') {
+    verdict = '❌ **没有可用的麦克风**（或已被其它程序占用）\n→ 检查录音设备 / 关掉占用麦克风的程序。';
+  } else if (reason === 'error:no-speech' || reason === 'timeout' || reason === 'ended' || reason === 'got-result') {
+    verdict = '✅ **引擎正常**（刚才只是没听到人说话）\n→ 可以正常录音。如果还是录不进去，多半是麦克风设备/音量问题。';
+  } else {
+    verdict = '⚠️ 结果：' + reason;
+  }
+  say('麦克风：' + mic + '\n语音识别：' + reason + '\n\n' + verdict);
+  try { window.petAPI.logErr('asr selftest mic=' + mic + ' reason=' + reason); } catch {}
+  return { mic, reason, verdict };
+}
+
+$('micPermTest').addEventListener('click', async () => {
+  const btn = $('micPermTest');
+  btn.disabled = true;
+  $('micPermMsg').textContent = '';
+  try { await runAsrSelfTest((t) => { $('micPermMsg').textContent = t; }); }
+  finally { btn.disabled = false; }
+});
+if (window.petAPI.onMicPermission) window.petAPI.onMicPermission((r) => showMicPerm(r));
+if (window.petAPI.onEndAsk) window.petAPI.onEndAsk(() => { try { $('endBtn').click(); } catch {} });
+
+/* 桌宠那边（语音/投喂/摸摸头）说的话实时同步进来；不发声，它自己已经在读了 */
+if (window.petAPI.onChatLog) window.petAPI.onChatLog((msg) => {
+  if (!msg) return;
+  try {
+    if (msg.who === 'me') addUser(msg.text);
+    else if (msg.who === 'pet') {
+      if (!msg.en) return;
+      addPet(msg.en, msg.zh, msg.words);
+      if (msg.choices && msg.choices.length) renderChoices(msg.choices);
+    }
+  } catch {}
+});
+
+/* 点状态标签 = 重新检测并打开面板（里面有「🔍 语音自检」） */
+$('micState').addEventListener('click', async () => {
+  await checkMic(true);
+  showMicPerm(micState === 'granted' ? '' : micState);
+});
+// 打开就静默检测一次，让用户一眼看出授没授权
+setTimeout(() => { checkMic(true); }, 800);
+
+/* ---------------- 按住空格说话（松开结束，像语音输入） ---------------- */
+let spaceRec = false;
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' && e.key !== ' ') return;
+  if (e.repeat) return;
+  const t = e.target;
+  const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA');
+  if (typing && t.value) return;     // 正在打字 → 空格就是空格
+  if (recording || asrBusy) return;  // 已经在录 / 正在识别
+  e.preventDefault();
+  spaceRec = true;
+  startTalk();
+}, true);
+document.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space' && e.key !== ' ') return;
+  if (!spaceRec) return;
+  spaceRec = false;
+  e.preventDefault();
+  stopTalk(false);
+}, true);
+
 // 点一下开始；再点一下立即发送（不等识别器收尾）
 $('mic').addEventListener('click', (e) => {
-  if (!recording) { recStartY = e.clientY; startRec(); }
-  else { recCanceled = cancelMode; finalize(); }
+  if (!recording && !asrBusy) { recStartY = e.clientY; startTalk(); }
+  else { stopTalk(cancelMode); }
 });
 
 window.addEventListener('mousemove', (e) => {
   if (!recording) return;
   cancelMode = recStartY - e.clientY > 60;
-  $('recHint').textContent = cancelMode ? '点击任意位置取消' : '再点一次发送 · 上滑取消';
+  $('recHint').textContent = cancelMode ? '点击任意位置取消' : (recMode === 'whisper' ? '松开发送 · 本地识别（离线）' : '再点一次发送 · 上滑取消');
 });
 
 window.addEventListener('mousedown', (e) => {
   if (!recording || !cancelMode) return;
   if (e.target.closest('#mic')) return; // 点麦克风走上面的发送逻辑
   recCanceled = true;
-  finalize();
+  stopTalk(true);
 });
 
 /* ---------------- 欢迎语 ---------------- */
