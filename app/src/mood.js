@@ -4,11 +4,21 @@ const fs = require('fs');
 
 const file = () => path.join(app.getPath('userData'), 'mood.json');
 const DEFAULTS = { affection: 30, mood: 70, pokes: 0, lastSeen: Date.now() };
-const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
+/* clamp 必须自己吃掉 NaN：以前 mood.json 里出现非数字（手改、旧版本写坏）时
+   clamp(NaN) = NaN → 落盘成 null → 好感度被静默归零，还会以 "Affection: 0/100" 进提示词。 */
+const clamp = (v) => Math.max(0, Math.min(100, Math.round(Number.isFinite(Number(v)) ? Number(v) : 0)));
+const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 function raw() {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(), 'utf8').replace(/^\uFEFF/, '')) }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const o = JSON.parse(fs.readFileSync(file(), 'utf8').replace(/^\uFEFF/, '')) || {};
+    return {
+      affection: num(o.affection, DEFAULTS.affection),
+      mood: num(o.mood, DEFAULTS.mood),
+      pokes: num(o.pokes, 0),
+      lastSeen: num(o.lastSeen, Date.now()),
+    };
+  } catch { return { ...DEFAULTS }; }
 }
 function save(m) { try { fs.writeFileSync(file(), JSON.stringify(m, null, 2)); } catch {} }
 function load() { return raw(); }
@@ -26,8 +36,8 @@ function startupDecay() {
 
 function adjust(d = {}) {
   const m = raw();
-  m.affection = clamp(m.affection + (d.affection || 0));
-  m.mood = clamp(m.mood + (d.mood || 0));
+  m.affection = clamp(m.affection + num((d || {}).affection, 0));
+  m.mood = clamp(m.mood + num((d || {}).mood, 0));
   m.lastSeen = Date.now();
   save(m);
   return m;

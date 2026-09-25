@@ -7,6 +7,7 @@
 (function () {
   const SR = 16000;
   const FRAME = 2048;                 // 128ms/帧
+  const MAX_PUSH_FRAMES = Math.round((SR * 120) / FRAME);   // push 模式最长缓冲 120 秒
   let stream = null, ctx = null, src = null, proc = null, sink = null;
   let mode = null;                    // 'push' | 'always'
   let chunks = [];
@@ -29,7 +30,10 @@
       const d = e.inputBuffer.getChannelData(0);
       const copy = new Float32Array(d.length);
       copy.set(d);
-      if (mode === 'push') chunks.push(copy);
+      /* push 模式必须有上限：每帧 8KB、7.8 帧/秒 ≈ 3.7MB/分钟。
+         一旦因为状态机问题没能停下录音（例如按住说话启动期间就松手），
+         以前 chunks 会一直涨，挂一小时就是 200MB+。 */
+      if (mode === 'push') { if (chunks.length < MAX_PUSH_FRAMES) chunks.push(copy); }
       else if (mode === 'always' && vad) vadPush(copy);
     };
     src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);

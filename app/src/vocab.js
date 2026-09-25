@@ -3,8 +3,16 @@ const path = require('path');
 const fs = require('fs');
 
 const file = () => path.join(app.getPath('userData'), 'vocab.json');
-const load = () => { try { return JSON.parse(fs.readFileSync(file(), 'utf8').replace(/^\uFEFF/, '')); } catch { return []; } };
-const save = (v) => { try { fs.writeFileSync(file(), JSON.stringify(v, null, 2)); } catch {} };
+/* 必须保证返回数组：文件被手改坏（例如写成 {}）时，load() 返回对象会让
+   v.findIndex is not a function 直接抛错，整个生词本面板就废了。 */
+const load = () => {
+  try {
+    const v = JSON.parse(fs.readFileSync(file(), 'utf8').replace(/^\uFEFF/, ''));
+    if (!Array.isArray(v)) return [];
+    return v.filter((x) => x && typeof x === 'object' && typeof x.w === 'string');
+  } catch { return []; }
+};
+const save = (v) => { try { fs.writeFileSync(file(), JSON.stringify(Array.isArray(v) ? v : [], null, 2)); } catch {} };
 
 function add(word) {
   const w = String((word && word.w) || '').trim();

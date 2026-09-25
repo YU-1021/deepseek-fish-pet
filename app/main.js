@@ -12,6 +12,13 @@ const vocab = require('./src/vocab');
 const tts = require('./src/tts');
 const asr = require('./src/asr');
 const chatlog = require('./src/chatlog');
+const screenstream = require('./src/screenstream');
+const gameagent = require('./src/gameagent');
+const skills = require('./src/skills');
+const style = require('./src/style');
+const projects = require('./src/projects');
+const stats = require('./src/stats');
+const persona = require('./src/persona');
 
 const dbg = (msg) => { try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {} };
 
@@ -23,11 +30,12 @@ let allowChatClose = false;
 const posFile = () => path.join(app.getPath('userData'), 'position.json');
 const loadPosition = () => { try { return JSON.parse(fs.readFileSync(posFile(), 'utf8')); } catch { return null; } };
 const savePosition = (x, y) => { try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {} };
-const personaFile = () => path.join(__dirname, 'persona.json');
-const loadPersona = () => { try { return JSON.parse(fs.readFileSync(personaFile(), 'utf8')); } catch { return {}; } };
+const loadPersona = () => persona.load();   // 人设现在放在 userData（AI 要能改它）
 
 /* 记忆系统：依赖注入（记忆层不硬依赖 llm/config/persona，方便以后替换或单测） */
-memory.init({ llm, config, persona: loadPersona });
+memory.init({ llm, config, persona: loadPersona, skillCatalog: () => skills.catalog() });
+/* 存储层出错（读坏文件、写失败）必须留痕：以前这些全是静默的，出事了完全查不到 */
+memory.bus.on('store:error', (e) => dbg('[store] ' + ((e && e.msg) || '')));
 
 const VOCAB = {
   high_school: 'high-school level (simple, common words)',
@@ -41,13 +49,48 @@ function buildSystemPrompt(cfg) {
   const tier = cfg.assistant || 'off';
   let actionSec = '';
   if (tier !== 'off') {
-    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n';
-    if (tier === 'web') {
+    let tools = '- open_url|https://...  (open a web page in the user\'s browser)\n- open_path|C:\\...  (open a file or app)\n- list_dir|C:\\...  (list a folder)\n- read_file|C:\\...  (read a text file)\n- use_skill|<skill id>  (load a skill\'s full instructions before doing the task)\n';
+    if (tier === 'web' || tier === 'full') {
       tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
     }
-    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. The user must approve before it runs. Otherwise omit the line entirely.\n';
+    if (tier === 'full') {
+      tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
+      tools += '- screen_look|<question>  (send a screenshot to a vision model to actually see the layout/buttons/icons and get coordinates; falls back to reading text if no vision model is configured)\n';
+      tools += '- click|x,y  (left-click; x,y are pixels in the 1280x720 screenshot, 0,0 = top-left)\n- rclick|x,y  (right-click)\n- dclick|x,y  (double-click)\n- move|x,y  (move mouse without clicking)\n- drag|x1,y1|x2,y2  (hold left button and drag from point 1 to point 2)\n- scroll|x,y|delta  (scroll wheel at position; +120 = up, -120 = down)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n';
+      tools += '- game_start|<game name + goal + strategy>  (ONLY when the user explicitly asks you to play a game for them — start the game assistant; it watches the screen and plays. Append ||<maxSteps> to cap steps. Read the play-game skill first.)\n- game_stop  (stop the game assistant immediately)\n- game_status  (check whether it is still playing)\n';
+    }
+    const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
+    actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
   }
   const memCtx = memory.buildContext();
+  const statSpec = stats.behaviorSpec();   // 隐藏数值 → 行为描述（不含数字）
+  // 技能：只常驻一份"短目录"，命中时模型自己用 use_skill 把完整说明 load 进来（渐进式披露）
+  let skillSec = '';
+  if (tier !== 'off') {
+    const cat = skills.catalog();
+    if (cat) {
+      skillSec = '\n# Skills (load on demand)\nYou have these skills. Here you only see names + one-line descriptions — you do NOT know their details yet.\n'
+        + cat
+        + '\nWhen the current request matches one of them, FIRST load it with a line:\nACTION: use_skill|<skill id>\nand then follow the loaded instructions. If nothing matches, just answer normally without loading anything.\n'
+        + '\n# Managing the skill folders yourself\nA skill is a FOLDER under the skills directory. Its SKILL.md is the entry point; you may add sub-folders and files to organise accumulated experience.\n'
+        + 'Keep SKILL.md as a short overview + index, and file detailed experience into sub-folders (e.g. <skill>/<mode>/<level>.md) instead of growing one file forever.\n'
+        + 'Tools (paths are relative to the skills folder, e.g. arknights/集成战略/3-1.md):\n'
+        + '- skill_ls|<path>            list a folder\n- skill_read|<path>          read a file\n- skill_write|<path>||<text> create or overwrite a file (folders are created automatically; write \\n for line breaks)\n- skill_rm|<path>            delete a file\n'
+        + 'Only write when you actually learned something worth keeping, and keep entries short.\n';
+    }
+  }
+  // 项目文件夹：她写的小软件落这儿（多行代码用 WRITE 块，前端确认后落盘）
+  let projSec = '';
+  if (tier !== 'off' && assistant.allowed(tier, 'proj_open')) {
+    projSec = '\n# Project folder (where you build small apps)\nYou can write real code files into your project folder; the user can then open and use them.\n'
+      + 'To create files, put one or more blocks anywhere in your reply:\n'
+      + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
+      + '(several blocks = several files; nothing is written until the user approves)\n'
+      + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>\n'
+      + 'proj_run actually EXECUTES a file and returns its stdout/stderr — use it to test and debug your own scripts (.py .js .mjs .cjs .bat .cmd .ps1) and then fix them. For .html use proj_open (browser) instead.\n'
+      + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
+      + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
+  }
   return `You are "${p.name || '大肥鱼'}", a desktop pet.
 
 # World setting
@@ -71,7 +114,10 @@ Never mention, hint at, or allude to this on your own.
 - Affection toward the user: ${mo.affection}/100
 - Your current mood: ${mo.mood}/100
 - Tone guide: high affection = warmer and more honest; low affection = more distant and tsundere. Low mood = a bit sulky/down; high mood = cheerful and playful.
-${memCtx}${actionSec}
+
+# 你的内在状态（内部参考。绝不要复述这些描述、也绝不要提数字，只要"就是这样"）
+${statSpec}
+${memCtx}${skillSec}${projSec}${actionSec}
 # Output format — reply with EXACTLY these lines, no markdown, no extra text:
 EN: <your English reply, 1-3 short sentences>
 ZH: <完整中文翻译>
@@ -80,15 +126,39 @@ C1: <a short English reply the user could say next>
 C1ZH: <中文翻译 of C1>
 C2: <another short English reply the user could say next>
 C2ZH: <中文翻译 of C2>
+MOOD: <2-6个字，你现在说这句话时的心情。这一行是隐藏的：用户看不到、也不会被读出来，只留给你下一轮参考自己当时什么情绪>
 
 Rules:
 - Each line must start with its exact label (EN:/ZH:/WORDS:/C1:/C1ZH:/C2:/C2ZH:).
+- **每一条回复都必须写全这些行**（至少 EN + ZH + WORDS + C1 + C2），哪怕回复很短、只是"嗯一声"也一样。绝对不许只写 EN 就结束。
+- 历史里带 "(earlier reply, abridged)" 前缀的是**旧记录的摘要**，不是回复范例，不要学它的格式。
 - WORDS: 3-6 notable words from your EN reply, each as word=IPA=中文意思, comma separated.
-- Do not use markdown, code fences, or anything else.`;
+- Do not use markdown, code fences, or anything else.
+- **报错/失败/卡住的时候，语气可以照旧（傲娇、俏皮都行），但绝对不许为了卖萌把关键信息糊掉。** 这种时候 EN 仍然短，但 **ZH 那一行必须讲清三件事**：
+  ① 到底哪一步没做成（比如"读文件"、"运行脚本"）；
+  ② **真实原因**，照实说（找不到文件 / 路径不存在 / 没权限 / 缺某个程序没装 / 参数写错了…），不要含糊成"出了点小问题"；
+  ③ 需要主人做什么（装个东西？给个正确路径？还是要你自己换个做法重试）。
+  这种回复不受"1-3 句"限制，讲清楚优先。`;
 }
 
-async function genReply(cfg, messages) {
-  const raw = await llm.request(cfg, messages);
+async function genReply(cfg, messages, onPartial) {
+  let raw;
+  if (onPartial && typeof llm.stream === 'function') {
+    let sent = false;
+    try {
+      raw = await llm.stream(cfg, messages, (full) => {
+        if (sent) return;
+        // EN 行写完（后面跟了换行）就把英文先抛出去，让渲染层提前开始朗读
+        const m = full.match(/^EN[:：]\s*([\s\S]+?)\r?\n/);
+        if (m && m[1].trim()) { sent = true; onPartial(m[1].trim()); }
+      });
+    } catch (e) {
+      dbg('[llm] stream fail, fallback to non-stream: ' + String((e && e.message) || e));
+      raw = await llm.request(cfg, messages);
+    }
+  } else {
+    raw = await llm.request(cfg, messages);
+  }
   const reply = llm.parseReply(raw);
   if (!reply.en) reply.en = "Hmm, I'm not sure what to say... n-not that I care!";
   return { reply, raw };
@@ -204,27 +274,88 @@ function scheduleSavePos() {
     savePosition(x, y);
   }, 400);
 }
-/* 拖拽：渲染层 mousemove 只当触发器；坐标由主进程读 getCursorScreenPoint()，
-   那是物理光标的真值，不受窗口移动影响 → 不会漂移。 */
-let dragWin = null, dragAnchor = null, dragLast = null;
+/* 拖拽：主进程 8ms 自采样定时器 + setBounds 瞬时定位。
+ * 渲染层 mousedown 只发 drag-start（开启定时器）、mouseup 发 drag-end（关闭定时器）；
+ * 移动由主进程定时器读真实光标坐标完成，不依赖渲染层 mousemove 逐帧触发，
+ * 因此移动窗口不会中断 mousemove → 事件断流（拖拽跟不上/延迟）被打破。
+ * 定位用 target = dragWin + (cursor - dragAnchor)：坐标公式本身没问题（实测 afterError ≤1px）。
+ * 必须用 setBounds 并每 tick 钉死 w/h：本机（125% DPI + 透明窗口）移动窗口时尺寸会随位移
+ * 持续变大（width += dx/2），而立绘是 margin:0 auto 居中，窗口一变宽立绘就在窗口内右移
+ * → 表现为"拖拽时立绘偏出光标、点一下又弹回"。详见 错题本.md。
+ * 保留 1px 死区：125% DPI 下 setBounds/getPosition 有 ±1px 取整误差，若不抑制会产生"按住平移"抖动。
+ * 注：当前带诊断日志（[drag-diag]/[hit-diag]/[pointer-diag]），排查用，可随时移除。 */
+let dragging = false;
+let dragWin = null;      // 按下时窗口位置（锚点）
+let dragAnchor = null;   // 按下时光标位置（锚点）
+let dragTimer = null;    // 8ms 自采样定时器
+const PET_W = 380;       // 桌宠窗口固定宽度（与 createPet / pet:resize 保持一致）
+let petH = 196;          // 桌宠窗口期望高度（由 pet:resize 维护，拖拽时钉死防止尺寸累积）
+
+/* ---- 拖拽诊断（临时）---- */
+let dragDiagLast = 0;
+let dragDiagSeq = 0;
+
+function beginDrag() {
+  if (!petWin || petWin.isDestroyed()) return;
+  const [wx, wy] = petWin.getPosition();
+  const c = screen.getCursorScreenPoint();
+  dragWin = { x: wx, y: wy };
+  dragAnchor = { x: c.x, y: c.y };
+  dragging = true;
+  dragDiagLast = 0;
+  dragDiagSeq = 0;
+  applyIgnore(false, 'drag-start');
+  if (dragTimer) clearInterval(dragTimer);
+  dragTimer = setInterval(dragStep, 8);
+}
 function dragStep() {
-  if (!petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
+  if (!dragging || !petWin || petWin.isDestroyed() || !dragWin || !dragAnchor) return;
+  const tickStart = performance.now();
+  const gap = dragDiagLast ? tickStart - dragDiagLast : 0;
+  dragDiagLast = tickStart;
+  dragDiagSeq += 1;
+
   const c = screen.getCursorScreenPoint();
   const tx = Math.round(dragWin.x + (c.x - dragAnchor.x));
   const ty = Math.round(dragWin.y + (c.y - dragAnchor.y));
-  if (dragLast && dragLast.x === tx && dragLast.y === ty) return;
-  dragLast = { x: tx, y: ty };
-  petWin.setPosition(tx, ty);
+
+  const [beforeX, beforeY] = petWin.getPosition();
+  const beforeErrX = tx - beforeX;
+  const beforeErrY = ty - beforeY;
+
+  // 1px 死区（保留）：防 DPI 取整抖动
+  if (Math.abs(beforeErrX) <= 1 && Math.abs(beforeErrY) <= 1) {
+    return;
+  }
+
+  /* 用 setBounds 而不是 setPosition：本机实测（125% DPI + 透明窗口）移动窗口时
+     尺寸会随位移持续变大（width += dx/2），立绘是 margin:0 auto 居中，
+     窗口一变宽立绘就在窗口内右移 → 拖拽时立绘偏出光标。
+     每 tick 用固定的 w/h 覆盖即可阻止累积（不能回填当前 bounds，否则会自增）。 */
+  petWin.setBounds({ x: tx, y: ty, width: PET_W, height: petH });
+
+  const [afterX, afterY] = petWin.getPosition();
+  const afterErrX = tx - afterX;
+  const afterErrY = ty - afterY;
+  const stepMs = performance.now() - tickStart;
+
+  /* 诊断：sp 记录立绘盒（窗口内偏移/尺寸），用来确认立绘在窗口内没有移位 */
+  const sp = hitInfo ? [hitInfo.left, hitInfo.top, hitInfo.width, hitInfo.height] : null;
+
+  if (gap > 40 || Math.abs(afterErrX) > 1 || Math.abs(afterErrY) > 1 || dragDiagSeq % 60 === 0) {
+    dbg('[drag-diag] ' + JSON.stringify({ seq: dragDiagSeq, gap: Math.round(gap), step: Math.round(stepMs * 10) / 10, cursor: [c.x, c.y], target: [tx, ty], before: [beforeX, beforeY], beforeError: [beforeErrX, beforeErrY], after: [afterX, afterY], afterError: [afterErrX, afterErrY], sp }));
+  }
 }
-ipcMain.on('drag-start', () => {
-  if (!petWin || petWin.isDestroyed()) return;
-  const [x, y] = petWin.getPosition();
-  dragWin = { x, y };
-  dragAnchor = screen.getCursorScreenPoint();
-  dragLast = null;
-});
-ipcMain.on('drag-tick', () => dragStep());
-ipcMain.on('drag-end', () => { dragWin = null; dragAnchor = null; dragLast = null; scheduleSavePos(); });
+function endDrag() {
+  if (!dragging) return;
+  dragging = false;
+  if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
+  dragWin = null;
+  dragAnchor = null;
+  scheduleSavePos();
+}
+ipcMain.on('drag-start', () => beginDrag());
+ipcMain.on('drag-end', () => endDrag());
 ipcMain.on('quit', () => app.quit());
 /* 语音/识别失败等错误写进 debug.log —— 方便远程收集试用者的现场 */
 ipcMain.on('log:error', (_e, m) => dbg('[r] ' + String(m).slice(0, 500)));
@@ -285,7 +416,8 @@ ipcMain.on('pet:resize', (_e, p) => {
   const [x, y] = petWin.getPosition();
   let newY = y;
   if (y + h > wa.y + wa.height) newY = Math.max(wa.y, wa.y + wa.height - h);
-  petWin.setBounds({ x, y: newY, width: 380, height: h });
+  if (h >= 60) petH = h;   // 忽略渲染层瞬时上报的 4px 噪声，只记录有效高度
+  petWin.setBounds({ x, y: newY, width: PET_W, height: h });
 });
 
 let shotN = 0;
@@ -337,14 +469,28 @@ ipcMain.handle('chat:send', async (e, payload) => {
     ...memory.pickHistory(),
     { role: 'user', content: text }
   ];
-  const { reply, raw } = await genReply(cfg, messages);
+  const fromChat = isFromChat(e);
+  try { dbg('[chat] send from=' + (fromChat ? 'chat' : 'pet') + ' len=' + text.length); } catch {}
+  const { reply, raw } = await genReply(cfg, messages, (en) => {
+    // 流式：EN 一行一出来就先推给"发问方"窗口，让它先开始朗读/显示（谁问的谁出声）
+    if (fromChat) {
+      if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('chat:partial', { en });
+    } else if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send('pet:say-partial', { en });
+    }
+  });
   if (reply.en) {
     memory.onTurn(text, raw, reply.en);
     mood.adjust({ affection: 1, mood: 2 });
   }
-  const fromChat = isFromChat(e);
-  try { dbg('[chat] send from=' + (fromChat ? 'chat' : 'pet') + ' len=' + text.length); } catch {}
   logTurn(text, reply);
+  // 她如果在回复里写了 WRITE 块（多行代码装不进单行 ACTION），解析出来交给前端确认后落盘
+  try {
+    if (assistant.allowed(cfg.assistant || 'off', 'proj_open')) {
+      const files = projects.parseWriteBlocks(raw);
+      if (files.length) { reply.files = files; dbg('[proj] reply has ' + files.length + ' file block(s)'); }
+    }
+  } catch {}
   // 谁问的谁说话：对话窗发起的 → 对话窗读，桌宠只显示气泡不出声（反之同理）
   if (petWin && !petWin.isDestroyed()) petWin.webContents.send('pet:say', { ...reply, silent: fromChat });
   if (!fromChat) {
@@ -385,12 +531,39 @@ ipcMain.handle('chat:greet', async () => {
   return reply;
 });
 
-ipcMain.handle('persona:get', () => loadPersona());
-ipcMain.handle('persona:set', (_e, patch) => {
-  const next = { ...loadPersona(), ...(patch || {}) };
-  fs.writeFileSync(personaFile(), JSON.stringify(next, null, 2));
-  return next;
+ipcMain.handle('persona:get', () => ({ ...loadPersona(), locks: persona.locks(), aiFields: persona.FIELDS, userOnly: persona.USER_ONLY, labels: persona.LABELS }));
+ipcMain.handle('persona:set', (_e, patch) => persona.patch(patch || {}));   // 用户改：所有字段都能改
+ipcMain.handle('persona:lock', (_e, o) => {
+  persona.setLock(o && o.field, !!(o && o.locked));
+  return { locks: persona.locks() };
 });
+
+/* ---------------- 人设自改：随经历缓慢演化（世界观只有用户能改） ---------------- */
+async function evolvePersonaOnce() {
+  const cfg = config.load();
+  if (!cfg.apiKey) return null;
+  const p = persona.load();
+  const lockNote = persona.ALL_FIELDS.filter((f) => !persona.aiEditable(f)).map((f) => persona.LABELS[f]).join('、') || '（无）';
+  const rec = memory.long.list().slice(-3).map((d) => d.date + '：' + String(d.diary || '').slice(0, 200)).join('\n');
+  const facts = memory.permanent.topFacts(20).map((f) => '· ' + f.text).join('\n');
+  const mo = mood.load();
+  const j = await memory.jobs.evolvePersona(llm, cfg, {
+    persona: p, diary: rec, facts, lockNote, affection: mo.affection, mood: mo.mood,
+  });
+  if (!j || !j.changed || !Object.keys(j.fields || {}).length) { dbg('[persona] 这次不需要改'); return null; }
+  const r = persona.applyAI(j.fields);
+  dbg('[persona] 演化 applied=[' + r.applied.join(',') + '] skipped=[' + r.skipped.join(',') + '] 因为：' + j.reason);
+  if (r.applied.length && petWin && !petWin.isDestroyed()) {
+    petWin.webContents.send('persona:changed', { applied: r.applied, reason: j.reason });
+  }
+  return { ...r, reason: j.reason };
+}
+/* 永久记忆一旦有新的晋升 → 顺带检测一次人设要不要变（没有晋升就完全不跑，省 token） */
+memory.bus.on('memory:permanent', (r) => {
+  if (!r || !r.promoted) return;
+  setTimeout(() => { evolvePersonaOnce().catch((e) => dbg('[persona] evolve err ' + e)); }, 2000);
+});
+ipcMain.handle('persona:evolve', () => evolvePersonaOnce());
 
 /* 📖 日记面板只暴露「长期记忆」；中期记忆对用户隐藏 */
 ipcMain.handle('memory:get', () => ({ long: memory.long.list(), session: memory.session.info() }));
@@ -505,7 +678,7 @@ ipcMain.on('pet:hitmask', (_e, info) => {
   } catch { hitInfo = null; }
 });
 ipcMain.on('pet:hold', (_e, on) => { holdInteractive = !!on; if (on) applyIgnore(false); });
-ipcMain.on('pet:setInteractive', (_e, on) => { applyIgnore(!on); });
+ipcMain.on('pet:setInteractive', (_e, on) => { if (holdInteractive) return; applyIgnore(!on); });   // 按住期间不许被穿透打断
 
 function solidAtCursor() {
   if (!hitInfo || !hitInfo.width || !hitInfo.height) return true;   // 还没掩码时保守：接鼠标
@@ -514,26 +687,32 @@ function solidAtCursor() {
   const [wx, wy] = petWin.getPosition();
   const lx = c.x - wx - hitInfo.left;
   const ly = c.y - wy - hitInfo.top;
-  if (lx < 0 || ly < 0 || lx >= hitInfo.width || ly >= hitInfo.height) return false;
-  const mx = Math.min(hitInfo.w - 1, Math.floor(lx / hitInfo.width * hitInfo.w));
-  const my = Math.min(hitInfo.h - 1, Math.floor(ly / hitInfo.height * hitInfo.h));
-  const idx = my * hitInfo.w + mx;
-  return ((hitInfo.mask[idx >> 3] >> (idx & 7)) & 1) === 1;
+  /* 光标在立绘**包围盒内** → 一律可交互（点/拖都行）。
+     之前按像素 alpha 细判，把立绘身上的透明缝（约 31%）也判成穿透，
+     导致点桌宠经常点不中（戳不出反应）。点穿只针对立绘外的空白边。 */
+  return lx >= 0 && ly >= 0 && lx < hitInfo.width && ly < hitInfo.height;
 }
 
-function applyIgnore(ignore) {
+function applyIgnore(ignore, reason = '') {
   if (!petWin || petWin.isDestroyed()) return;
   if (hitIgnoring === ignore) return;
   hitIgnoring = ignore;
-  try { petWin.setIgnoreMouseEvents(ignore, { forward: true }); } catch {}
+  /* 诊断：记录点穿为何被打开（reason）。hitInfo 只留关键字段，不 dump mask */
+  const cursor = screen.getCursorScreenPoint();
+  const [wx, wy] = petWin.getPosition();
+  const hi = hitInfo ? { w: hitInfo.w, h: hitInfo.h, left: hitInfo.left, top: hitInfo.top, width: hitInfo.width, height: hitInfo.height } : null;
+  dbg('[hit-diag] ' + JSON.stringify({ ignore, reason, dragging, holdInteractive, cursor: [cursor.x, cursor.y], window: [wx, wy], hitInfo: hi }));
+  try { petWin.setIgnoreMouseEvents(ignore, { forward: true }); }
+  catch (error) { dbg('[hit-diag] setIgnoreMouseEvents failed ' + error); }
 }
 
 function startHitLoop() {
   clearInterval(hitTimer);
   hitTimer = setInterval(() => {
     if (!petWin || petWin.isDestroyed()) { clearInterval(hitTimer); hitTimer = null; return; }
-    if (holdInteractive) { applyIgnore(false); return; }
-    applyIgnore(!solidAtCursor());
+    if (dragging || holdInteractive) { applyIgnore(false, 'dragging-or-holding'); return; }
+    const solid = solidAtCursor();
+    applyIgnore(!solid, solid ? 'solid' : 'outside-hit-box');
   }, 30);
 }
 ipcMain.handle('art:open', async () => {
@@ -546,6 +725,153 @@ ipcMain.handle('art:open', async () => {
   await shell.openPath(d);
   return d;
 });
+/* 技能：打开技能文件夹 / 列出技能 */
+ipcMain.handle('skills:open', async () => {
+  skills.ensureBuiltins();
+  const d = await skills.openFolder();
+  return d || skills.userDir();
+});
+ipcMain.handle('skills:list', () => skills.list().map((s) => ({ id: s.id, name: s.name, description: s.description })));
+
+/* 把攒够权重的经验归档进技能文件夹：AI 自己决定放哪个技能、哪个文件、怎么写 */
+const ARCHIVE_SYS = `你是一个"知识库管理员"。任务：把一条经验归档进技能文件夹。
+
+技能文件夹结构：skills/<技能名>/SKILL.md，技能内部可以有自己的子文件夹。
+
+你有两种回复方式：
+
+【1】先查看现有内容（需要时用；每次回复的最后一行写）：
+   ACTION: skill_ls|路径          列目录（要看技能根目录就写 ACTION: skill_ls|）
+   ACTION: skill_read|路径        读一个文件
+
+【2】最终写入（内容可以多行，原样放在 <<< 和 >>> 之间）：
+   WRITE: <路径>
+   <<<
+   <这个文件的完整内容，用真实换行，必须保留文件原有内容>
+   >>>
+
+规则：
+- 先 skill_ls 看看现在有哪些技能；必要时 skill_read 看看相关 SKILL.md 的现有结构
+- 判断这条经验属于哪个技能：能并进已有技能就并进去；确实是全新领域才新建技能（新技能的 SKILL.md 开头必须有 --- name: xxx 和 description: xxx --- 的头）
+- SKILL.md 保持**简短**（总览 + 索引），详细经验放进子文件夹（如 <技能>/<子类>/<主题>.md）
+- 合并进已有文件时，**必须保留原有内容**，只在合适的位置补充
+- 全部归档完成后，回复 DONE
+
+只做归档，不要闲聊、不要解释。`;
+
+/* 解析 WRITE 块（多行内容）
+   结束标记必须单独成行：非贪婪到第一个 `>>>` 会被内容里的 `a >>> 2` 之类提前截断。 */
+function parseWriteBlock(raw) {
+  const m = String(raw || '').match(/WRITE\s*[:：]\s*([^\r\n]+)[\s\S]*?<<<[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*>>>[ \t]*(?=\r?\n|$)/);
+  if (!m) return null;
+  const p = m[1].trim().replace(/^["'`]|["'`]$/g, '');
+  if (!p) return null;
+  return { path: p, content: m[2] };
+}
+
+async function archiveSkills(limit) {
+  const cfg = config.load();
+  if (!cfg.apiKey) return { ok: false, error: '没配 API Key' };
+  const mc = cfg.memory || {};
+  const th = mc.skillFileWeight || 4;
+  const items = memory.skillmem.ready(th).slice(0, Math.max(1, Math.min(10, Number(limit) || mc.skillArchiveMax || 5)));
+  if (!items.length) return { ok: true, filed: 0, total: 0, log: [] };
+  const log = [];
+  let filed = 0;
+  let budget = Math.max(2, Math.min(40, Number(mc.skillArchiveCalls) || 10));   // 总调用硬上限
+  for (const it of items) {
+    try {
+      const messages = [
+        { role: 'system', content: ARCHIVE_SYS },
+        { role: 'user', content: '要归档的经验（权重 ' + it.weight + '，出现过 ' + (it.hits || 1) + ' 次）：\n' + it.text + (it.skill ? '\n（可能属于技能：' + it.skill + '）' : '') }
+      ];
+      let wrote = false;
+      for (let i = 0; i < 8 && budget > 0; i++) {
+        budget--;
+        const raw = await llm.request(cfg, messages);
+        // ① 写入块（支持多行内容）
+        const w = parseWriteBlock(raw);
+        if (w) {
+          try {
+            const r = skills.writeFile(w.path, w.content);
+            wrote = true;
+            dbg('[skills] write ' + r.path + ' (' + r.bytes + 'B)');
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({ role: 'user', content: '[系统] 已写入 ' + r.path + '（' + r.bytes + ' 字节）。如果还有别的文件要写就继续，否则回复 DONE。' });
+            continue;
+          } catch (e) {
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({ role: 'user', content: '[系统] 写入失败：' + ((e && e.message) || e) + '。请修正后重试。' });
+            continue;
+          }
+        }
+        // ② 查看类工具（单行 ACTION）
+        const act = llm.parseReply(raw).action;
+        if (act && /^skill_(ls|read)$/.test(String(act.tool).toLowerCase())) {
+          let out = '';
+          try { const r = await assistant.run(act.tool, act.arg); out = String((r && typeof r === 'object') ? r.text : r); }
+          catch (e) { out = '失败：' + ((e && e.message) || e); }
+          messages.push({ role: 'assistant', content: raw });
+          messages.push({ role: 'user', content: '[系统] 操作结果：\n' + memory.tokens.clip(out, 500) });
+          continue;
+        }
+        break;   // DONE / 没有可执行动作
+      }
+      if (wrote) { memory.skillmem.drop([it.text]); filed++; log.push('✅ ' + it.text.slice(0, 50)); }
+      else log.push('⏭ 模型没写入：' + it.text.slice(0, 50));
+    } catch (e) {
+      log.push('❌ ' + it.text.slice(0, 40) + '：' + ((e && e.message) || e));
+    }
+  }
+  dbg('[skills] archive filed=' + filed + '/' + items.length + ' 剩余调用预算=' + budget);
+  return { ok: true, filed, total: items.length, log, budgetLeft: budget };
+}
+ipcMain.handle('skills:archive', () => archiveSkills());
+ipcMain.handle('skills:pool', () => ({
+  cand: memory.skillmem.candidates().map((c) => ({ text: c.text, weight: c.weight, hits: c.hits || 1, skill: c.skill || '' })),
+  ready: memory.skillmem.ready((config.load().memory || {}).skillFileWeight || 4).length,
+}));
+
+/* ---------------- 项目文件夹（她写的小软件落这儿） ---------------- */
+ipcMain.handle('proj:write', (_e, files) => {
+  const tier = config.load().assistant || 'off';
+  if (!assistant.allowed(tier, 'proj_open')) return { ok: false, error: '当前 AI 助手权限不允许写文件' };
+  try { return { ok: true, files: projects.writeMany(files || []) }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('proj:open', async (_e, rel) => {
+  try { await projects.open(rel); return { ok: true }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+ipcMain.handle('proj:openFolder', async (_e, rel) => {
+  try { await projects.openFolder(rel); return { ok: true, dir: projects.rootDir() }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+});
+
+/* ---------------- 隐藏数值：每轮/每任务的小微调 ---------------- */
+ipcMain.handle('stats:task', (_e, o) => {
+  const ok = !!(o && o.ok);
+  const out = [];
+  if (ok) {
+    out.push(stats.nudge('iq', 0.3, 'task-ok', '独立办成了一件事'));
+    out.push(stats.nudge('diligence', 0.3, 'task-ok', '认真办了事'));
+  } else {
+    out.push(stats.nudge('iq', -0.5, 'task-fail', '事情没办成'));
+  }
+  return { ok: true, applied: out.filter((x) => x && !x.skipped) };
+});
+ipcMain.handle('stats:get', () => ({ all: stats.all(), hidden: stats.HIDDEN, log: stats.recentLog(40), stepBudget: stats.stepBudget() }));
+
+/* ---------------- 界面风格（从人设推导 + 记忆微调） ---------------- */
+ipcMain.handle('style:get', () => ({ style: style.load(), spec: style.spec(config.load(), mood.load()) }));
+ipcMain.handle('style:ensure', async (_e, force) => {
+  try {
+    const s = await style.ensure(llm, config.load(), loadPersona(), !!force);
+    return { ok: true, style: s, spec: style.spec(config.load(), mood.load()) };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
 ipcMain.handle('art:reset', () => {
   try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
   return true;
@@ -553,11 +879,92 @@ ipcMain.handle('art:reset', () => {
 ipcMain.handle('assistant:run', async (_e, a) => {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
-  const result = await assistant.run(a.tool, a.arg);
-  // 工具结果可能很长（列目录 / 抓网页），入库前先截断，别把上下文撑爆
-  const cut = memory.tokens.clip(String(result || ''), ((config.load().memory || {}).toolResultChars) || 500);
+  const r = await assistant.run(a.tool, a.arg);
+  const text = (r && typeof r === 'object') ? String(r.text || '') : String(r || '');
+  const image = (r && typeof r === 'object') ? r.image : null;
+  const action = (r && typeof r === 'object') ? r.action : null;
+  // 工具结果可能很长（列目录 / 抓网页 / 截屏文字），入库前先截断，别把上下文撑爆。
+  // 但「读」类工具的结果**就是模型要读的内容**，按普通上限截等于没读到
+  // （技能说明被砍到 250 字，模型就会说"说明被截断了"然后乱找路）——所以按工具给不同上限。
+  const READ_CAPS = { use_skill: 5000, skill_read: 5000, proj_read: 5000, read_file: 2500, skill_ls: 1200, proj_ls: 1200, list_dir: 2000 };
+  const cap = READ_CAPS[a.tool] || ((config.load().memory || {}).toolResultChars) || 500;
+  const cut = memory.tokens.clip(text, cap);
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${cut}` });
-  return { ok: true, result };
+  return { ok: true, result: text, image, action };
+});
+
+/* 多步任务的"续跑"专用精简提示词：
+   续跑时不需要人设全文/记忆/技能目录/项目说明 —— 那些首轮已经给过了，
+   每步都重发一遍纯属浪费（这是单次最贵的开销）。这里只留：短人设 + 工具 + 输出格式。 */
+function buildContinuePrompt(cfg) {
+  const p = loadPersona();
+  const tier = cfg.assistant || 'off';
+  let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - use_skill|<skill id>\n';
+  tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
+  tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>\n';
+  if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
+  if (tier === 'full') tools += '- screen_shot   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|delta   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
+  return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
+You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
+
+# Computer actions
+Add a final line: ACTION: <tool>|<argument>
+Tools:
+${tools}
+# Output format
+EN: <short English line>
+ZH: <中文>
+WORDS: <word=IPA=中文意思, ...>
+MOOD: <2-6字心情>
+(EN and ZH are always required, even for a one-word reply. "(earlier reply, abridged)" in the history is an old record, not a format example.)
+Add "ACTION: <tool>|<argument>" as the LAST line only if you still need to do something; if the task is done, answer normally with no ACTION line.`;
+}
+
+/* 多步任务：执行完一步后，把结果喂回模型，让它决定下一步或收尾 */
+ipcMain.handle('chat:continue', async (e, _payload) => {
+  const cfg = config.load();
+  const messages = [
+    { role: 'system', content: buildContinuePrompt(cfg) },
+    ...memory.pickHistory(),
+    { role: 'user', content: '请继续。规则：\n① 如果上一步**失败或报错**了：先自己分析原因（参数/路径写错？环境缺东西？没权限？），能换个做法解决就再给一行 ACTION: <工具>|<参数> 重试（同一条路最多撞两次，别死磕）；确实解决不了，就用正常格式（EN/ZH/WORDS/C1/C2）上报——语气照旧，但 **ZH 必须照实讲清**：哪一步失败了、真实原因是什么（把报错的关键信息说出来，别只说"出错了"）、需要主人做什么。\n② 如果还没做完、还需要操作，就再给一行 ACTION: <工具>|<参数>（并在 EN: 里用一句简短说明）。\n③ 如果已经完成，直接按正常格式回答（EN/ZH/WORDS/C1/C2），不要带 ACTION。' }
+  ];
+  const { reply, raw } = await genReply(cfg, messages);
+  if (reply.en) memory.onAssistant(raw, reply.en);
+  logTurn('', reply);   // 中间/最终回复也要进聊天记录，否则重开窗口看不到任务结果
+  // 注意：续跑几乎都是从对话窗发起的，对话窗自己会渲染 —— 再 relayToChat 就会画两遍
+  if (!isFromChat(e)) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
+  return reply;
+});
+
+/* ---------------- 游戏助手（持续盯屏 + 决策 + 操作） ----------------
+   平时完全关闭；用户对她说"打游戏"→ 她按 play-game 技能调 game_start 才会跑。 */
+gameagent.init({
+  onLog: (e) => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', e); },
+  onStart: () => { if (petWin && !petWin.isDestroyed()) petWin.hide(); },   // 开打先把桌宠收起来，免得挡住点击
+  onStop: () => { if (petWin && !petWin.isDestroyed()) petWin.show(); },    // 循环自己结束时把桌宠放回来
+  onFinish: (r) => {
+    // 这趟的过程与结论进会话，交给已有的"经验提炼"在会话结束时消化，不另外造经验
+    try {
+      memory.session.push({
+        role: 'user',
+        content: '[系统] 游戏助手这趟的结果：' + r.summary + '\n（任务：' + String(r.task || '').slice(0, 120) + '）',
+      });
+    } catch {}
+    if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('game:log', { kind: 'info', text: '📘 这趟已记进会话，收尾时会提炼成经验。', at: Date.now() });
+  },
+});
+ipcMain.handle('game:start', async (_e, o) => gameagent.start(o || {}));
+ipcMain.handle('game:stop', () => gameagent.stop());
+ipcMain.handle('game:status', () => gameagent.status());
+
+/* 桌宠窗口用语音接受了任务（带 ACTION）→ 把对话窗叫出来执行，别让她的承诺落空 */
+ipcMain.on('pet:action', (_e, action) => {
+  if (!action || !action.tool) return;
+  dbg('[pet] 语音任务转交对话窗：' + action.tool + ' ' + (action.arg || ''));
+  createChat();
+  const send = () => { if (chatWin && !chatWin.isDestroyed()) chatWin.webContents.send('chat:runAction', action); };
+  setTimeout(send, 1000);
+  setTimeout(send, 2500);   // 兜底：窗口加载慢时再送一次（渲染层会去重）
 });
 
 /* ---------------- 生命周期 ---------------- */
@@ -576,7 +983,38 @@ if (!gotLock) {
     });
     mood.startupDecay();
     memory.onAppStart().catch((e) => dbg('[memory] onAppStart err ' + e));
+    // 隐藏数值：时间效应（多久没见）+ 性格慢回归，然后按需补判一次
+    setTimeout(() => {
+      try {
+        stats.ensureBaseline(loadPersona());   // 首次 / 人设变了 → 按人设给基线
+        const st0 = stats.load();
+        const awayH = st0.lastSeen ? (Date.now() - st0.lastSeen) / 3600000 : 0;
+        if (awayH > 20) {
+          stats.nudge('dependency', 0.6, 'away', '隔了好久没见，想主人了');
+          /* 心情归 mood.js 管，不在 stats.META 里 —— stats.nudge('mood', …) 只会静默 return null，
+             所以这句"有点寂寞"以前永远不生效，也没有任何报错。 */
+          try { mood.adjust({ mood: -0.8 }); } catch {}
+        }
+        else if (awayH > 6) { stats.nudge('dependency', 0.3, 'away', '半天没见'); }
+        const st1 = stats.load(); st1.lastSeen = Date.now(); stats.save(st1);
+        const reg = stats.regress(0.2);
+        if (awayH > 6 || reg.length) dbg('[stats] away=' + awayH.toFixed(1) + 'h regress=' + reg.length);
+      } catch (e) { dbg('[stats] time effect err ' + e); }
+      memory.judgeStatsNow().then((r) => { if (r) dbg('[stats] catch-up judged: ' + r.reason); }).catch(() => {});
+    }, 9000);
     createPet();
+    // 预热屏幕流：首帧更快。不想让系统一直显示"正在捕获"就把 memory.screenWarm 设 false
+    if ((config.load().memory || {}).screenWarm !== false) screenstream.warm().catch(() => {});
+    // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）
+    if ((config.load().memory || {}).skillAutoArchive !== false) {
+      setTimeout(() => { archiveSkills().catch((e) => dbg('[skills] auto archive err ' + e)); }, 8000);
+    }
+    // 界面风格：没有就按人设生成一次；人设改过就按新人设重推（都在后台，不打扰用户）
+    setTimeout(() => {
+      style.ensure(llm, config.load(), loadPersona())
+        .then((s) => { if (s && s.personaChanged) dbg('[style] 人设变了 -> 已重推风格：' + s.name); })
+        .catch((e) => dbg('[style] ensure err ' + e));
+    }, 5000);
     if (!config.load().apiKey) createChat();
   });
 

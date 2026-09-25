@@ -107,6 +107,7 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     const chunks = [];
     let settled = false;
+    let sawEnd = false;                 // 收到 Path:turn.end 才算这次合成完整
     const timeout = setTimeout(() => {
       if (!settled) { settled = true; try { ws.close(); } catch {} reject(new Error('TTS 超时')); }
     }, 45000);
@@ -119,7 +120,17 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
       if (err) { reject(err); return; }
       const buf = Buffer.concat(chunks);
       if (buf.length < 100) { reject(new Error('音频过短 ' + buf.length)); return; }
-      try { fs.writeFileSync(outPath, buf); resolve(buf.length); } catch (e) { reject(e); }
+      /* 原子落盘：先写 .part 再改名。否则写到一半异常会留下半截 mp3，
+         而它已经被当成"缓存命中"（只判 size>100），以后每次都返这段残缺音频，永不自愈。 */
+      const tmp = outPath + '.part';
+      try {
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, outPath);
+        resolve(buf.length);
+      } catch (e) {
+        try { fs.unlinkSync(tmp); } catch {}
+        reject(e);
+      }
     }
 
     ws.on('open', () => {
@@ -137,7 +148,7 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     ws.on('message', (data, isBinary) => {
       if (settled) return;
-      if (!isBinary) { if (String(data).includes('Path:turn.end')) finish(null); return; }
+      if (!isBinary) { if (String(data).includes('Path:turn.end')) { sawEnd = true; finish(null); } return; }
       const raw = Buffer.isBuffer(data) ? data : Buffer.from(data);
       const marker = Buffer.from('Path:audio' + CRLF);
       const idx = raw.indexOf(marker);
@@ -147,10 +158,12 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     ws.on('error', (e) => finish(e instanceof Error ? e : new Error(String((e && e.message) || e))));
     ws.on('close', (e) => {
-      if (!settled) {
-        if (chunks.length) finish(null);
-        else finish(new Error(`连接中断 code=${(e && e.code) || ''}`));
-      }
+      if (settled) return;
+      /* 异常关闭（1006/连接抖动）时，只要已经收到部分音频，以前就按成功收尾了 ——
+         于是残缺 mp3 被写进**最终缓存路径**，以后每次命中都返回它。现在必须收到
+         turn.end 才算成功，否则抛错走重试。 */
+      if (sawEnd && chunks.length) finish(null);
+      else finish(new Error(`连接中断 code=${(e && e.code) || ''}`));
     });
   });
 }
@@ -203,9 +216,17 @@ async function synthesize(text, opts = {}) {
   if (sentences.length === 1) {
     file = path.join(cacheDir(), `edge-${firstKey}.mp3`);
   } else {
-    const key = crypto.createHash('sha256').update(pieces.map((b) => b.length).join('-') + buf.length).digest('hex');
+    /* key 必须包含"内容 + 音色 + 语速 + 音调"：以前只用各段字节长度拼，
+       同一段文字换音色就可能撞 key，于是 url/file 指向别人的音频，
+       而 dataUrl 是这次新拼的 —— 两者内容不一致（渲染层只用 dataUrl 所以暂时听不出来）。 */
+    const sig = voice + '|' + styleId + '|' + rateNum + '|' + pitchNum + '|' + sentences.join('\u0001');
+    const key = crypto.createHash('sha256').update(sig + '|' + pieces.map((b) => b.length).join('-')).digest('hex');
     file = path.join(cacheDir(), `mix-${key}.mp3`);
-    if (!fs.existsSync(file)) fs.writeFileSync(file, buf);
+    if (!fs.existsSync(file)) {
+      const tmp = file + '.part';
+      try { fs.writeFileSync(tmp, buf); fs.renameSync(tmp, file); }
+      catch { try { fs.unlinkSync(tmp); } catch {} }
+    }
   }
   return {
     ok: true,

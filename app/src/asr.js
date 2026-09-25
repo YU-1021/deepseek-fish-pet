@@ -77,16 +77,29 @@ function downloadModel(name, onProgress) {
   downloading = { name, got: 0, total: m.size };
   return new Promise((resolve, reject) => {
     let idx = 0;
+    let settled = false;
+    const done = (err, val) => {
+      if (settled) return;
+      settled = true;
+      downloading = null;                 // 任何结局都必须把状态放掉，否则永久"下载中"
+      err ? reject(err) : resolve(val);
+    };
+    const cleanup = () => { try { fs.unlinkSync(part); } catch {} };
+    let lastErr = null;
     const tryNext = (err) => {
-      if (err && idx > 0) { /* 记下第一个镜像的错误 */ }
-      if (idx >= MIRRORS.length) { downloading = null; reject(err || new Error('全部镜像都失败')); return; }
+      if (settled) return;
+      if (err) lastErr = err;
+      if (idx >= MIRRORS.length) { cleanup(); done(lastErr || new Error('全部镜像都失败')); return; }
+      downloading.got = 0;                // 换镜像要重新计数，否则进度条会超过 100%
       const url = MIRRORS[idx++] + m.file;
       get(url, 0);
     };
     const get = (url, depth) => {
+      if (settled) return;
       if (depth > 5) return tryNext(new Error('重定向过多'));
       const mod = url.startsWith('https') ? https : http;
       const req = mod.get(url, { headers: { 'User-Agent': 'dayu-pet' } }, (res) => {
+        if (settled) { try { res.resume(); } catch {} return; }
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
           res.resume();
           return get(new URL(res.headers.location, url).href, depth + 1);
@@ -95,6 +108,18 @@ function downloadModel(name, onProgress) {
         const total = Number(res.headers['content-length']) || m.size;
         downloading.total = total;
         const out = fs.createWriteStream(part);
+        /* 传输中途被重置（RST）时，Node 只会给 res 发 'aborted'/'error'，
+           而 res.pipe(out) 会把错误吞掉 → out 既不 finish 也不 error，
+           以前就这样永远挂着：downloading 永远非 null，之后任何下载都被拒，只能重启。 */
+        const onStreamFail = (e) => {
+          if (settled) return;
+          try { out.destroy(); } catch {}
+          cleanup();
+          tryNext(e instanceof Error ? e : new Error('连接中断'));
+        };
+        res.on('error', onStreamFail);
+        res.on('aborted', () => onStreamFail(new Error('连接被中断')));
+        req.on('error', onStreamFail);
         res.on('data', (c) => {
           downloading.got += c.length;
           try { onProgress && onProgress({ got: downloading.got, total }); } catch {}
@@ -102,17 +127,17 @@ function downloadModel(name, onProgress) {
         res.pipe(out);
         out.on('finish', () => {
           out.close(() => {
+            if (settled) return;
             try {
               if (fs.statSync(part).size < 1024 * 1024) throw new Error('文件过小，可能下载失败');
               fs.renameSync(part, dest);
-              downloading = null;
-              resolve({ ok: true, path: dest });
-            } catch (e) { try { fs.unlinkSync(part); } catch {} tryNext(e); }
+              done(null, { ok: true, path: dest });
+            } catch (e) { cleanup(); tryNext(e); }
           });
         });
-        out.on('error', (e) => { try { fs.unlinkSync(part); } catch {} tryNext(e); });
+        out.on('error', onStreamFail);
       });
-      req.on('error', (e) => tryNext(e));
+      req.on('error', (e) => { if (!settled) tryNext(e); });
       req.setTimeout(30000, () => { req.destroy(new Error('超时')); });
     };
     try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch {}

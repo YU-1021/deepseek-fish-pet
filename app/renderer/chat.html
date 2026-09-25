@@ -29,19 +29,36 @@
       <option value="cet6">六级词汇</option>
     </select>
 
-    <label>AI 助手权限（操控电脑，每次需你确认）</label>
+    <label>AI 助手权限（操控电脑。写文件、运行脚本这类会在下面这几档要求你逐条确认；只有「完全权限」不再确认）</label>
     <select id="assistant">
       <option value="off">关闭</option>
       <option value="read">只读 · 可查看文件/列目录</option>
-      <option value="normal">常规 · 可打开网页/应用/文件</option>
+      <option value="normal">常规 · 打开文件/网页、写文件、运行脚本（都要你确认）</option>
       <option value="web">网页操控 · 自动打开页面/点击/输入/抓取</option>
+      <option value="full">完全权限 · 含屏幕共享/写文件/执行脚本，全部自动执行不再确认</option>
     </select>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="visionOn" style="width:auto"> 启用视觉模型「看画面」（会花 token；不勾就用本地 OCR 读文字，免费）
+    </label>
+    <input id="visionBase" placeholder="留空 = 用主模型地址">
+    <input id="visionKey" type="password" placeholder="留空 = 用主模型 Key">
+    <input id="visionModel" placeholder="deepseek-flash">
+
     <label>立绘（免打包更换）</label>
     <div class="row" style="margin-top:6px">
       <button id="artOpen" class="ghost">打开立绘文件夹</button>
       <button id="artReset" class="ghost">恢复默认立绘</button>
     </div>
     <div class="sub" style="margin:8px 0 0">把透明底 PNG 命名为 <b>pet-character.png</b> 放进文件夹即可，桌宠会自动换图（约 3 秒内），不用重启、不用重新打包。</div>
+
+    <label>技能（丢个文件夹就能教它新本事）</label>
+    <div class="row" style="margin-top:6px">
+      <button id="skillsOpen" class="ghost">打开技能文件夹</button>
+      <button id="skillsRefresh" class="ghost">查看已装技能</button>
+      <button id="skillsArchive" class="ghost">整理技能库</button>
+      <button id="projOpen" class="ghost">打开项目文件夹</button>
+    </div>
+    <div id="skillsMsg" class="sub" style="margin:8px 0 0">一个技能 = 一个文件夹，里面放一个 <b>SKILL.md</b>（开头写 name / description，下面是步骤）。平时只占一句话的位置，聊到相关的才展开读——所以装很多也不会拖慢。</div>
 
     <div class="row">
       <button id="save" class="primary">绑定并开始</button>
@@ -54,16 +71,18 @@
 <div id="persona" class="overlay hidden">
   <div class="panel">
     <h1>👤 人设</h1>
-    <p class="sub">写你自己的设定，保存后立即生效</p>
-    <label>名字</label>
+    <p class="sub">她的人设会随着经历慢慢变化（🔓 的字段 AI 能改）。点小锁可锁住：<b>🔒 锁住的字段 AI 就不能改了，但你随时能改</b>。</p>
+    <label class="lockrow"><span>名字</span><span class="locksym" data-field="name">🔓</span></label>
     <input id="pName" placeholder="大肥鱼">
-    <label>世界观设定</label>
+    <label class="lockrow"><span>世界观设定</span><span class="locksym" data-field="world_setting">🔒</span></label>
     <textarea id="pWorld" rows="3" placeholder="现代都市，主人是普通人，你是住在主人电脑里的桌宠……"></textarea>
-    <label>人物设定</label>
+    <label class="lockrow"><span>人物设定</span><span class="locksym" data-field="character_setting">🔓</span></label>
     <textarea id="pChar" rows="4" placeholder="蓝发鲸鱼女仆，傲娇、温柔、嘴硬……"></textarea>
-    <label>口头禅</label>
+    <label class="lockrow"><span>性格</span><span class="locksym" data-field="personality">🔓</span></label>
+    <input id="pPersonality" placeholder="傲娇、温柔、嘴硬">
+    <label class="lockrow"><span>口头禅</span><span class="locksym" data-field="catchphrase">🔓</span></label>
     <input id="pCatch" placeholder="I am NOT a freeloader fat fish!">
-    <label>隐藏设定（保密，非必要不提及）</label>
+    <label class="lockrow"><span>隐藏设定（保密，非必要不提及）</span><span class="locksym" data-field="hidden_setting">🔓</span></label>
     <textarea id="pHidden" rows="3" placeholder="只有用户主动聊到才说……"></textarea>
     <div class="row">
       <button id="pSave" class="primary">保存</button>
@@ -137,6 +156,30 @@
   </div>
 </div>
 
+<div id="game" class="overlay hidden">
+  <div class="panel">
+    <h1>🎮 游戏助手</h1>
+    <p class="sub">持续看屏幕 → 让视觉模型决定下一步 → 自动操作鼠标键盘，直到它说完成或你点停止。<b>每步都会调一次视觉模型，会花 token。</b>开始后桌宠会暂时收起来，免得挡住点击。</p>
+    <label>任务 / 策略（要它做什么）</label>
+    <textarea id="gTask" rows="5" placeholder="例如：这是《明日方舟》的战斗关卡，帮我一步一步打完这关"></textarea>
+    <div class="row" style="margin-top:6px">
+      <button id="gPreset" class="ghost">填入明日方舟模板</button>
+    </div>
+    <div class="row" style="margin-top:8px;align-items:center;gap:14px;flex-wrap:wrap">
+      <label style="margin:0">间隔(秒)<input id="gInterval" type="number" min="1.2" step="0.5" value="4" style="width:76px"></label>
+      <label style="margin:0">最多步数<input id="gMax" type="number" min="1" max="200" value="30" style="width:76px"></label>
+      <label style="margin:0;display:flex;align-items:center;gap:6px"><input id="gDry" type="checkbox" style="width:auto"> 试运行（只看不动手）</label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="gStart" class="primary">开始</button>
+      <button id="gStop" class="ghost" disabled>停止</button>
+      <button id="gClose" class="ghost">关闭</button>
+    </div>
+    <div id="gMsg" class="msg"></div>
+    <div id="gLog" class="gamelog"></div>
+  </div>
+</div>
+
 <div id="main" class="hidden">
   <header>
     <div class="title">🐳 大肥鱼</div>
@@ -149,6 +192,8 @@
       <span id="personaBtn" class="tool" title="人设">👤</span>
       <span id="ttsBtn" class="tool on" title="朗读开关">🔊</span>
       <span id="voiceBtn" class="tool" title="音色">🎙</span>
+      <!-- 🎮 游戏助手入口：暂时隐藏。要用就把 style="display:none" 去掉（引擎和面板都还在） -->
+      <span id="gameBtn" class="tool" title="游戏助手" style="display:none">🎮</span>
       <span id="endBtn" class="tool" title="结束本次会话">⏹</span>
       <span id="settingsBtn" class="tool" title="设置">⚙️</span>
     </div>

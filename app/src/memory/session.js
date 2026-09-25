@@ -33,6 +33,12 @@ function saveNow() {
 function restore() {
   const d = store.read(NS, null);
   if (d && Array.isArray(d.messages) && d.messages.length) {
+    // 老草稿的 compact 是 'EN: ...'（看起来像正常回复，会把模型教坏）→ 就地改成历史标记
+    for (const m of d.messages) {
+      if (m && typeof m.compact === 'string' && /^EN\s*[:：]/.test(m.compact)) {
+        m.compact = '(earlier reply, abridged) ' + m.compact.replace(/^EN\s*[:：]\s*/, '');
+      }
+    }
     state = { id: d.id || newId(), startedAt: d.startedAt || Date.now(), messages: d.messages, resumed: true };
     bus.emit('session:start', info());
     return state;

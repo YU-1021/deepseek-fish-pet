@@ -31,6 +31,7 @@ let hideTimer = null;
 let listening = true, chatOpen = false, rec = null, busy = false, curUtter = null;
 let clickCount = 0, clickTimer = null, lastMicErr = 0, pokeCount = 0, pokeTimer = null;
 let petting = false, petAccum = 0, lastPetX = 0, patCd = 0, patFired = false, feedCount = 0, feedTimer = null, holding = false;
+let partialTurn = false;   // 声明放前面：endTurn() 会复位它，不能落在 TDZ 里
 
 /* ---------------- 互动特效 ---------------- */
 function fx(emoji, x, y, cls) {
@@ -147,7 +148,8 @@ function showReply(reply, hold) {
       if (c && c.en) sendText(c.en);
     });
   });
-  if (reply.silent) { stopSpeech(); busy = false; resumeListening(); }
+  if (reply.noSpeak) { /* 流式里英文已经读过了：只更新气泡，不打断也不重读 */ }
+  else if (reply.silent) { stopSpeech(); endTurn(); }
   else speak(reply.en);
 }
 
@@ -174,6 +176,28 @@ function stopSpeech() {
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
 }
 
+/* 一轮对话的收尾统一走这里：清 busy + 复位安全兜底 + 恢复收音。
+   以前安全兜底用的是局部 const safety，而且 clearTimeout 紧跟在 await chatSend
+   之后就执行（finally），可 busy 真正是在朗读结束时才复位的 —— 朗读环节一卡
+   （ttsSpeak 长时间不返回、system voice 的 onend 不触发），busy 就永久为 true，
+   桌宠彻底不再收音、也不再响应，而且没有任何自救路径。现在兜底覆盖**整轮**。 */
+let turnSafety = null;
+function endTurn() {
+  clearTimeout(turnSafety);
+  turnSafety = null;
+  busy = false;
+  partialTurn = false;     // 流式标记必须一起复位：否则请求失败后，下一条回复会被误判成"已经读过"而不朗读
+  resumeListening();
+}
+function armTurnSafety(ms) {
+  clearTimeout(turnSafety);
+  turnSafety = setTimeout(() => {
+    if (!busy) return;
+    try { window.petAPI.logErr('turn safety: 一轮对话超时（' + ms + 'ms），强制复位'); } catch {}
+    endTurn();
+  }, ms || 90000);
+}
+
 function speakFallback(text, seq, done) {
   if (seq !== speakSeq || !window.speechSynthesis) { done(); return; }
   try {
@@ -187,11 +211,11 @@ function speakFallback(text, seq, done) {
 }
 
 async function speak(text) {
-  if (!text) { busy = false; resumeListening(); return; }
+  if (!text) { endTurn(); return; }
   pauseListening();
   stopSpeech();
   const seq = speakSeq;
-  const done = () => { if (seq === speakSeq) { busy = false; resumeListening(); } };
+  const done = () => { if (seq === speakSeq) endTurn(); };
   let ok = false;
   try {
     const cfg = await window.petAPI.configGet();
@@ -218,16 +242,13 @@ async function sendText(text) {
   if (!text || busy) return;
   busy = true;
   pauseListening();
-  const safety = setTimeout(() => { if (busy) { busy = false; resumeListening(); } }, 30000);
+  armTurnSafety(90000);
   try {
     await window.petAPI.chatSend({ text });
-    // 回复通过 onSay 展示，busy 在 speak 结束时清除
+    // 回复通过 onSay 展示，busy 在 speak 结束时清除（兜底在 armTurnSafety 里，覆盖到朗读结束）
   } catch (e) {
     showReply({ en: 'Sorry, something went wrong: ' + e.message, zh: '' }, 6000);
-    busy = false;
-    resumeListening();
-  } finally {
-    clearTimeout(safety);
+    endTurn();
   }
 }
 
@@ -332,18 +353,20 @@ function pauseListening() {
 function resumeListening() { if (chatOpen || busy) return; listening = true; startListening(); }
 
 /* ---------------- 拖拽 / 摸头 / 戳（全区域） ----------------
-   拖拽：mousemove 只当触发器，主进程读真实光标坐标来算目标位置，
-   所以窗口移动不会影响坐标（不会漂移）。 */
+   拖拽：mousedown 发 drag-start（主进程开 8ms 自采样定时器）、
+   mouseup 发 drag-end（关定时器）；移动由主进程定时器读真实光标坐标完成，
+   渲染层 mousemove 不再逐帧触发（只用来统计 dragMoved 判断"拖拽还是点一下"）。 */
 let dragging = false, dragMoved = 0;
 
 pet.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;               // 只左键
   holding = true;
   try { window.petAPI.hold(true); } catch {}   // 按住期间强制窗口可交互，别拖到一半被穿透打断
   const r = pet.getBoundingClientRect();
   if ((e.clientY - r.top) / Math.max(1, r.height) < 0.42) {
     petting = true; petAccum = 0; lastPetX = e.clientX; patFired = false;   // 头部：左右滑 = 摸头
   } else {
-    dragging = true; dragMoved = 0;                                          // 身体：按住拖窗口
+    dragging = true; dragMoved = 0;
     window.petAPI.dragStart();
   }
   e.preventDefault();
@@ -357,8 +380,8 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
-  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
-  window.petAPI.dragTick();
+  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);   // 只用来判断"拖拽还是点一下"
+  // 不再发 dragTick：主进程 8ms 定时器自采样，避免 setPosition 中断 mousemove 造成断流
 });
 window.addEventListener('mouseup', () => {
   holding = false;
@@ -375,6 +398,24 @@ window.addEventListener('mouseup', () => {
 });
 window.addEventListener('mouseleave', () => { try { updateHit(-1, -1); } catch {} });
 
+/* 失焦/隐藏时把"按住"状态收干净。 */
+function releasePointerState(why) {
+  if (!holding && !dragging && !petting) return;
+  const wasDragging = dragging;
+  holding = false; petting = false; dragging = false;
+  try { window.petAPI.hold(false); } catch {}
+  if (wasDragging) { try { window.petAPI.dragEnd(); } catch {} }
+  try { window.petAPI.logErr('pointer released by ' + why); } catch {}
+}
+window.addEventListener('blur', () => {
+  try { window.petAPI.logErr('[pointer-diag] blur ' + JSON.stringify({ holding, dragging, petting })); } catch {}
+  releasePointerState('blur');
+});
+document.addEventListener('visibilitychange', () => {
+  try { window.petAPI.logErr('[pointer-diag] visibility ' + JSON.stringify({ hidden: document.hidden, holding, dragging, petting })); } catch {}
+  if (document.hidden) { releasePointerState('hidden'); }
+});
+
 // 连点 15 下才打开对话窗口（避免误触）
 pet.addEventListener('click', () => {
   clickCount++;
@@ -384,7 +425,22 @@ pet.addEventListener('click', () => {
 });
 
 /* ---------------- 跨窗口 ---------------- */
-if (window.petAPI.onSay) window.petAPI.onSay((reply) => { if (reply && reply.en) showReply(reply); });
+if (window.petAPI.onSayPartial) window.petAPI.onSayPartial((d) => {
+  if (!d || !d.en) return;
+  partialTurn = true;
+  showReply({ en: d.en, zh: '', words: [], choices: [] });   // 英文先冒出来 + 先开始读
+});
+if (window.petAPI.onSay) window.petAPI.onSay((reply) => {
+  if (!reply || !reply.en) return;
+  if (partialTurn) { partialTurn = false; reply = { ...reply, noSpeak: true }; }   // 已经读过一遍，最终版别重读
+  showReply(reply);
+  // 她若答应要操作电脑（ACTION），桌宠窗口自己执行不了 —— 自动把对话窗叫出来接着做。
+  // 但 silent=true 表示这句话是对话窗问出来的，对话窗自己会执行这个动作；
+  // 这里再转一次就成了"同一件事做两遍"（use_skill 白跑一趟，click 会点两下）。
+  if (!reply.silent && reply.action && reply.action.tool && window.petAPI.runPetAction) {
+    try { window.petAPI.runPetAction(reply.action); } catch {}
+  }
+});
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => { chatOpen = open; if (open) pauseListening(); else resumeListening(); });
 if (window.petAPI.onFeed) window.petAPI.onFeed(() => feedFish());
 if (window.petAPI.onPat) window.petAPI.onPat(() => {
@@ -485,10 +541,6 @@ window.addEventListener('wheel', (e) => {
   if (!e.deltaY) return;
   setSize(petSize + (e.deltaY < 0 ? 16 : -16));
 }, { passive: false });
-window.addEventListener('blur', () => {
-  holding = false;
-  if (petting) petting = false;
-});
 
 /* ---------------- 外部立绘热更新（免打包换图） ---------------- */
 let artMtime = -1;
