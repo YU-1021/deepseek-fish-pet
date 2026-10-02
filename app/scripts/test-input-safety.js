@@ -9,7 +9,9 @@ const path = require('path');
 const fs = require('fs');
 const { app } = require('electron');
 const TEST_UD = path.join(process.env.APPDATA, 'dayu-pet-inputtest');
+const RESULT_FILE = path.join(TEST_UD, 'result.json');
 fs.mkdirSync(TEST_UD, { recursive: true });
+try { fs.unlinkSync(RESULT_FILE); } catch {}
 app.setPath('userData', TEST_UD);
 
 app.whenReady().then(() => {
@@ -88,5 +90,6 @@ app.whenReady().then(() => {
     L('ERROR: ' + crashed);
   }
   console.log(out.join('\n'));
+  fs.writeFileSync(RESULT_FILE, JSON.stringify({ pass, total, crashed: crashed || '', out }, null, 2));
   setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 200);
 });

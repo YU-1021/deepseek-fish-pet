@@ -9,7 +9,9 @@ const path = require('path');
 const fs = require('fs');
 const { app } = require('electron');
 const TEST_UD = path.join(process.env.APPDATA, 'dayu-pet-vocabloop');
+const RESULT_FILE = path.join(TEST_UD, 'result.json');
 fs.mkdirSync(TEST_UD, { recursive: true });
+try { fs.unlinkSync(RESULT_FILE); } catch {}
 for (const f of ['config.json', 'persona.json']) {
   try { fs.copyFileSync(path.join(process.env.APPDATA, 'dayu-pet', f), path.join(TEST_UD, f)); } catch {}
 }
@@ -25,7 +27,7 @@ app.whenReady().then(async () => {
   const out = [];
   const L = (s) => out.push(s);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  let pass = 0, total = 0;
+  let pass = 0, total = 0, crashed = '';
   const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
 
   try {
@@ -111,5 +113,6 @@ app.whenReady().then(async () => {
     L('ERROR: ' + ((e && e.stack) || e));
   }
   console.log(out.join('\n'));
+  fs.writeFileSync(RESULT_FILE, JSON.stringify({ pass, total, crashed: crashed || '', out }, null, 2));
   setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 300);
 });

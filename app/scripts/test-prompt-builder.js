@@ -18,17 +18,17 @@ const TIERS = ['off', 'read', 'normal', 'web', 'full'];
 const GOLDEN = {
   system: {
     off: '6b6705cbe18654f8b6e6e5da0ab0d1e976723851f0af65909116ebaba4083167',
-    read: '1d20f99b82f0dab702f28ab8d5be45aa20b6140a2c9a6d0ef3b49a05230157b2',
-    normal: '1d20f99b82f0dab702f28ab8d5be45aa20b6140a2c9a6d0ef3b49a05230157b2',
-    web: '8537bae31a0300466d0f9498668de443c26ca29b6ed29ee532f4f4f709c98284',
-    full: '92bc4e6dc9a6a00db5abfa3527ba7775652755cafc0f9e8348f8cf2be05a7ea6',
+    read: '8edcf19673e9d008d8f1d62d7f3a41663309ef163b36c57ea466af8f8f025387',
+    normal: '8edcf19673e9d008d8f1d62d7f3a41663309ef163b36c57ea466af8f8f025387',
+    web: 'e24de8c95ed33358288bfaecd5c4e2dbb7caac368a55463c23a94aff3696b570',
+    full: 'edd2084cc647afc93ffff59c946c02524264e178fd4e825dc891303a2f5830bd',
   },
   continuation: {
-    off: '996158aa6c8e055ed237fdac940360dc897dccbd386818ff7174e8d88ecc67e7',
-    read: '996158aa6c8e055ed237fdac940360dc897dccbd386818ff7174e8d88ecc67e7',
-    normal: '996158aa6c8e055ed237fdac940360dc897dccbd386818ff7174e8d88ecc67e7',
-    web: 'f7f9fe5beecd31668efdf75e98a59b7ba6f7bc85dc2a730090c4d45441b7c7ae',
-    full: 'ac2d50e400703f1d667645bf691dbc9960b307f386cdede0c60c65f9b403ea3c',
+    off: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
+    read: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
+    normal: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
+    web: '2961371d643990e4d6034baf8aeb1e7282baa59da65fdab277be80198c3e5c7d',
+    full: '32bd34073088ccadb3fdc36386503053bdb4df514251e3200f8bb1469c1b36e1',
   },
 };
 
@@ -49,6 +49,7 @@ const baseDeps = {
   getPracticeWords: (limit) => limit === 8 ? practice : [],
   getSkillCatalog: () => 'fixture-skill — fixture description',
   isToolAllowed: (_tier, tool) => tool === 'proj_open',
+  getScreenSpace: () => ({ w: 1920, h: 1080 }),
   readPromptOverride: () => 'FIXTURE_OVERRIDE',
   log: () => {},
 };
@@ -97,6 +98,13 @@ test('off omits assistant-only sections', () => {
   assert(!value.includes('# Computer actions (AI assistant)'));
 });
 
+test('full prompt preserves latest deterministic vision tools', () => {
+  const value = builder.buildSystemPrompt({ assistant: 'full', vocabLevel: 'cet4' });
+  assert(value.includes('screen_diff|<秒数>'));
+  assert(value.includes('uia_find|<窗口标题片段>|<控件名字或AutomationId>'));
+  assert(value.includes('uia_dump|<窗口标题片段>'));
+});
+
 test('empty vocabulary and skill catalog omit their sections', () => {
   const value = withDeps({ getPracticeWords: () => [], getSkillCatalog: () => '' })
     .buildSystemPrompt({ assistant: 'read', vocabLevel: 'cet4' });
@@ -131,6 +139,36 @@ for (const [name, dep, tier] of [
 test('unknown vocabulary level uses high-school fallback', () => {
   const value = builder.buildSystemPrompt({ assistant: 'off', vocabLevel: 'unknown' });
   assert(value.includes('- Vocabulary level: high-school level (simple, common words).'));
+});
+
+test('computer-action prompts use the configured screenshot coordinate space', () => {
+  const custom = withDeps({ getScreenSpace: () => ({ w: 1600, h: 900 }) });
+  for (const value of [
+    custom.buildSystemPrompt({ assistant: 'full', vocabLevel: 'cet4' }),
+    custom.buildContinuePrompt({ assistant: 'full', vocabLevel: 'cet4' }),
+  ]) {
+    assert(value.includes('1600x900'), 'prompt should name the configured screenshot space');
+    assert(!value.includes('1280x720'), 'prompt must not advertise the retired 1280x720 space');
+    assert(!value.includes('1920x1080'), 'prompt must not hard-code the default space');
+  }
+});
+
+test('continue task instructions require verified targets instead of coordinate guessing', () => {
+  const full = builder.buildSystemPrompt({ assistant: 'full', vocabLevel: 'cet4' });
+  const value = full + '\n' + builder.buildContinuePrompt({ assistant: 'full', vocabLevel: 'cet4' })
+    + '\n' + builder.buildContinueUserPrompt();
+  assert(value.includes('find_text|<文字>'));
+  assert(value.includes('find_template|<模板名>'));
+  assert(value.includes('不要根据截图描述猜坐标'));
+  assert(value.includes('图标没有现成模板'));
+  assert(value.includes('不要自动点击'));
+  assert(value.includes('执行后必须验证'));
+  assert(full.includes('Never guess a coordinate from a screenshot'));
+  assert(!value.includes('±30~60px'));
+  assert(!value.includes('4~5 次'));
+  assert(!value.includes('shift by about 30-50px'));
+  assert(!value.includes('try ~30-60px around it'));
+  assert(!value.includes('IMPORTANT - COORDINATE DRIFT'));
 });
 
 test('missing dependency error names the dependency', () => {

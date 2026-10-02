@@ -23,36 +23,40 @@ app.whenReady().then(async () => {
     const llm = require('../src/llm');
     const tokens = require('../src/tokens');
     const assistant = require('../src/assistant');
+    const input = require('../src/input');
+    const personatags = require('../src/personatags');
+    const vocab = require('../src/vocab');
+    const { createPromptBuilder } = require('../src/prompt-builder');
     const jobs = memory.jobs;
 
     const cfg = config.load();
     memory.init({ llm, config, persona, skillCatalog: () => skills.catalog() });
     try { memory.session.restore(); } catch (e) { R.restoreErr = String((e && e.message) || e); }
 
-    /* --- 从 main.js 抠出 buildSystemPrompt（函数以行首 '}' 结束） --- */
+    /* 正式提示词边界：和主进程使用同一个纯工厂，不再解析 main.js 源码。 */
+    const promptBuilder = createPromptBuilder({
+      loadPersona: () => persona.load(),
+      loadMood: () => mood.load(),
+      getTone: (p) => personatags.toneOf(p),
+      getBehaviorSpec: () => stats.behaviorSpec(),
+      buildMemoryContext: () => memory.buildContext(),
+      getPracticeWords: (limit) => vocab.toPractice(limit),
+      getSkillCatalog: () => skills.catalog(),
+      isToolAllowed: (tier, tool) => assistant.allowed(tier, tool),
+      getScreenSpace: () => input.space(),
+      readPromptOverride: () => {
+        try {
+          const file = path.join(app.getPath('userData'), 'prompts', 'override.md');
+          if (!fs.existsSync(file)) return '';
+          return String(fs.readFileSync(file, 'utf8') || '').trim();
+        } catch { return ''; }
+      },
+      log: () => {},
+    });
+    const { buildSystemPrompt, buildContinuePrompt } = promptBuilder;
+
+    /* 技能归档系统提示词仍是 main.js 的独立常量，不属于 prompt-builder。 */
     const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-    const start = src.indexOf('function buildSystemPrompt(cfg)');
-    const end = src.indexOf('\n}\n', start);
-    const fnSrc = src.slice(start, end + 2);
-    const VOCAB = {
-      high_school: 'high-school level (simple, common words)',
-      cet4: 'CET-4 level',
-      cet6: 'CET-6 level',
-    };
-    const buildSystemPrompt = new Function(
-      'loadPersona', 'mood', 'stats', 'skills', 'memory', 'VOCAB', 'assistant', 'personatags',
-      fnSrc + '\nreturn buildSystemPrompt;'
-    )(() => persona.load(), mood, stats, skills, memory, VOCAB, assistant, require('../src/personatags'));
-
-    /* 多步任务用的续跑提示词（同样从 main.js 里抠） */
-    const cStart = src.indexOf('function buildContinuePrompt(cfg)');
-    const cEnd = src.indexOf('\n}\n', cStart);
-    const buildContinuePrompt = new Function(
-      'loadPersona', 'assistant',
-      src.slice(cStart, cEnd + 2) + '\nreturn buildContinuePrompt;'
-    )(() => persona.load(), assistant);
-
-    /* 技能归档系统提示词（常量模板） */
     const aStart = src.indexOf('const ARCHIVE_SYS = `');
     const aEnd = src.indexOf('`;', aStart);
     const ARCHIVE_SYS = src.slice(aStart, aEnd + 2);

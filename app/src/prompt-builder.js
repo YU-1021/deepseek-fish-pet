@@ -8,13 +8,22 @@ const VOCAB = {
 
 const REQUIRED_DEPS = [
   'loadPersona', 'loadMood', 'getTone', 'getBehaviorSpec', 'buildMemoryContext',
-  'getPracticeWords', 'getSkillCatalog', 'isToolAllowed', 'readPromptOverride', 'log',
+  'getPracticeWords', 'getSkillCatalog', 'isToolAllowed', 'getScreenSpace',
+  'readPromptOverride', 'log',
 ];
 
 function createPromptBuilder(deps) {
   const d = deps || {};
   for (const name of REQUIRED_DEPS) {
     if (typeof d[name] !== 'function') throw new TypeError('prompt-builder missing dependency: ' + name);
+  }
+
+  function screenSpaceLabel() {
+    const space = d.getScreenSpace();
+    const w = Math.round(Number(space && space.w));
+    const h = Math.round(Number(space && space.h));
+    if (!(w > 0) || !(h > 0)) throw new TypeError('prompt-builder invalid screen space');
+    return w + 'x' + h;
   }
 
   function buildSystemPrompt(cfg) {
@@ -33,13 +42,16 @@ function createPromptBuilder(deps) {
         tools += '- web_open|<url>  (open a page in a controlled browser and read its content)\n- web_click|<CSS selector>  (click an element on the current page)\n- web_type|<selector>||<text>  (type text into an input)\n- web_read  (read the current page content again)\n';
       }
       if (tier === 'full') {
+        const screenSpace = screenSpaceLabel();
         tools += '- screen_shot  (capture the user\'s screen and read any text on it — use this to "see" what is on screen before helping)\n';
-        tools += '- screen_look|<question>||x,y,w,h (ZOOM: crop that screen region and blow it up - use it whenever small text or small buttons are hard to read; the coordinates you output are still full-screen 1920x1080)   - screen_look|<question>  (send a screenshot to a vision model to actually see the layout/buttons/icons and get coordinates; falls back to reading text if no vision model is configured)\n';
-        tools += '- click|x,y  (left-click; x,y are pixels in the 1280x720 screenshot, 0,0 = top-left)\n- rclick|x,y  (right-click)\n- dclick|x,y  (double-click)\n- move|x,y  (move mouse without clicking)\n- drag|x1,y1|x2,y2  (hold left button and drag from point 1 to point 2)\n- clickz|x,y  (ONLY after a zoomed screen_look: x,y are coordinates INSIDE that zoomed image)   - scroll|x,y|down  OR  scroll|x,y|down|5  OR  scroll|x,y|-600  (scroll wheel at that position; **prefer the word form**: up/down plus optional notches, default 5 notches. The raw number form follows the Windows convention where POSITIVE = UP, which is the opposite of how scrollTop works in a web page. Wheel events only reach the window under the cursor / with focus — if nothing moves, the target may be covered (including by your own pet window) or unfocused; click its blank area first, then scroll again.)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n';
+        tools += `- screen_look|<question>||x,y,w,h (ZOOM: crop that screen region and blow it up - use it whenever small text or small buttons are hard to read; crop coordinates use the full-screen ${screenSpace} screenshot space)   - screen_look|<question>  (send a screenshot to a vision model to actually see the layout/buttons/icons and get coordinates; falls back to reading text if no vision model is configured)\n`;
+        tools += `- click|x,y  (left-click; x,y are pixels in the ${screenSpace} screenshot, 0,0 = top-left)\n- rclick|x,y  (right-click; same ${screenSpace} screenshot space)\n- dclick|x,y  (double-click; same ${screenSpace} screenshot space)\n- move|x,y  (move mouse; same ${screenSpace} screenshot space)\n- drag|x1,y1|x2,y2  (hold left button and drag; all coordinates use the ${screenSpace} screenshot space)\n- clickz|x,y  (ONLY after a zoomed screen_look: x,y are coordinates INSIDE that zoomed image)   - scroll|x,y|down  OR  scroll|x,y|down|5  OR  scroll|x,y|-600  (scroll wheel at that position in the ${screenSpace} screenshot space; **prefer the word form**: up/down plus optional notches, default 5 notches. The raw number form follows the Windows convention where POSITIVE = UP, which is the opposite of how scrollTop works in a web page. Wheel events only reach the window under the cursor / with focus — if nothing moves, the target may be covered (including by your own pet window) or unfocused; click its blank area first, then scroll again.)\n- type|<text>  (type text into the currently focused field)\n- key|<name>  (press a key: enter / esc / tab / space / backspace / delete / up / down / left / right / home / end / f1..f12 / ctrl+c etc.)\n`;
         tools += '- game_start|<game name + goal + strategy>  (ONLY when the user explicitly asks you to play a game for them — start the game assistant; it watches the screen and plays. Append ||<maxSteps> to cap steps. Read the play-game skill first.)\n- game_stop  (stop the game assistant immediately)\n- game_status  (check whether it is still playing)\n';
+        tools += '- screen_diff|<秒数>  (grab two frames N seconds apart and compare them PIXEL BY PIXEL: tells you whether the UI actually changed and where. Use it after every action instead of asking "did it change?" — the vision model has lied about this before. If it says nothing changed, CHANGE YOUR APPROACH; never repeat the same action.)\n';
+        tools += '- uia_find|<窗口标题片段>|<控件名字或AutomationId>  (UI Automation: ask the app itself for a control and get its EXACT rectangle/centre. Works for normal apps (Explorer, Settings, browsers, Electron apps) — the coordinates are reported by the app, not guessed, so no OCR/vision error. Try this BEFORE screen_look on non-game windows.)   - uia_dump|<窗口标题片段>  (list all controls of that window with their coordinates, to see what is available)\n';
       }
       const auto = (tier === 'full') ? 'You are fully trusted: your actions run automatically without asking each time.' : 'The user must approve before it runs.';
-      actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\n';
+      actionSec = '\n# Computer actions (AI assistant)\nYou may request ONE computer action per reply by adding a final line to your reply:\nACTION: <tool>|<argument>\nTools:\n' + tools + 'Only add the ACTION line when the user explicitly asks you to do something on their computer. ' + auto + ' Otherwise omit the line entirely.\nYou can do a multi-step task: give ONE action per reply; the system runs it, shows you the result, and asks you to continue until the task is done.\nFor pointer actions, locate the target with find_text, find_template/find_template_scroll, or UI Automation first. Never guess a coordinate from a screenshot or randomly shift a failed click. A raw coordinate is allowed only when the user supplied it or the immediately previous successful locator returned it. Verify the expected UI change after every action.\n';
     }
     const memCtx = d.buildMemoryContext();
     const statSpec = d.getBehaviorSpec();
@@ -74,7 +86,7 @@ function createPromptBuilder(deps) {
         + '<<<WRITE: <project>/index.html\n<the complete file content, real line breaks>\n>>>\n'
         + '(several blocks = several files; nothing is written until the user approves)\n'
         + 'Tools (paths are relative to the project folder): proj_ls|<path>  proj_read|<path>  proj_rm|<path>  proj_open|<path>  proj_run|<path>  proj_write|<path>||<content>\n'
-        + 'HOW TO HIT SMALL TARGETS (follow this order): if the thing you must click is small or you are not sure where it is, FIRST ask whether you have a template for it. Have one -> ACTION: find_template|<name> (or find_template_scroll|<name>|<list x,y,w,h> if it may be off-screen in a long list). Do not have one but you can see it -> screen_look to find its coordinates, then ACTION: make_template|<app>-<target>| x,y,w,h to save it, then find_template to get the exact position (one template per button, reusable forever). Text-only target (a name, a list entry) -> ACTION: find_text|<text>. Prefix template names with the app (e.g. arknights-infra-overview) so identical buttons in different apps do not collide. Big easy targets do not need templates. IMPORTANT - COORDINATE DRIFT: on dense game UIs the vision model often gives slightly different coordinates for the SAME button on consecutive looks (measured 20-120px apart, because the game renders small/blurry text). So: if you click somewhere and the screen does NOT change, do NOT click the exact same coordinate again - shift by about 30-50px (try up/down/left/right of your estimate) before concluding the button is not there. Stop after 2-3 different tries and say so honestly. proj_write creates/overwrites one file **under your own project sandbox** (a relative path). If the user names a folder outside that sandbox, use write_file with an ABSOLUTE path instead - do NOT quietly write into the sandbox and then report success: the user will look in the folder they named and find nothing (this really happened). If no tool can do what was asked, SAY SO plainly instead of doing something else and calling it done. proj_write is also handy mid-task, where a multi-line WRITE block is awkward. For several files at once, the WRITE block above is still fine.\n'
+        + 'HOW TO HIT SMALL TARGETS (follow this order): named text or a labelled input -> ACTION: find_text|<text>. Saved visual target -> ACTION: find_template|<name> (or find_template_scroll|<name>|<list x,y,w,h> when it may be off-screen). Normal desktop app -> prefer uia_find/uia_dump when available. screen_look may identify what the target is, but its visual estimate is not authority to click. If an icon has no text, saved template, UIA control, or user-confirmed coordinate, describe it and ask the user instead of clicking or cropping a new template automatically. Prefix reusable template names with the app (e.g. arknights-infra-overview) so identical buttons in different apps do not collide. After every action, verify that the expected UI change happened; if it did not, change to another verifiable locator instead of shifting the failed coordinate. proj_write creates/overwrites one file **under your own project sandbox** (a relative path). If the user names a folder outside that sandbox, use write_file with an ABSOLUTE path instead - do NOT quietly write into the sandbox and then report success: the user will look in the folder they named and find nothing (this really happened). If no tool can do what was asked, SAY SO plainly instead of doing something else and calling it done. proj_write is also handy mid-task, where a multi-line WRITE block is awkward. For several files at once, the WRITE block above is still fine.\n'
         + 'proj_run actually EXECUTES a file and returns its stdout/stderr — use it to test and debug your own scripts (.py .js .mjs .cjs .bat .cmd .ps1) and then fix them. For .html use proj_open (browser) instead.\n'
         + 'proj_open opens a file with the default app — for .html that is the browser, which is how you "run" a web app.\n'
         + 'Whenever you build an interface, follow your 「界面风格」 skill. Keep apps self-contained: one HTML file when possible, no CDN, no external images.\n';
@@ -144,10 +156,13 @@ Rules:
     let tools = '- open_url|https://...   - open_path|C:\\...   - list_dir|C:\\...   - read_file|C:\\...   - focus_window|<标题片段>（把窗口抬到最前）   - windows_list（列出可见窗口的标题+位置尺寸）   - make_template|<名字>|<x,y,w,h>（把屏幕上那块存成模板）   - find_template|<名字>（**模板匹配：精确返回它在当前屏幕上的像素位置** —— 小按钮/图标就用它，别自己估坐标）   - template_list   - run_file|C:\\abs\\path（跑绝对路径的脚本）   - write_file|C:\\abs\\path||<content>（绝对路径写入；主人指定目录时用它，别用 proj_write）   - use_skill|<skill id>\n';
     tools += '- skill_ls|<path>   - skill_read|<path>   - skill_write|<path>||<text>   - skill_rm|<path>\n';
     tools += '- proj_ls|<path>   - proj_read|<path>   - proj_rm|<path>   - proj_open|<path>   - proj_run|<path>   - proj_write|<path>||<content>\n';
-    tools += 'DRIFT in the continue prompt: dense UIs give slightly different coords for the same button each look. If a click changes nothing, do NOT repeat the same coordinate - try ~30-60px around it, or zoom in with screen_look|<question>||x,y,w,h first. **Do not give up early** (the user asked for this): keep trying DIFFERENT approaches up to 4-5 times (shifted coords, zoomed look, go back a level and re-enter, another entry point). Only after several different approaches failed, report honestly what you tried.\n';
+    tools += 'TARGET SAFETY: never turn a screenshot description into a guessed or shifted pixel click. Locate named text with find_text, or locate a saved visual target with find_template/find_template_scroll. Use a raw coordinate action only when the user explicitly supplied that coordinate, or when the immediately previous successful locator result returned that exact point. After every click, key, or type action, verify the expected UI change before continuing.\n';
     tools += 'Note: proj_* only works inside your own sandbox. When the user names another folder, use write_file with an ABSOLUTE path. If nothing can do it, say so plainly instead of doing something else and reporting success.\n';
     if (tier === 'web' || tier === 'full') tools += '- web_open|<url>   - web_click|<css selector>   - web_type|<selector>||<text>   - web_read\n';
-    if (tier === 'full') tools += '- screen_shot   - screen_look|<问题>||x,y,w,h（**看不清小字/小按钮时用它放大那块区域**，坐标仍按整屏算）   - screen_look|<问题>||x,y,w,h  (ZOOM: crop that screen region and blow it up - use it whenever small text/buttons are hard to read; coordinates you output are still full-screen 1920x1080)   - screen_look|<question>   - click|x,y   - rclick|x,y   - dclick|x,y   - move|x,y   - drag|x1,y1|x2,y2   - scroll|x,y|down|5  (滚轮；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n';
+    if (tier === 'full') {
+      const screenSpace = screenSpaceLabel();
+      tools += `- screen_shot   - screen_look|<问题>||x,y,w,h（**看不清小字/小按钮时用它放大那块区域**，裁剪坐标使用整屏 ${screenSpace} 截图空间）   - screen_look|<question>   - click|x,y (${screenSpace})   - rclick|x,y (${screenSpace})   - dclick|x,y (${screenSpace})   - move|x,y (${screenSpace})   - drag|x1,y1|x2,y2 (${screenSpace})   - scroll|x,y|down|5 (${screenSpace}；方向用 up/down 词写，别用正负号)   - type|<text>   - key|<name>   - game_start|<game+goal+strategy>   - game_stop   - game_status\n`;
+    }
     return `You are "${p.name || '大肥鱼'}", a desktop pet (${p.personality || '傲娇、温柔、嘴硬'}). Stay in character.
 You are IN THE MIDDLE of a multi-step task the user asked for. Keep every line short.
 
@@ -164,7 +179,18 @@ MOOD: <2-6字心情>
 Add "ACTION: <tool>|<argument>" as the LAST line only if you still need to do something; if the task is done, answer normally with no ACTION line.`;
   }
 
-  return { buildSystemPrompt, buildContinuePrompt };
+  function buildContinueUserPrompt() {
+    return '请继续。规则：\n'
+      + '⓪ **先定位，再操作**：目标是文字或输入框标签 → ACTION: find_text|<文字>；目标是已保存的图标/按钮 → ACTION: find_template|<模板名>；目标可能在长列表外 → ACTION: find_template_scroll|<模板名>|<列表区域 x,y,w,h>。\n'
+      + '   · 可以先用 screen_look 看清目标叫什么；能读出文字就改用 find_text。图标没有现成模板、也没有可验证文字时，不要自动点击或裁模板，先描述目标并请主人确认。\n'
+      + '   · **不要根据截图描述猜坐标，也不要把失败坐标随意偏移后重试。** 裸坐标动作只允许使用主人明确给出的坐标，或紧邻上一条成功定位工具返回的精确坐标。\n'
+      + '① 如果上一步失败：根据真实报错换一种**可验证**的办法，例如改用文字定位、模板定位、返回上一层或换入口；不要重复同一动作。最多尝试 3 条不同路径，然后如实报告。\n'
+      + '② 点击、按键、输入或滚动执行后必须验证预期界面变化；可用 screen_diff、screen_look、find_text 或 find_template。未验证前不要声称完成。\n'
+      + '③ 如果还没做完，再给一行 ACTION: <工具>|<参数>，并在 EN 中简短说明；一次只做一个动作。\n'
+      + '④ 如果已完成，按正常格式回答且不要带 ACTION。失败时 ZH 必须讲清做到哪一步、真实错误、试过什么以及需要主人做什么。';
+  }
+
+  return { buildSystemPrompt, buildContinuePrompt, buildContinueUserPrompt };
 }
 
 module.exports = { createPromptBuilder };
