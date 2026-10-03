@@ -83,6 +83,7 @@ const KEY_NAMES = ['enter', 'esc', 'escape', 'tab', 'space', 'backspace', 'delet
    以前这些要么被拒、要么更糟 —— 直接把 ASCII 当 VK 发出去（见 Input.cs 的修复），静默按错键。 */
 const KEY_ALIAS = {
   plus: 'shift+equal', '+': 'shift+equal', underscore: 'shift+minus', '_': 'shift+minus',
+  multiply: 'shift+8', times: 'shift+8', '*': 'shift+8',
   equal: 'equal', '=': 'equal', minus: 'minus', '-': 'minus',
   comma: 'comma', ',': 'comma', less: 'shift+comma', '<': 'shift+comma',
   period: 'period', dot: 'period', '.': 'period', greater: 'shift+period', '>': 'shift+period',
@@ -130,6 +131,18 @@ function validateKey(name) {
   }
   return parts.join('+');
 }
+
+/* 一次动作里的顺序按键。逗号表示“依次按”，加号仍表示“同时按”的组合键。
+ * 例如：1,0,0,multiply,1,9,9,enter。
+ * 先把整串全部校验完再允许执行，避免前半段已经输入、后半段才因坏键名失败。 */
+function parseKeySequence(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) throw new Error('按键序列为空');
+  const items = raw.split(',').map((item) => item.trim());
+  if (items.some((item) => !item)) throw new Error('按键序列里有空按键（是不是多了个逗号？）');
+  if (items.length > 64) throw new Error('按键序列过长（最多 64 个）');
+  return items.map(validateKey);
+}
 function key(name) { return run('key', [validateKey(name)]); }
 
 /* 把所有可能卡住的修饰键和鼠标键松开。
@@ -141,4 +154,4 @@ function releaseAll() {
   try { return run('releaseall', []); } catch { return false; }
 }
 
-module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, KEY_NAMES, space };
+module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, parseKeySequence, KEY_NAMES, space };

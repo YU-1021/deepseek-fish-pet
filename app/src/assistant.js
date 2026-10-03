@@ -1261,11 +1261,22 @@ async function runInner(tool, arg) {
        现在若最近一次 focus_window 的目标已经不是前台，就拒绝执行并报明实情。 */
     const gateK = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gateK.ok) return gateK.message;
-    input.key(arg);
+    const sequence = input.parseKeySequence(arg);
+    let done = 0;
+    for (const keyName of sequence) {
+      if (done > 0 && userinput.isUserActive()) break;
+      input.key(keyName);
+      done++;
+      if (done < sequence.length) await new Promise((r) => setTimeout(r, 45));
+    }
     /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
     const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
     await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
+    if (done < sequence.length) {
+      return `⚠️ 只发送了 ${done}/${sequence.length} 个按键：**主人开始操作了，我停下来了**。`
+        + `还没发送的是：「${sequence.slice(done).join(',')}」。`;
+    }
+    return `✅ 已按键：${sequence.join(',')}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
       + (gateK.warn ? '\n' + gateK.warn : '');
   }
 }

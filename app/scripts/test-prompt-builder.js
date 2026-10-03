@@ -18,17 +18,17 @@ const TIERS = ['off', 'read', 'normal', 'web', 'full'];
 const GOLDEN = {
   system: {
     off: '6b6705cbe18654f8b6e6e5da0ab0d1e976723851f0af65909116ebaba4083167',
-    read: '8edcf19673e9d008d8f1d62d7f3a41663309ef163b36c57ea466af8f8f025387',
-    normal: '8edcf19673e9d008d8f1d62d7f3a41663309ef163b36c57ea466af8f8f025387',
-    web: 'e24de8c95ed33358288bfaecd5c4e2dbb7caac368a55463c23a94aff3696b570',
-    full: 'edd2084cc647afc93ffff59c946c02524264e178fd4e825dc891303a2f5830bd',
+    read: '189d6951de96c519bce82f0d140fc8ae4a76235a57c769ec8444acfa77ef1326',
+    normal: '189d6951de96c519bce82f0d140fc8ae4a76235a57c769ec8444acfa77ef1326',
+    web: 'c2a42efcf6805a5bcc0ba6fdf3631914294b3f9aa1fb4d21d08c28dd0570e10b',
+    full: '65d4729b9982a31d2623167b5157a141ce4efe624633e2a327567bf904e9e2a4',
   },
   continuation: {
     off: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
     read: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
     normal: '8e94f86bc44d7fd4116f8021488df2e2204ee73ff4b8060d9664d1561eeef009',
     web: '2961371d643990e4d6034baf8aeb1e7282baa59da65fdab277be80198c3e5c7d',
-    full: '32bd34073088ccadb3fdc36386503053bdb4df514251e3200f8bb1469c1b36e1',
+    full: '4a0fa884e1b91de102bc3e8f2bdfefd04e6a8d77c24945bab4662d8717e5ca20',
   },
 };
 
@@ -103,6 +103,35 @@ test('full prompt preserves latest deterministic vision tools', () => {
   assert(value.includes('screen_diff|<秒数>'));
   assert(value.includes('uia_find|<窗口标题片段>|<控件名字或AutomationId>'));
   assert(value.includes('uia_dump|<窗口标题片段>'));
+});
+
+test('full continuation keeps deterministic desktop tools after the first action', () => {
+  const value = builder.buildContinuePrompt({ assistant: 'full', vocabLevel: 'cet4' });
+  assert(value.includes('screen_diff|<秒数>'));
+  assert(value.includes('find_text|<文字>'));
+  assert(value.includes('uia_find|<窗口标题片段>|<控件名字或AutomationId>'));
+  assert(value.includes('uia_dump|<窗口标题片段>'));
+});
+
+test('continuation prefers verified keyboard entry over clicking an on-screen keyboard', () => {
+  const value = builder.buildContinuePrompt({ assistant: 'full', vocabLevel: 'cet4' })
+    + '\n' + builder.buildContinueUserPrompt();
+  assert(value.includes('focus_window|<标题片段>'));
+  assert(value.includes('普通文本框用 type'));
+  assert(value.includes('计算器等只响应真实按键的应用用 key'));
+  assert(value.includes('不要逐个定位和点击屏幕键盘'));
+  assert(value.includes('OCR 必须限定在目标窗口'));
+  assert(value.includes('key|<按键1,按键2,...>'));
+  assert(value.includes('CalculatorResults'));
+});
+
+test('continuation requires fresh window evidence before claiming an app is absent', () => {
+  const value = builder.buildContinuePrompt({ assistant: 'full', vocabLevel: 'cet4' })
+    + '\n' + builder.buildContinueUserPrompt();
+  assert(value.includes('本轮新的工具结果'));
+  assert(value.includes('先调用 windows_list'));
+  assert(value.includes('使用 windows_list 返回的真实标题'));
+  assert(value.includes('screen_look 看不到某个窗口，不代表它没有打开'));
 });
 
 test('empty vocabulary and skill catalog omit their sections', () => {
