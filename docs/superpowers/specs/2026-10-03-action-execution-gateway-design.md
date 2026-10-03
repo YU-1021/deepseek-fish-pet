@@ -226,4 +226,3 @@ executor.recordTarget(toolResult, context)
 - 第三提交修改渲染确认流程和定位工具结构化返回。
 - 每个提交均保持现有测试通过，可单独回滚。
 - 本阶段继续追加到 `refactor/assistant-core` 分支和 PR #3，不合并 `main`。
-

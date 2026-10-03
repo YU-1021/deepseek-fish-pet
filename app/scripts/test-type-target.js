@@ -112,5 +112,3 @@ app.whenReady().then(async () => {
   fs.writeFileSync(RESULT_FILE, JSON.stringify({ passed, total, rows }, null, 2));
   setTimeout(() => app.exit(passed === total && total === 4 ? 0 : 1), 100);
 });
-
-

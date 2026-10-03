@@ -355,4 +355,3 @@ git push github refactor/assistant-core
 - [ ] **Step 7: Update PR evidence**
 
 Verify PR #3 points at the final branch SHA and report the exact test commands, pass counts, remaining game-agent limitation, and rollback boundaries without merging `main`.
-
