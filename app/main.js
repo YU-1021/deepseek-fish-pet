@@ -27,6 +27,10 @@ const speak = require('./src/speak');
 const testlog = require('./src/testlog');const userinput = require('./src/userinput');
 const input = require('./src/input');
 const { createPromptBuilder } = require('./src/prompt-builder');
+const { classifyAction } = require('./src/permission-policy');
+const { createActionAuthority } = require('./src/action-authority');
+const { createActionAudit } = require('./src/action-audit');
+const { createActionExecutor } = require('./src/action-executor');
 
 const dbg = (msg) => {
   try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), new Date().toISOString() + ' ' + msg + '\n'); } catch {}
@@ -112,6 +116,49 @@ const loadPersona = () => persona.load();   // 人设现在放在 userData（AI 
 memory.init({ llm, config, persona: loadPersona, skillCatalog: () => skills.catalog() });
 /* 存储层出错（读坏文件、写失败）必须留痕：以前这些全是静默的，出事了完全查不到 */
 memory.bus.on('store:error', (e) => dbg('[store] ' + ((e && e.msg) || '')));
+
+function writeDestination(action) {
+  const tool = String(action && action.tool || '');
+  const raw = String(action && action.arg || '');
+  const sep = raw.indexOf('||');
+  const head = (sep >= 0 ? raw.slice(0, sep) : raw).trim().replace(/^["']|["']$/g, '');
+  try {
+    if (tool === 'write_file') return path.isAbsolute(head) ? path.resolve(head) : '';
+    if (tool === 'proj_write') return projects.safePath(head);
+    if (tool === 'skill_write') return skills.safePath(head);
+    if (tool === 'flow_save') {
+      const flows = require('./src/flows');
+      const name = flows.safeFlowName(head);
+      return name ? path.join(flows.flowsDir(app.getPath('userData')), name + '.json') : '';
+    }
+  } catch {}
+  return '';
+}
+
+async function assistantActionFacts(action) {
+  const state = userinput.state();
+  const destination = writeDestination(action);
+  const tool = String(action && action.tool || '');
+  return {
+    destinationExists: !!(destination && fs.existsSync(destination)),
+    focusVerified: (tool === 'type' || tool === 'key') ? await assistant.focusVerified() : false,
+    userActive: !!state.userActive,
+    userEpoch: Number.isInteger(state.userEpoch) ? state.userEpoch : 0,
+  };
+}
+
+const actionAuthority = createActionAuthority({ now: Date.now });
+const actionAudit = createActionAudit({ dir: app.getPath('userData'), now: Date.now });
+const actionExecutor = createActionExecutor({
+  allowed: (tier, tool) => assistant.allowed(tier, tool),
+  classifyAction,
+  authority: actionAuthority,
+  audit: actionAudit,
+  getFacts: assistantActionFacts,
+  waitUntilFree: (timeoutMs) => userinput.waitUntilFree(timeoutMs),
+  runTool: (action) => runToolWithWindows(action),
+  now: Date.now,
+});
 
 /* 【立绘窗隐藏的看门狗】用户报"启动不了桌宠" —— 实际是**她一直在跑、但立绘窗被藏起来了**：
  * 日志里 `visibility {"hidden":true}` / `false` 交替出现，最后一次停在 true。
@@ -1356,7 +1403,7 @@ ipcMain.handle('art:reset', () => {
   try { fs.unlinkSync(path.join(artDir(), 'pet-character.png')); } catch {}
   return true;
 });
-ipcMain.handle('assistant:run', async (_e, a) => {
+async function runToolWithWindows(a) {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
   /* 点/拖/滚之前：如果目标点正被**我们自己的窗口**盖着，先把它让开一会儿。
@@ -1432,7 +1479,26 @@ ipcMain.handle('assistant:run', async (_e, a) => {
     maxInlineBytes: Math.max(1500, cap * 3),   // 内联预算（cap 是"偏小"的旧值，这里给 3 倍余量）
   });
   memory.session.push({ role: 'user', content: `[系统] 我刚执行了操作 ${a.tool}（${a.arg}），结果如下：\n${sp.content}` });
-  return { ok: true, result: text, image, action, yielded: !!(yielded && yielded.length), spilled: !!sp.spilled, spillPath: sp.path || '' };
+  return {
+    ok: true, result: text, image, action,
+    target: (r && typeof r === 'object') ? r.target : null,
+    yielded: !!(yielded && yielded.length), spilled: !!sp.spilled, spillPath: sp.path || '',
+  };
+}
+
+function assistantContext() { return { tier: config.load().assistant || 'off' }; }
+
+ipcMain.handle('assistant:inspect', async (_e, action) => actionExecutor.inspect(action, assistantContext()));
+ipcMain.handle('assistant:approve', async (_e, action) => actionExecutor.approve(action, assistantContext()));
+ipcMain.handle('assistant:run', async (_e, request) => {
+  const outcome = await actionExecutor.execute(request, assistantContext());
+  if (!outcome.ok) return outcome;
+  return Object.assign({}, outcome.value, {
+    decision: outcome.decision,
+    reason: outcome.reason,
+    risk: outcome.risk,
+    actionId: outcome.actionId,
+  });
 });
 
 /* 把动作参数里的第一个 x,y 抠出来（模型空间的坐标）。 */
@@ -1548,6 +1614,12 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     dbg('[boot] v' + app.getVersion() + ' electron=' + process.versions.electron + ' chrome=' + process.versions.chrome);
+    /* IPC 集成测试只需要主进程 handler + 自己创建的隐藏测试页。
+       禁止它顺带创建置顶桌宠窗、释放用户键盘、启动 TTS/屏幕捕获等生产副作用。 */
+    if (process.env.DAYU_TEST_HEADLESS === '1') {
+      dbg('[boot] headless integration mode: production startup skipped');
+      return;
+    }
     session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
       cb(permission === 'media');
     });
@@ -1672,5 +1744,6 @@ module.exports = {
   buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows, loadPosition, savePosition, posFile,
   config, llm, memory, mood, stats, persona, personatags, petactions, speak,
   assistant, skills, projects, tts, asr, testlog, clock, userinput,
+  actionExecutor, actionAuthority, actionAudit,
   win: () => ({ petWin, chatWin }),
 };

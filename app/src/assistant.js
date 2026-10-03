@@ -15,6 +15,7 @@ const personatags = require('./personatags');
 /* ⚠️ 必须显式 require：find_template_scroll 里用了 userinput.waitUntilFree，
    而这里以前只在个别分支里内联 require —— 漏了就是运行时 ReferenceError（语法检查查不出来）。 */
 const userinput = require('./userinput');
+const { withTarget } = require('./locator-result');
 
 /* 【前台断言的状态】记住最近一次 focus_window 成功的目标窗口。
    为什么需要：Windows 把**键盘输入发给前台窗口**，而不是"最上层窗口"。
@@ -958,9 +959,10 @@ async function runInner(tool, arg) {
       const capS = await captureScreen(false, true);
       lastS = await MS.findTemplate(app, nativeImage, nmS, capS.dataUrl, [rxS, ryS, rwS, rhS]);
       if (lastS.ok) {
-        return '🎯 找到「' + nmS + '」：中心 (' + lastS.x + ',' + lastS.y + ')，相似度 ' + lastS.score.toFixed(3)
+        return withTarget('🎯 找到「' + nmS + '」：中心 (' + lastS.x + ',' + lastS.y + ')，相似度 ' + lastS.score.toFixed(3)
           + '（滚了 ' + scrolledS + ' 屏' + (lastS.ms != null ? '，本次匹配 ' + lastS.ms + 'ms' : '') + '）。'
-          + '现在可以直接 ACTION: click|' + lastS.x + ',' + lastS.y + '。';
+          + '现在可以直接 ACTION: click|' + lastS.x + ',' + lastS.y + '。',
+        { x: lastS.x, y: lastS.y, source: 'find_template_scroll', label: nmS });
       }
       if (!lastS.low && !lastS.ok) return '⚠️ ' + (lastS.error || '匹配失败');
       if (k === timesS) break;
@@ -1002,8 +1004,9 @@ async function runInner(tool, arg) {
       }
     }
     if (hit) {
-      return '🔤 找到「' + needle + '」：中心 (' + hit.x + ',' + hit.y + ')，它所在的那一行是「' + hit.line
-        + '」。现在可以直接 ACTION: click|' + hit.x + ',' + hit.y + '。';
+      return withTarget('🔤 找到「' + needle + '」：中心 (' + hit.x + ',' + hit.y + ')，它所在的那一行是「' + hit.line
+        + '」。现在可以直接 ACTION: click|' + hit.x + ',' + hit.y + '。',
+      { x: hit.x, y: hit.y, source: 'find_text', label: needle });
     }
     const onScreen = ((j.lines || []).map((l) => String(l.text || '').replace(/\s+/g, '')).filter(Boolean)).slice(0, 12);
     return '⚠️ 当前画面上没找到「' + needle + '」。OCR 实际读到的文字是：\n'
@@ -1049,9 +1052,10 @@ async function runInner(tool, arg) {
         + '可能这一屏根本没这个按钮，或者你的模板是别的分辨率/皮肤下截的。'
         + '建议先用 screen_look 看一眼当前在哪一屏，确认那个按钮在不在。';
     }
-    return '🎯 找到「' + nm + '」：中心 (' + r3.x + ',' + r3.y + ')，匹配框 ' + r3.w + 'x' + r3.h
+    return withTarget('🎯 找到「' + nm + '」：中心 (' + r3.x + ',' + r3.y + ')，匹配框 ' + r3.w + 'x' + r3.h
       + '，相似度 ' + r3.score.toFixed(3) + '（' + r3.ms + 'ms）。'
-      + '现在可以直接 ACTION: click|' + r3.x + ',' + r3.y + '（坐标就是截图空间，和 screen_look 一致）。';
+      + '现在可以直接 ACTION: click|' + r3.x + ',' + r3.y + '（坐标就是截图空间，和 screen_look 一致）。',
+    { x: r3.x, y: r3.y, source: 'find_template', label: nm });
   }
 
   /* ---------------- 帧比对：客观回答"界面到底变没变" ----------------
@@ -1170,10 +1174,11 @@ async function runInner(tool, arg) {
       }
       return '🔍 UIA 失败：' + (r.reason || '未知') + (r.raw ? '\n' + String(r.raw).slice(0, 200) : '');
     }
-    return '🔍 UIA 精确命中：' + (r.extra && r.extra.name ? '「' + r.extra.name + '」' : '')
+    return withTarget('🔍 UIA 精确命中：' + (r.extra && r.extra.name ? '「' + r.extra.name + '」' : '')
       + '  AutomationId=' + ((r.extra && r.extra.automationId) || '-')
       + '  中心 (' + r.x + ',' + r.y + ')  置信度 ' + r.confidence
-      + '\n（这是应用【自己报告】的坐标，不是识别出来的 —— 可直接 ACTION: click|' + r.x + ',' + r.y + '）';
+      + '\n（这是应用【自己报告】的坐标，不是识别出来的 —— 可直接 ACTION: click|' + r.x + ',' + r.y + '）',
+    { x: r.x, y: r.y, source: 'uia_find', label: (r.extra && (r.extra.name || r.extra.automationId)) || seg[1] });
   }
   if (tool === 'uia_dump') {
     /* 列出某窗口的控件树（探索用） */
@@ -1297,13 +1302,24 @@ async function run(tool, arg) {
   const out = r.value;
   noteAction(t, arg, out);
   if (rep.advice && typeof out === 'string') return rep.advice + '\n' + out;
+  if (rep.advice && out && typeof out === 'object' && typeof out.text === 'string') {
+    return Object.freeze(Object.assign({}, out, { text: rep.advice + '\n' + out.text }));
+  }
   return out;
+}
+
+/* 权限网关只接受“已经明确 focus_window 且当前仍是该窗口”的键盘目标。
+   assistant.run 内部仍会在真正输入前再次断言，避免检查与执行之间窗口被抢走。 */
+async function focusVerified() {
+  if (!lastFocus) return false;
+  try { return !!(await require('./safedrive').assertForeground(lastFocus)).ok; }
+  catch { return false; }
 }
 
 /* __captureForTest / __captureFallbackForTest：只给测试脚本用（抓帧链路 + 无光标选项）。
    带下划线前缀表示"不是给模型调用的工具"，不进 TOOL_TIER、不进工具清单。 */
 module.exports = {
-  run, allowed, TOOL_TIER, RANK,
+  run, allowed, focusVerified, TOOL_TIER, RANK,
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
   __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
