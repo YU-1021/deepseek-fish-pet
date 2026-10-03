@@ -233,7 +233,9 @@ if (window.petAPI.onRunAction) window.petAPI.onRunAction((a) => {
   box.className = 'msg sys';
   box.textContent = '🎤 你刚才用语音交代的事：' + a.tool + (a.arg ? ' ' + a.arg : '');
   $('msgs').appendChild(box); scroll();
-  renderAction(box, a, () => runTask(box, a, 1), () => {});
+  renderAction(box, a,
+    (approvalToken) => runTask(box, a, 1, { approvalToken }),
+    (result) => runTask(box, a, 1, { result }));
 });
 
 /* ---------------- 🎮 游戏助手 ---------------- */
@@ -750,10 +752,16 @@ function addShot(dataUrl) {
 
 // 执行一个动作：显示结果 + 截图，返回结果对象。
 // 关键：工具抛异常时**不中断任务**，而是把报错当成"结果"交回给她，让她自己分析、自己修、修不了再上报。
-async function execAction(action) {
+async function execAction(action, approvalToken) {
   try {
-    const r = await window.petAPI.assistantRun(action);
+    const r = await window.petAPI.assistantRun({ action, approvalToken: approvalToken || '' });
     if (r && r.image) addShot(r.image);
+    if (r && r.ok === false) {
+      taskFailed = true;
+      const blocked = r.result || ('操作未执行：' + (r.reason || r.decision || '被安全策略拦截'));
+      addSys('🛡️ ' + blocked);
+      return Object.assign({}, r, { result: blocked });
+    }
     addSys('🤖 ' + ((r && r.result) ? r.result : '（已执行）'));
     // 工具没抛异常、但结果本身是失败（脚本退出码非 0、超时、被拒绝…）也算这一趟没办成
     if (r && /^(❌|⏱|⚠️)|失败|出错|超时|不被允许/.test(String(r.result || ''))) taskFailed = true;
@@ -804,7 +812,7 @@ function newLoop() {
   if (!window.PetLoop) return null;
   return window.PetLoop.create({ lookOnlyTools: LOOK_ONLY_TOOLS, lookStreakMax: LOOK_STREAK_MAX, stepBudget: stepBudget });
 }
-async function runTask(msgEl, action, depth) {
+async function runTask(msgEl, action, depth, options) {
   if (depth === 1) { taskFailed = false; lookStreak = 0; taskStopReason = null; promiseNudge = 0; LOOP = newLoop(); }
   if (LOOP) {
     const d = LOOP.beforeStep({ tool: action.tool });
@@ -822,14 +830,16 @@ async function runTask(msgEl, action, depth) {
     reportTask();
     return;
   }
-  const r = await execAction(action);
+  const r = (options && options.result) ? options.result : await execAction(action, options && options.approvalToken);
   if (!r) { if (LOOP) taskStopReason = LOOP.finish('no-result').reason; reportTask(); return; }
   if (r.action) {
     const box = document.createElement('div');
     box.className = 'msg sys';
     box.textContent = '🤖 下一步：' + r.action.tool + (r.action.arg ? ' ' + r.action.arg : '');
     $('msgs').appendChild(box); scroll();
-    renderAction(box, r.action, () => runTask(box, r.action, depth + 1), () => {});
+    renderAction(box, r.action,
+      (approvalToken) => runTask(box, r.action, depth + 1, { approvalToken }),
+      (result) => runTask(box, r.action, depth + 1, { result }));
     return;
   }
   let next;
@@ -841,7 +851,9 @@ async function runTask(msgEl, action, depth) {
   renderChoices(next.choices);
   if (next.action) {
     // 中间步骤：只显示不朗读，继续下一步
-    renderAction(pe, next.action, () => runTask(pe, next.action, depth + 1), () => {});
+    renderAction(pe, next.action,
+      (approvalToken) => runTask(pe, next.action, depth + 1, { approvalToken }),
+      (result) => runTask(pe, next.action, depth + 1, { result }));
   } else {
     /* ★ 她这条只说话、没给 ACTION —— 以前直接当"做完了"收尾，任务就静默冻死。
        如果她那句话**听起来还在继续做**（"我这就去/找到了/再看一眼/稍等"），
@@ -859,7 +871,12 @@ async function runTask(msgEl, action, depth) {
         if (nn && nn.en) {
           const ne = addPet(nn.en, nn.zh, nn.words);
           renderChoices(nn.choices);
-          if (nn.action) { renderAction(ne, nn.action, () => runTask(ne, nn.action, depth + 1), () => {}); return; }
+          if (nn.action) {
+            renderAction(ne, nn.action,
+              (approvalToken) => runTask(ne, nn.action, depth + 1, { approvalToken }),
+              (result) => runTask(ne, nn.action, depth + 1, { result }));
+            return;
+          }
           speak(nn.en);
         }
       } catch {}
@@ -870,23 +887,92 @@ async function runTask(msgEl, action, depth) {
   }
 }
 
-// AI 助手操作请求：允许 / 拒绝；「完全权限」档自动执行
-function renderAction(msgEl, action, onApprove, onDeny) {
-  if (cfg.assistant === 'full') {
-    addSys('🤖 自动执行：' + action.tool + (action.arg ? ' ' + action.arg : ''));
-    if (onApprove) onApprove(); else execAction(action);
-    return;
-  }
+const POLICY_LABELS = {
+  'destructive-action': '删除或破坏性操作',
+  'overwrite-existing': '将覆盖已有内容',
+  'execute-local-file': '将执行本地文件',
+  'external-side-effect': '将操作网页并产生外部影响',
+  'unverified-target': '点击位置没有可信的视觉定位依据',
+  'permission-denied': '当前助手权限不允许',
+  'focus-not-verified': '没有确认键盘输入的目标窗口',
+  'user-active': '主人正在使用鼠标或键盘',
+};
+function policyText(reason) { return POLICY_LABELS[String(reason || '')] || String(reason || '需要确认'); }
+function blockedActionResult(action, decision, reason) {
+  return {
+    ok: false,
+    decision: decision || 'deny',
+    reason: reason || 'permission-denied',
+    result: '操作 `' + action.tool + '` 未执行：' + policyText(reason),
+  };
+}
+
+// 所有动作先问主进程策略；full 只代表能力上限，不代表跳过危险操作确认。
+async function renderAction(msgEl, action, onApprove, onDeny) {
   const bar = document.createElement('div');
   bar.className = 'actionbar';
-  bar.innerHTML = `<span class="atool">🤖 ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span>`;
+  bar.innerHTML = `<span class="atool">🤖 ${esc(action.tool)}</span><span class="aarg" title="${esc(action.arg)}">${esc(action.arg)}</span><span class="areason">检查权限…</span>`;
+  msgEl.appendChild(bar);
+  scroll();
+
+  let policy;
+  try { policy = await window.petAPI.assistantInspect(action); }
+  catch (error) {
+    const result = blockedActionResult(action, 'deny', 'permission-check-failed');
+    result.result += '（' + ((error && error.message) || error) + '）';
+    bar.remove();
+    addSys('🛡️ ' + result.result);
+    if (onDeny) onDeny(result);
+    return;
+  }
+  if (!policy || policy.decision === 'deny') {
+    const result = blockedActionResult(action, 'deny', policy && policy.reason);
+    bar.remove();
+    addSys('🛡️ ' + result.result);
+    if (onDeny) onDeny(result);
+    return;
+  }
+  if (policy.decision === 'allow') {
+    bar.remove();
+    addSys('🤖 自动执行：' + action.tool + (action.arg ? ' ' + action.arg : ''));
+    if (onApprove) onApprove(''); else execAction(action, '');
+    return;
+  }
+
+  const reason = bar.querySelector('.areason');
+  reason.textContent = policyText(policy.reason);
   const allow = document.createElement('button'); allow.textContent = '允许'; allow.className = 'allow';
   const deny = document.createElement('button'); deny.textContent = '拒绝'; deny.className = 'deny';
   bar.appendChild(allow); bar.appendChild(deny);
-  msgEl.appendChild(bar);
   scroll();
-  allow.addEventListener('click', () => { bar.remove(); if (onApprove) onApprove(); else execAction(action); });
-  deny.addEventListener('click', () => { bar.remove(); addSys('已拒绝该操作'); if (onDeny) onDeny(); });
+  let settled = false;
+  const lock = () => { settled = true; allow.disabled = true; deny.disabled = true; };
+  allow.addEventListener('click', async () => {
+    if (settled) return;
+    lock();
+    reason.textContent = '正在确认…';
+    let approved;
+    try { approved = await window.petAPI.assistantApprove(action); }
+    catch (error) { approved = { ok: false, reason: 'approval-failed', error: (error && error.message) || String(error) }; }
+    if (!approved || !approved.ok || !approved.token) {
+      const result = blockedActionResult(action, 'deny', (approved && approved.reason) || 'approval-failed');
+      bar.remove();
+      addSys('🛡️ ' + result.result);
+      if (onDeny) onDeny(result);
+      return;
+    }
+    bar.remove();
+    if (onApprove) onApprove(approved.token); else execAction(action, approved.token);
+  });
+  deny.addEventListener('click', () => {
+    if (settled) return;
+    lock();
+    bar.remove();
+    const result = blockedActionResult(action, 'deny', 'user-rejected');
+    result.result = '主人已拒绝操作 `' + action.tool + '`。';
+    addSys('已拒绝该操作');
+    if (onDeny) onDeny(result);
+  });
 }
 function renderChoices(choices) {
   const box = $('choices');
@@ -980,7 +1066,9 @@ async function send(text, opts) {
     if (reply.files && reply.files.length) renderFiles(pe, reply.files);
     if (reply.action) {
       // 有动作：进入多步任务循环（首句由流式 partial 读，中间只显示，最后一句再读）
-      renderAction(pe, reply.action, () => runTask(pe, reply.action, 1), () => {});
+      renderAction(pe, reply.action,
+        (approvalToken) => runTask(pe, reply.action, 1, { approvalToken }),
+        (result) => runTask(pe, reply.action, 1, { result }));
     } else {
       if (!partialSpoken) speak(reply.en);
     }

@@ -57,6 +57,7 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .actionbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e3e8f2; font-size: 12px; }
 .actionbar .atool { font-weight: 700; color: #4d6bfe; }
 .actionbar .aarg { color: #6b7490; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.actionbar .areason { color: #a46722; flex: 1; min-width: 90px; }
 .actionbar button { border: none; border-radius: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
 .actionbar .allow { background: #4d6bfe; color: #fff; }
 .actionbar .deny { background: #eef1f8; color: #2b3450; }

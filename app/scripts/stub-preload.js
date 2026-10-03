@@ -11,9 +11,29 @@ const REAL = {
   memoryInfo: { id: 'stub', turns: 0 },
   asrStatus: { engine: 'whisper', hasModel: true, model: 'base.en', binary: true },
 };
+const assistantStub = {
+  mode: 'allow',
+  calls: [],
+  reset(mode) { this.mode = mode || 'allow'; this.calls = []; },
+};
+window.__assistantStub = assistantStub;
 window.petAPI = new Proxy({}, {
   get: (_t, name) => (...args) => {
     const k = String(name);
+    if (k === 'assistantInspect') {
+      assistantStub.calls.push({ method: 'inspect', value: args[0] });
+      if (assistantStub.mode === 'deny') return Promise.resolve({ ok: false, decision: 'deny', reason: 'permission-denied', risk: 'forbidden' });
+      if (assistantStub.mode === 'confirm') return Promise.resolve({ ok: true, decision: 'confirm', reason: 'destructive-action', risk: 'destructive' });
+      return Promise.resolve({ ok: true, decision: 'allow', reason: 'tier-allowed', risk: 'read' });
+    }
+    if (k === 'assistantApprove') {
+      assistantStub.calls.push({ method: 'approve', value: args[0] });
+      return Promise.resolve({ ok: true, decision: 'confirm', token: 'one-use-test-token' });
+    }
+    if (k === 'assistantRun') {
+      assistantStub.calls.push({ method: 'run', value: args[0] });
+      return Promise.resolve({ ok: true, result: 'stub executed' });
+    }
     if (k in REAL) return Promise.resolve(REAL[k]);
     if (/^on[A-Z]/.test(k)) return undefined;            // 事件订阅：调用方都有 if 保护
     return Promise.resolve({});
