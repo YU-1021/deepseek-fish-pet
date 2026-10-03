@@ -156,4 +156,3 @@ function harness(changes) {
   console.error(error && error.stack || error);
   process.exitCode = 1;
 });
-

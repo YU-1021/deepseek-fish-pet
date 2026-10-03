@@ -154,4 +154,3 @@ function createActionAuthority(options) {
 }
 
 module.exports = { createActionAuthority, TARGET_SOURCES };
-

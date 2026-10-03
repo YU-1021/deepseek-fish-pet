@@ -108,4 +108,3 @@ try {
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
-

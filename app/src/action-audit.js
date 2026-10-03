@@ -92,4 +92,3 @@ function createActionAudit(options) {
 }
 
 module.exports = { createActionAudit, DEFAULT_MAX_BYTES, FILE_NAME };
-

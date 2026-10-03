@@ -128,4 +128,3 @@ test('stats expose counts only and never approval tokens', () => {
 
 console.log('\n通过 ' + passed + ' / ' + total);
 if (passed !== total) process.exitCode = 1;
-
