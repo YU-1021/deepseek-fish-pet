@@ -5,7 +5,8 @@ const POINTER_TOOLS = Object.freeze([
 ]);
 const KEYBOARD_TOOLS = Object.freeze(['type', 'key']);
 const DELETE_TOOLS = Object.freeze(['proj_rm', 'skill_rm', 'template_del', 'flow_del', 'tag_rm']);
-const EXECUTE_TOOLS = Object.freeze(['run_file', 'proj_run']);
+/* shell.openPath 会按系统关联直接启动 .exe/.bat/.vbs/.hta，安全语义等同本地执行。 */
+const EXECUTE_TOOLS = Object.freeze(['run_file', 'proj_run', 'open_path']);
 const WEB_MUTATION_TOOLS = Object.freeze(['web_click', 'web_type']);
 const WRITE_TOOLS = Object.freeze(['write_file', 'proj_write', 'skill_write', 'flow_save']);
 

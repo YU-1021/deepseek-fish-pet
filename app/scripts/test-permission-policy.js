@@ -72,7 +72,7 @@ test('creating a new destination follows existing tier without extra confirmatio
   assert.strictEqual(result.decision, 'allow');
 });
 
-for (const tool of ['run_file', 'proj_run']) {
+for (const tool of ['run_file', 'proj_run', 'open_path']) {
   test(tool + ' always requires confirmation', () => {
     assert.deepStrictEqual([decide(tool).decision, decide(tool).risk], ['confirm', 'local-exec']);
   });
@@ -116,6 +116,7 @@ test('exported tool groups are immutable and contain their policy members', () =
   assert(KEYBOARD_TOOLS.includes('type'));
   assert(DELETE_TOOLS.includes('proj_rm'));
   assert(EXECUTE_TOOLS.includes('run_file'));
+  assert(EXECUTE_TOOLS.includes('open_path'));
   assert(WEB_MUTATION_TOOLS.includes('web_click'));
 });
 
