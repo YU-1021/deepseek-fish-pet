@@ -18,6 +18,7 @@ for (const f of ['config.json', 'persona.json']) {
 try { fs.unlinkSync(path.join(TEST_UD, 'vocab.json')); } catch {}
 try { fs.unlinkSync(path.join(TEST_UD, 'clock-offset.json')); } catch {}
 app.setPath('userData', TEST_UD);
+process.env.DAYU_TEST_HEADLESS = '1';
 
 require('../main.js');    // 启动真应用
 

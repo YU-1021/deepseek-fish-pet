@@ -14,7 +14,7 @@ app.whenReady().then(() => {
   const file = path.join(TEST_UD, 'vocab.json');
   const out = [];
   const L = (s) => out.push(s);
-  let pass = 0, total = 0;
+  let pass = 0, total = 0, crashed = '';
   const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
 
   try {
