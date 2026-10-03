@@ -78,7 +78,7 @@ function createActionAuthority(options) {
     for (let i = targets.length - 1; i >= 0; i--) if (set.has(targets[i].id)) targets.splice(i, 1);
   }
 
-  function matchAndConsumeTarget(input) {
+  function inspectOrConsumeTarget(input, consume) {
     const value = input || {};
     const tool = String(value.tool || '').trim().toLowerCase();
     const userEpoch = Number(value.userEpoch);
@@ -91,7 +91,7 @@ function createActionAuthority(options) {
       if (!first.ok) return first;
       const second = inspectPoint(points[1], userEpoch, new Set([first.grant.id]));
       if (!second.ok) return second;
-      consumeIds([first.grant.id, second.grant.id]);
+      if (consume) consumeIds([first.grant.id, second.grant.id]);
       return { ok: true, grants: [Object.assign({}, first.grant), Object.assign({}, second.grant)] };
     }
 
@@ -100,9 +100,12 @@ function createActionAuthority(options) {
     if (!point) return { ok: false, reason: 'invalid-target-argument' };
     const found = inspectPoint(point, userEpoch);
     if (!found.ok) return found;
-    consumeIds([found.grant.id]);
+    if (consume) consumeIds([found.grant.id]);
     return { ok: true, grant: Object.assign({}, found.grant) };
   }
+
+  function inspectTarget(input) { return inspectOrConsumeTarget(input, false); }
+  function matchAndConsumeTarget(input) { return inspectOrConsumeTarget(input, true); }
 
   function invalidateTargets() {
     const count = targets.length;
@@ -141,6 +144,7 @@ function createActionAuthority(options) {
 
   return {
     issueTarget,
+    inspectTarget,
     matchAndConsumeTarget,
     invalidateTargets,
     issueApproval,

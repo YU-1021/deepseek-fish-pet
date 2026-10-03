@@ -41,6 +41,13 @@ test('click accepts at most two pixels of integer rounding drift', () => {
   assert.strictEqual(hit.grant.source, 'find_text');
 });
 
+test('target inspection matches without consuming the one-use grant', () => {
+  issue(150, 250);
+  assert.strictEqual(authority.inspectTarget({ tool: 'click', arg: '150,250', userEpoch: 4 }).ok, true);
+  assert.strictEqual(authority.stats().targets, 1);
+  assert.strictEqual(authority.matchAndConsumeTarget({ tool: 'click', arg: '150,250', userEpoch: 4 }).ok, true);
+});
+
 test('click rejects coordinates outside the two-pixel boundary', () => {
   issue(100, 200);
   const miss = authority.matchAndConsumeTarget({ tool: 'click', arg: '103,200', userEpoch: 4 });
