@@ -12,7 +12,9 @@ const path = require('path');
 const fs = require('fs');
 const { app } = require('electron');
 const TEST_UD = path.join(process.env.APPDATA, 'dayu-pet-yieldtest');
+const RESULT_FILE = path.join(TEST_UD, 'result.json');
 fs.mkdirSync(TEST_UD, { recursive: true });
+try { fs.unlinkSync(RESULT_FILE); } catch {}
 app.setPath('userData', TEST_UD);
 
 app.whenReady().then(async () => {
@@ -20,7 +22,7 @@ app.whenReady().then(async () => {
   const out = [];
   const L = (s) => out.push(s);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  let pass = 0, total = 0;
+  let pass = 0, total = 0, crashed = '';
   const check = (n, ok, d) => { total++; if (ok) pass++; L((ok ? '  ✅ ' : '  ❌ ') + n + (d ? '  ' + d : '')); };
 
   /* ---- 假光标：测试完全掌控"现在光标在哪" ---- */
@@ -35,6 +37,8 @@ app.whenReady().then(async () => {
     userinput.stop();
     userinput.start();
     await wait(120);
+    const epochAtStart = userinput.state().userEpoch;
+    check('userEpoch 是可比较的单调整数', Number.isInteger(epochAtStart) && epochAtStart >= 0, String(epochAtStart));
 
     L('=== 判定逻辑（注入假光标，确定性）===');
     L('  calmMs=' + CALM + '  movePx=6  pollMs=30');
@@ -54,6 +58,7 @@ app.whenReady().then(async () => {
     let st = userinput.state().stats;
     check('落点在预期内 → userActive=false', userinput.isUserActive() === false);
     check('没被记成用户移动', st.userMoves === 0, JSON.stringify(st));
+    check('她自己的预期移动不增加 userEpoch', userinput.state().userEpoch === epochAtStart, String(userinput.state().userEpoch));
 
     /* 3. 主人在别处动了 → 判定为主人在用 */
     L('');
@@ -63,6 +68,7 @@ app.whenReady().then(async () => {
     st = userinput.state().stats;
     check('userActive=true', userinput.isUserActive() === true, JSON.stringify(st));
     check('记了一次用户移动', st.userMoves >= 1, 'userMoves=' + st.userMoves);
+    check('主人移动后 userEpoch 单调增加', userinput.state().userEpoch > epochAtStart, String(userinput.state().userEpoch));
 
     /* 4. waitUntilFree：主人停手后应放行 */
     L('');
@@ -114,5 +120,6 @@ app.whenReady().then(async () => {
     userinput.setCursorSource(null);   // 还原成真实光标
   }
   console.log(out.join('\n'));
+  fs.writeFileSync(RESULT_FILE, JSON.stringify({ pass, total, crashed, out }, null, 2));
   setTimeout(() => app.exit((pass === total && !crashed) ? 0 : 1), 200);
 });

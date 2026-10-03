@@ -31,6 +31,7 @@ let P = Object.assign({}, DEFAULTS);
 let timer = null;
 let lastPos = null;
 let lastUserAt = 0;
+let userEpoch = 0;       // 主人每次接管都会递增；旧的坐标凭证据此立即失效
 let lastPetAt = 0;
 let expected = null;      // { x, y, at }
 let stats = { polls: 0, userMoves: 0, petMoves: 0, pauses: 0, pausedMs: 0 };
@@ -86,7 +87,7 @@ function tick() {
       const nearExpected = expected && nowMs() - expected.at < 3000
         && Math.abs(cur.x - expected.x) <= P.expectPx && Math.abs(cur.y - expected.y) <= P.expectPx;
       if (nearExpected) { stats.petMoves++; }
-      else { lastUserAt = nowMs(); stats.userMoves++; }
+      else { lastUserAt = nowMs(); userEpoch++; stats.userMoves++; }
     }
   }
   lastPos = { x: cur.x, y: cur.y };
@@ -132,6 +133,7 @@ function waitUntilFree(timeoutMs) {
 function state() {
   return {
     enabled: P.enabled, running: !!timer, userActive: isUserActive(),
+    userEpoch,
     msSinceUser: lastUserAt ? nowMs() - lastUserAt : null,
     msSincePet: lastPetAt ? nowMs() - lastPetAt : null,
     params: params(), stats: Object.assign({}, stats),
