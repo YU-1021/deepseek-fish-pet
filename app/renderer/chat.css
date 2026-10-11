@@ -52,17 +52,30 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 #msgs .msg.user .zh { color: #d8e2ff; }
 #msgs .msg.err { align-self: center; font-size: 11px; color: #a0a8bf; background: transparent; }
 #msgs .msg.sys { align-self: center; font-size: 12px; color: #55607a; background: #eef1f8; max-width: 92%; white-space: pre-wrap; }
+#msgs .msg.sys img.shot { display: block; max-width: 100%; border-radius: 8px; border: 1px solid #dbe1ee; margin: 4px 0; }
 
 .actionbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e3e8f2; font-size: 12px; }
 .actionbar .atool { font-weight: 700; color: #4d6bfe; }
 .actionbar .aarg { color: #6b7490; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
+.actionbar .areason { color: #a46722; flex: 1; min-width: 90px; }
 .actionbar button { border: none; border-radius: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
 .actionbar .allow { background: #4d6bfe; color: #fff; }
 .actionbar .deny { background: #eef1f8; color: #2b3450; }
 
-#choices { padding: 0 16px 8px; display: flex; flex-direction: column; gap: 8px; }
-.choice { text-align: left; background: #fff; border: 1px solid #e3e8f2; border-radius: 12px; padding: 9px 12px; cursor: pointer; font-weight: 400; }
+/* ---------------- 预制回复（她给的两句备选）
+ * ⚠️ 这里以前是**纯白**底 + 12px 圆角、整行宽 —— 而消息区里"我发的消息"也是白底圆角，
+ * 于是这两句备选看起来就像**已经发出去的消息**（实测截图对比才发现）。
+ * 现在统一到桌宠窗 #bubble .choices button 那套视觉语言：淡蓝灰底 + 同色系边框，
+ * 一眼能看出是"可以点的选项"。两边的颜色保持一致，尺寸按各自窗口留白微调。 */
+#choices { padding: 0 16px 10px; display: flex; flex-direction: column; gap: 8px; }
+#choices::before { content: '选一句直接发（或自己打）'; font-size: 11px; color: #8a93ab; padding-left: 2px; }
+.choice {
+  text-align: left; background: #f5f7fd; border: 1px solid #d5dcef; border-radius: 9px;
+  padding: 9px 12px; cursor: pointer; font-weight: 400; color: #3a4a7a;
+  font-family: inherit; transition: border-color .12s, background .12s;
+}
 .choice:hover { border-color: #4d6bfe; background: #eef1ff; }
+.choice:active { background: #e3e9ff; }
 .choice .en { font-size: 13px; font-weight: 600; }
 .choice .meta { font-size: 11px; color: #6b7490; margin-top: 3px; }
 .choice .ipa { color: #3aa06a; font-family: Consolas, monospace; }
@@ -135,3 +148,116 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .micstate[data-state="denied"]  { color: #b4543a; background: #fdece7; }
 .micstate[data-state="error"]   { color: #a86b1a; background: #fdf3e0; }
 .micstate[data-state="unknown"] { color: #6b7490; background: #eef1f8; }
+
+/* 🎮 游戏助手日志 */
+.gamelog {
+  margin-top: 12px; max-height: 260px; overflow-y: auto;
+  background: #0f1420; border-radius: 10px; padding: 10px 12px;
+  font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.55;
+}
+.gamelog .gline { color: #c8d3e8; white-space: pre-wrap; overflow-wrap: break-word; }
+.gamelog .gline.info { color: #7fd8a6; }
+.gamelog .gline.see  { color: #a9c0e8; }
+.gamelog .gline.act  { color: #ffd479; }
+.gamelog .gline.wait { color: #7a8699; }
+.gamelog .gline.err  { color: #ff8d7a; }
+
+/* 对话里的实况卡：游戏助手由技能启动时面板是关着的，实况直接贴在对话里 */
+#msgs .msg.sys.gamecard {
+  align-self: stretch; max-width: 100%; background: #0f1420; color: #c8d3e8;
+  padding: 8px 10px; border-radius: 10px;
+}
+#msgs .msg.sys.gamecard .gchead { font-size: 12px; font-weight: 600; color: #9fb4dd; margin-bottom: 4px; }
+#msgs .msg.sys.gamecard .gcbody {
+  font-family: Consolas, Menlo, monospace; font-size: 12px; line-height: 1.55;
+  max-height: 260px; overflow-y: auto;
+}
+#msgs .msg.sys.gamecard .gline { color: #c8d3e8; white-space: pre-wrap; overflow-wrap: break-word; }
+#msgs .msg.sys.gamecard .gline.info { color: #7fd8a6; }
+#msgs .msg.sys.gamecard .gline.see  { color: #a9c0e8; }
+#msgs .msg.sys.gamecard .gline.act  { color: #ffd479; }
+#msgs .msg.sys.gamecard .gline.wait { color: #7a8699; }
+#msgs .msg.sys.gamecard .gline.err  { color: #ff8d7a; }
+
+/* 👤 人设字段锁 */
+.lockrow { display: flex !important; align-items: center; justify-content: space-between; }
+.locksym { cursor: pointer; font-size: 14px; line-height: 1; opacity: .5; user-select: none; padding: 0 2px; }
+.locksym:hover { opacity: 1; }
+.locksym.locked { opacity: 1; }
+.locksym.fixed { cursor: help; opacity: .9; }
+
+/* ---------------- 口语练习：逐词清晰度配色 ----------------
+   颜色只代表"这个词读得清不清楚"（whisper 概率代理），不是语法/表达评分。
+   悬停出音标（复用 .w 的 tip），点一下朗读这个词。 */
+#msgs .msg.user .w { border-radius: 4px; padding: 0 2px; cursor: pointer; }
+#msgs .msg.user .w:hover { outline: 1px solid rgba(77, 107, 254, .45); }
+#msgs .msg.user .w.s-good { background: rgba(74, 197, 128, .28); }
+#msgs .msg.user .w.s-ok   { background: rgba(240, 190, 70, .32); }
+#msgs .msg.user .w.s-poor { background: rgba(240, 110, 100, .34); }
+#msgs .msg.user .w.s-good:hover { background: rgba(74, 197, 128, .45); }
+#msgs .msg.user .w.s-ok:hover   { background: rgba(240, 190, 70, .5); }
+#msgs .msg.user .w.s-poor:hover { background: rgba(240, 110, 100, .5); }
+#msgs .msg.user .w.playing { outline: 2px solid #4d6bfe; }
+
+.scoreline { font-size: 11px; color: #6b7490; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scoreline b { font-size: 14px; }
+.scoreline b.s-good { color: #2f9e68; }
+.scoreline b.s-ok   { color: #c08a1e; }
+.scoreline b.s-poor { color: #cf4d3f; }
+.scoreline .hint { font-size: 10px; opacity: .7; }
+
+/* ---------------- 翻译器 ---------------- */
+#trInput { width: 100%; border: 1px solid #e3e8f2; border-radius: 10px; padding: 9px 11px; font: 13px/1.5 inherit; resize: vertical; }
+#trOut { margin-top: 12px; }
+
+/* 「像不像」——独立的第二条色带：用**下划线**区分，不跟清晰度的背景色打架 */
+#msgs .msg.repeat .psus { color: #b3306e; border-bottom: 2px solid #e57bb0; padding-bottom: 1px; }
+#msgs .msg.repeat .pval { color: #b3306e; font-size: 11px; }
+#msgs .msg.repeat .pok { color: #2f9e68; }
+#msgs .msg.repeat .pdim { color: #8b95ab; font-size: 11px; }
+.tropt { border: 1px solid #e6ebf5; border-radius: 11px; padding: 10px 12px; margin-top: 9px; background: #fbfcff; }
+.tropt .en { font-size: 14px; font-weight: 600; color: #24304c; line-height: 1.55; }
+.tropt .zh { font-size: 12px; color: #6b7490; margin-top: 3px; }
+.tropt .note { font-size: 11px; color: #8b95ab; margin-top: 5px; }
+.tropt .acts { margin-top: 8px; display: flex; gap: 8px; }
+.tropt .acts button { padding: 5px 10px; font-size: 11px; border-radius: 8px; }
+.tropt .w { cursor: pointer; border-bottom: 1px dotted #9aa6c8; }
+.tropt .w:hover { color: #4d6bfe; }
+.tropt .w.playing { background: rgba(77, 107, 254, .18); border-radius: 4px; }
+
+/* ---------------- 跟读：她一句 / 你一句 对比 ---------------- */
+#msgs .petacts { margin-top: 6px; }
+#msgs .petacts button { padding: 3px 9px; font-size: 11px; border-radius: 8px; }
+#msgs .msg.repeat { background: #f7f9ff; border: 1px solid #e3e8f2; border-radius: 10px; padding: 8px 10px; }
+#msgs .msg.repeat .rline { margin-top: 4px; font-size: 12px; color: #2b3450; }
+#msgs .msg.repeat .rlab { display: inline-block; min-width: 46px; color: #8b95ab; font-size: 11px; }
+#msgs .msg.repeat .rmiss { margin-top: 5px; font-size: 11px; color: #cf4d3f; }
+#msgs .msg.repeat .rok { margin-top: 5px; font-size: 11px; color: #2f9e68; }
+
+/* ---------------- 进步曲线 ---------------- */
+.trendbox { margin-bottom: 12px; }
+.trendbox .trendline { font-size: 12px; color: #6b7490; margin-bottom: 8px; }
+.trendbox .tbar { display: flex; align-items: center; gap: 7px; margin-top: 4px; font-size: 11px; color: #6b7490; }
+.trendbox .tday { width: 34px; flex: none; }
+.trendbox .tfill { height: 10px; border-radius: 5px; display: inline-block; min-width: 3px; transition: width .3s; }
+.trendbox .tfill.s-good { background: rgba(74, 197, 128, .75); }
+.trendbox .tfill.s-ok   { background: rgba(240, 190, 70, .8); }
+.trendbox .tfill.s-poor { background: rgba(240, 110, 100, .8); }
+.trendbox .tval { flex: none; }
+
+/* ---------------- 顶栏「⋯ 更多」下拉 ----------------
+   顶栏只留 4 个常用的，其余收进来（元素和 id 没变，绑定照旧）。 */
+.tools { position: relative; }
+.moremenu {
+  position: absolute; right: 0; top: 26px; z-index: 20; min-width: 148px;
+  background: #fff; border: 1px solid #e3e8f2; border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(30, 40, 80, .18); padding: 5px; display: flex; flex-direction: column;
+}
+.moremenu .mi {
+  display: block; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; color: #2b3450;
+  cursor: pointer; white-space: nowrap;
+}
+.moremenu .mi:hover { background: #f1f5ff; }
+.moremenu .mi.danger { color: #cf4d3f; }
+.moremenu .mi.danger:hover { background: #fdf0ee; }
+.moremenu .msep { height: 1px; background: #eef1f7; margin: 4px 6px; }

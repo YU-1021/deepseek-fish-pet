@@ -27,17 +27,21 @@
       "preload.js",
       "persona.json",
       "src/**/*",
+      "skills/**/*",
+      "scripts/**/*",
       "vendor/**/*",
       "renderer/**/*",
       "assets/**/*",
       "!**/*.md",
+      "skills/**/*.md",
       "!**/shots/**",
       "!**/*.log"
     ],
     "asarUnpack": [
       "node_modules/playwright/**",
       "node_modules/playwright-core/**",
-      "vendor/whisper/**"
+      "vendor/whisper/**",
+      "vendor/input/**"
     ],
     "extraResources": [
       {

@@ -57,7 +57,10 @@ function state() {
   if (last.type === 'tool/call') st = 'working';
   else if (last.type === 'tool/result' || last.type === 'step/start' || last.type === 'step/end' || last.type === 'assistant/message') st = 'thinking';
 
-  return { ok: true, state: st, active, tool: last.name || '', agoMs };
+  /* 工具名在 data.name 里，不在顶层：实测 session.v3 的 tool/call 记录顶层键只有
+     type / seq / time / data，以前读 last.name 恒为 undefined → "DSH · 工具名" 永远空白。 */
+  const tool = (last.data && last.data.name) || last.name || '';
+  return { ok: true, state: st, active, tool, agoMs };
 }
 
 module.exports = { state };

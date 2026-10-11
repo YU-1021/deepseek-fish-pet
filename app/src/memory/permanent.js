@@ -26,11 +26,35 @@ function save(v) { store.write(NS, v); bus.emit('memory:changed', NS); }
 
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
 
-/* 合并一条候选要点：已有的累加权重，没有的入池 */
+/* 近似判定（实测必要性）：
+ * 模型每次抽要点措辞都不同 —— 同一件事会写成
+ *   「主人养了一只叫豆豆的猫」 / 「主人养了一只猫叫豆豆」
+ *   「主人下周要去上海出差三天」 / 「主人出差去上海三天」
+ * 只做精确匹配的话，3 天就能攒出两组重复的永久记忆，白占注入预算。
+ * 判据（故意保守，宁可不合并也别把两件不同的事合掉）：
+ *   · 一方包含另一方 → 算同一个
+ *   · 否则看**字符集合**的 Jaccard（不看顺序，所以"猫叫豆豆"和"叫豆豆的猫"能对上）
+ * 阈值可以用 config.permSimThreshold 覆盖。 */
+const SIM_THRESHOLD = 0.72;
+let simOverride = null;
+function setSimThreshold(v) { const n = Number(v); simOverride = Number.isFinite(n) ? n : null; }
+function similar(a, b) {
+  const A = norm(a), B = norm(b);
+  if (!A || !B) return false;
+  if (A === B || A.indexOf(B) >= 0 || B.indexOf(A) >= 0) return true;
+  const sa = new Set(A), sb = new Set(B);
+  let inter = 0;
+  for (const c of sa) if (sb.has(c)) inter++;
+  const uni = sa.size + sb.size - inter;
+  const th = simOverride == null ? SIM_THRESHOLD : simOverride;
+  return uni > 0 && inter / uni >= th;
+}
+
+/* 合并一条候选要点：已有的（含近似）累加权重，没有的入池 */
 function upsertCand(cand, item, now) {
   const key = norm(item.text);
   if (!key) return null;
-  const hit = cand.find((c) => norm(c.text) === key);
+  const hit = cand.find((c) => similar(c.text, item.text));
   if (hit) {
     const add = Number(item.weight) || 0;
     hit.weight = Math.min(10, Math.round((Number(hit.weight) || 0) + add * 0.6));
@@ -55,28 +79,39 @@ function merge(newItems) {
   const now = Date.now();
   for (const it of newItems || []) {
     if (!it || !it.text) continue;
-    if (v.facts.some((f) => norm(f.text) === norm(it.text))) continue;   // 已经是永久记忆了
+    if (v.facts.some((f) => similar(f.text, it.text))) continue;   // 已经是（或近似是）永久记忆了
     upsertCand(v.cand, it, now);
   }
   save(v);
   return v;
 }
 
-/* 权重到阈值 → 晋升为永久记忆 */
+/* 权重到阈值 → 晋升为永久记忆。
+ * 注意：晋升前要再查一次重 —— 候选池里可能有两条**措辞不同但近似**的条目
+ * 同时到达阈值，直接 push 就会在永久记忆里留下重复（实测 3 天出过两组）。 */
 function promote(threshold) {
   const v = load();
   const th = Number(threshold) || 7;
   const keep = [];
-  let promoted = 0;
+  let promoted = 0, merged = 0;
   for (const c of v.cand) {
     if (Number(c.weight) >= th) {
-      v.facts.push({ text: c.text, weight: c.weight, tags: c.tags || [], hits: c.hits || 1, ts: Date.now() });
-      promoted++;
+      const dup = v.facts.find((f) => similar(f.text, c.text));
+      if (dup) {
+        /* 合并进已有那条：取更高权重、累计命中次数；ts 保留最旧的（removeFact 按 ts 定位） */
+        dup.weight = Math.max(Number(dup.weight) || 0, Number(c.weight) || 0);
+        dup.hits = (Number(dup.hits) || 1) + (Number(c.hits) || 1);
+        dup.text = (String(c.text).length > String(dup.text).length) ? c.text : dup.text;   // 留信息更多的那句
+        merged++;
+      } else {
+        v.facts.push({ text: c.text, weight: c.weight, tags: c.tags || [], hits: c.hits || 1, ts: Date.now() });
+        promoted++;
+      }
     } else keep.push(c);
   }
   v.cand = keep;
   save(v);
-  return { promoted, total: v.facts.length };
+  return { promoted, merged, total: v.facts.length };
 }
 
 /* 衰减：很久没再出现的候选慢慢掉权重，掉到底就清掉 */
@@ -104,4 +139,4 @@ function facts() { return load().facts; }
 function candidates() { return load().cand; }
 function removeFact(ts) { const v = load(); v.facts = v.facts.filter((f) => f.ts !== ts); save(v); }
 
-module.exports = { load, save, merge, promote, decay, topFacts, facts, candidates, removeFact, upsertCand, NS };
+module.exports = { load, save, merge, promote, decay, topFacts, facts, candidates, removeFact, upsertCand, similar, setSimThreshold, SIM_THRESHOLD, NS };

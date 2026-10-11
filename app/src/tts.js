@@ -72,19 +72,40 @@ function cacheDir() {
   return dir;
 }
 
-/* 把长句切成小段，避免单次请求过长、也提高命中缓存的概率 */
+/* 把长句切成小段，避免单次请求过长、也提高命中缓存的概率。
+ * ⚠️ 只按标点切是不够的：合并条件 `(cur + p).length > 180 && cur` 要求 cur 非空，
+ *   所以**第一个片段永远整段收下**、不管多长 —— 模型偶尔会写出一整段没有句号的
+ *   run-on，实测 1500 字那种会一次生成 512KB 音频、耗时 3.9 秒，
+ *   再长就会顶到 45 秒超时，而且缓存粒度也退化成"整段一个 key"。
+ *   这里补一道**硬切**：超过 180 字的片段先按空格断（中文没空格就按字数断）。 */
+const MAX_SEG = 180;
 function toSentences(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t) return [];
   const parts = t.match(/[^.!?;:]+[.!?;:]*/g) || [t];
+
+  /* 第一道：把超长片段硬切开 */
+  const hard = [];
+  for (const p of parts) {
+    let s = p;
+    while (s.length > MAX_SEG) {
+      let cut = s.lastIndexOf(' ', MAX_SEG);
+      if (cut < MAX_SEG * 0.5) cut = MAX_SEG;      // 中文长句没有空格 → 直接按字数断
+      hard.push(s.slice(0, cut));
+      s = s.slice(cut);
+    }
+    if (s) hard.push(s);
+  }
+
+  /* 第二道：把过短的相邻片段并起来（减少请求数、提高整段命中缓存的概率） */
   const out = [];
   let cur = '';
-  for (const p of parts) {
-    if ((cur + p).length > 180 && cur) { out.push(cur.trim()); cur = p; }
+  for (const p of hard) {
+    if ((cur + p).length > MAX_SEG && cur) { out.push(cur.trim()); cur = p; }
     else cur += p;
   }
   if (cur.trim()) out.push(cur.trim());
-  return out.slice(0, 12);
+  return out.filter(Boolean).slice(0, 12);
 }
 
 function synthesizeOnce(voice, text, outPath, rate, pitch) {
@@ -107,6 +128,7 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     const chunks = [];
     let settled = false;
+    let sawEnd = false;                 // 收到 Path:turn.end 才算这次合成完整
     const timeout = setTimeout(() => {
       if (!settled) { settled = true; try { ws.close(); } catch {} reject(new Error('TTS 超时')); }
     }, 45000);
@@ -119,7 +141,17 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
       if (err) { reject(err); return; }
       const buf = Buffer.concat(chunks);
       if (buf.length < 100) { reject(new Error('音频过短 ' + buf.length)); return; }
-      try { fs.writeFileSync(outPath, buf); resolve(buf.length); } catch (e) { reject(e); }
+      /* 原子落盘：先写 .part 再改名。否则写到一半异常会留下半截 mp3，
+         而它已经被当成"缓存命中"（只判 size>100），以后每次都返这段残缺音频，永不自愈。 */
+      const tmp = outPath + '.part';
+      try {
+        fs.writeFileSync(tmp, buf);
+        fs.renameSync(tmp, outPath);
+        resolve(buf.length);
+      } catch (e) {
+        try { fs.unlinkSync(tmp); } catch {}
+        reject(e);
+      }
     }
 
     ws.on('open', () => {
@@ -137,7 +169,7 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     ws.on('message', (data, isBinary) => {
       if (settled) return;
-      if (!isBinary) { if (String(data).includes('Path:turn.end')) finish(null); return; }
+      if (!isBinary) { if (String(data).includes('Path:turn.end')) { sawEnd = true; finish(null); } return; }
       const raw = Buffer.isBuffer(data) ? data : Buffer.from(data);
       const marker = Buffer.from('Path:audio' + CRLF);
       const idx = raw.indexOf(marker);
@@ -147,10 +179,12 @@ function synthesizeOnce(voice, text, outPath, rate, pitch) {
 
     ws.on('error', (e) => finish(e instanceof Error ? e : new Error(String((e && e.message) || e))));
     ws.on('close', (e) => {
-      if (!settled) {
-        if (chunks.length) finish(null);
-        else finish(new Error(`连接中断 code=${(e && e.code) || ''}`));
-      }
+      if (settled) return;
+      /* 异常关闭（1006/连接抖动）时，只要已经收到部分音频，以前就按成功收尾了 ——
+         于是残缺 mp3 被写进**最终缓存路径**，以后每次命中都返回它。现在必须收到
+         turn.end 才算成功，否则抛错走重试。 */
+      if (sawEnd && chunks.length) finish(null);
+      else finish(new Error(`连接中断 code=${(e && e.code) || ''}`));
     });
   });
 }
@@ -203,9 +237,17 @@ async function synthesize(text, opts = {}) {
   if (sentences.length === 1) {
     file = path.join(cacheDir(), `edge-${firstKey}.mp3`);
   } else {
-    const key = crypto.createHash('sha256').update(pieces.map((b) => b.length).join('-') + buf.length).digest('hex');
+    /* key 必须包含"内容 + 音色 + 语速 + 音调"：以前只用各段字节长度拼，
+       同一段文字换音色就可能撞 key，于是 url/file 指向别人的音频，
+       而 dataUrl 是这次新拼的 —— 两者内容不一致（渲染层只用 dataUrl 所以暂时听不出来）。 */
+    const sig = voice + '|' + styleId + '|' + rateNum + '|' + pitchNum + '|' + sentences.join('\u0001');
+    const key = crypto.createHash('sha256').update(sig + '|' + pieces.map((b) => b.length).join('-')).digest('hex');
     file = path.join(cacheDir(), `mix-${key}.mp3`);
-    if (!fs.existsSync(file)) fs.writeFileSync(file, buf);
+    if (!fs.existsSync(file)) {
+      const tmp = file + '.part';
+      try { fs.writeFileSync(tmp, buf); fs.renameSync(tmp, file); }
+      catch { try { fs.unlinkSync(tmp); } catch {} }
+    }
   }
   return {
     ok: true,
@@ -220,4 +262,4 @@ async function synthesize(text, opts = {}) {
   };
 }
 
-module.exports = { synthesize, VOICES, STYLES, DEFAULT_VOICE, DEFAULT_STYLE, resolveStyle, voiceById };
+module.exports = { synthesize, VOICES, STYLES, DEFAULT_VOICE, DEFAULT_STYLE, resolveStyle, voiceById, toSentences, MAX_SEG };

@@ -13,15 +13,18 @@ app/.pw-browsers/*
 
 # vendor 里的可执行文件是程序的一部分，必须进仓库
 !app/vendor/whisper/*.exe
+!app/vendor/input/*.exe
 
 # ---- 本地运行数据 / 日志 ----
 app/shots/
+shots/
 *.log
 debug.log
 
 # ---- 本地快照、备份、素材包（体积大 / 与源码无关，不进仓库）----
 snapshots/
 app-modified-backup/
+.worktrees/
 *.zip
 ref/*.mp4
 ref/_extracted/
@@ -30,3 +33,11 @@ ref/_extracted/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# ---- Python 缓存（DTW 实验脚本用）----
+__pycache__/
+*.pyc
+
+# convenience files placed for the user at repo root (shortcut + readme), not source
+*.lnk
+启动说明.txt

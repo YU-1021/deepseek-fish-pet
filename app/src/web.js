@@ -10,11 +10,24 @@ process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || b
 let browser = null, page = null;
 
 async function ensure() {
-  if (page) return;
+  if (page && browser && !page.isClosed() && browser.isConnected()) return;
+  /* 以前只判 page 是否非空，而且 launch 之后直接 newContext/newPage：
+     - newContext/newPage 抛错时 browser 已经被赋值，下次调用又 launch 一个，
+       旧的那个引用被覆盖 → **headless Chromium 永久泄漏**（退出时 close() 只关最后一个）；
+     - 页面被站点关掉/崩了以后 page 仍然非空 → 之后所有 web_* 永久报 "Target closed"，无法自愈。
+     现在：先判存活，再收干净旧的，launch 之后失败就回滚。 */
+  await close();
   const { chromium } = require('playwright');
-  browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: 'zh-CN' });
-  page = await ctx.newPage();
+  const b = await chromium.launch({ headless: true });
+  try {
+    const ctx = await b.newContext({ viewport: { width: 1280, height: 860 }, locale: 'zh-CN' });
+    page = await ctx.newPage();
+    browser = b;
+  } catch (e) {
+    try { await b.close(); } catch {}
+    browser = null; page = null;
+    throw e;
+  }
 }
 
 async function close() {

@@ -1,12 +1,15 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('petAPI', {
-  // 桌宠窗口（拖拽：渲染层只当触发器，主进程读真实光标坐标）
+  // 桌宠窗口（拖拽：事件驱动，渲染层 mousemove 只当触发器，主进程读真实光标坐标）
   dragStart: () => ipcRenderer.send('drag-start'),
-  dragTick: () => ipcRenderer.send('drag-tick'),
   dragEnd: () => ipcRenderer.send('drag-end'),
   quit: () => ipcRenderer.send('quit'),
   onSay: (cb) => ipcRenderer.on('pet:say', (_e, data) => cb(data)),
+  onSayPartial: (cb) => ipcRenderer.on('pet:say-partial', (_e, data) => cb(data)),
+  runPetAction: (a) => ipcRenderer.send('pet:action', a),
+  onRunAction: (cb) => ipcRenderer.on('chat:runAction', (_e, d) => cb(d)),
+  onChatPartial: (cb) => ipcRenderer.on('chat:partial', (_e, data) => cb(data)),
   onChatState: (cb) => {
     ipcRenderer.on('chat:opened', () => cb(true));
     ipcRenderer.on('chat:closed', () => cb(false));
@@ -34,6 +37,26 @@ contextBridge.exposeInMainWorld('petAPI', {
   hitMask: (info) => ipcRenderer.send('pet:hitmask', info),
   hold: (on) => ipcRenderer.send('pet:hold', !!on),
   artRegions: () => ipcRenderer.invoke('art:regions'),
+  // 交互系统：交互模式（点热区出动作）/ 聊天模式（可拖可戳）
+  petGetMode: () => ipcRenderer.invoke('pet:getMode'),
+  petSetMode: (m) => ipcRenderer.invoke('pet:setMode', m),
+  onPetMode: (cb) => ipcRenderer.on('pet:mode', (_e, d) => cb(d)),
+  petInteract: (region) => ipcRenderer.invoke('pet:interact', { region }),
+  artPose: (pose) => ipcRenderer.invoke('art:pose', pose),
+  artPoses: () => ipcRenderer.invoke('art:poses'),
+  // 交互台词：按概率让 AI 重写（覆盖层，不动手写底稿）
+  petRefreshLines: (force) => ipcRenderer.invoke('pet:refreshLines', force),
+  petLinesInfo: () => ipcRenderer.invoke('pet:linesInfo'),
+  onPetLines: (cb) => ipcRenderer.on('pet:linesChanged', (_e, d) => cb(d)),
+  // 口语练习：逐词清晰度 / 音标 / 翻译器
+  speakTranslate: (text) => ipcRenderer.invoke('speak:translate', { text }),
+  speakIpa: (words) => ipcRenderer.invoke('speak:ipa', words),
+  onSpeakIpa: (cb) => ipcRenderer.on('speak:ipa', (_e, d) => cb(d)),
+  speakTrend: (days) => ipcRenderer.invoke('speak:trend', days),
+  speakAutoAdd: (on) => ipcRenderer.invoke('speak:autoAdd', on),
+  // 发音评测（"像不像"）：目标句 → TTS 参考音频 + 参考词级时间戳 + 全部参数
+  pronRef: (text) => ipcRenderer.invoke('pron:ref', { text }),
+  pronTiming: (text, wav) => ipcRenderer.invoke('pron:timing', { text, wav }),
   shot: () => ipcRenderer.send('pet:shot'),
   chatShot: () => ipcRenderer.send('chat:shot'),
   // 配置
@@ -48,13 +71,23 @@ contextBridge.exposeInMainWorld('petAPI', {
   onChatLog: (cb) => ipcRenderer.on('chat:log', (_e, data) => cb(data)),
   // 人设
   personaGet: () => ipcRenderer.invoke('persona:get'),
+  personaLock: (o) => ipcRenderer.invoke('persona:lock', o),
+  onPersonaChanged: (cb) => ipcRenderer.on('persona:changed', (_e, d) => cb(d)),
   personaSet: (patch) => ipcRenderer.invoke('persona:set', patch),
+  personaEvolve: () => ipcRenderer.invoke('persona:evolve'),
   // 记忆
   memoryGet: () => ipcRenderer.invoke('memory:get'),
   memoryDelete: (ref) => ipcRenderer.invoke('memory:delete', ref),
   moodGet: () => ipcRenderer.invoke('mood:get'),
   moodAdjust: (d) => ipcRenderer.invoke('mood:adjust', d),
-  assistantRun: (a) => ipcRenderer.invoke('assistant:run', a),
+  assistantInspect: (action) => ipcRenderer.invoke('assistant:inspect', action),
+  assistantApprove: (action) => ipcRenderer.invoke('assistant:approve', action),
+  assistantRun: (request) => ipcRenderer.invoke('assistant:run', request),
+  chatContinue: (p) => ipcRenderer.invoke('chat:continue', p),
+  gameStart: (o) => ipcRenderer.invoke('game:start', o),
+  gameStop: () => ipcRenderer.invoke('game:stop'),
+  gameStatus: () => ipcRenderer.invoke('game:status'),
+  onGameLog: (cb) => ipcRenderer.on('game:log', (_e, d) => cb(d)),
   dshState: () => ipcRenderer.invoke('dsh:state'),
   vocabList: () => ipcRenderer.invoke('vocab:list'),
   vocabAdd: (w) => ipcRenderer.invoke('vocab:add', w),
@@ -65,5 +98,16 @@ contextBridge.exposeInMainWorld('petAPI', {
   ttsSpeak: (payload) => ipcRenderer.invoke('tts:speak', payload),
   artGet: () => ipcRenderer.invoke('art:get'),
   artOpen: () => ipcRenderer.invoke('art:open'),
+  skillsOpen: () => ipcRenderer.invoke('skills:open'),
+  skillsList: () => ipcRenderer.invoke('skills:list'),
+  skillsArchive: () => ipcRenderer.invoke('skills:archive'),
+  skillsPool: () => ipcRenderer.invoke('skills:pool'),
+  styleGet: () => ipcRenderer.invoke('style:get'),
+  styleEnsure: (force) => ipcRenderer.invoke('style:ensure', force),
+  projWrite: (files) => ipcRenderer.invoke('proj:write', files),
+  statsTask: (o) => ipcRenderer.invoke('stats:task', o),
+  statsGet: () => ipcRenderer.invoke('stats:get'),
+  projOpen: (rel) => ipcRenderer.invoke('proj:open', rel),
+  projOpenFolder: (rel) => ipcRenderer.invoke('proj:openFolder', rel),
   artReset: () => ipcRenderer.invoke('art:reset')
 });

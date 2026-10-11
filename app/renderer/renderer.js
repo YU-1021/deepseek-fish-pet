@@ -31,6 +31,93 @@ let hideTimer = null;
 let listening = true, chatOpen = false, rec = null, busy = false, curUtter = null;
 let clickCount = 0, clickTimer = null, lastMicErr = 0, pokeCount = 0, pokeTimer = null;
 let petting = false, petAccum = 0, lastPetX = 0, patCd = 0, patFired = false, feedCount = 0, feedTimer = null, holding = false;
+let partialTurn = false;   // 声明放前面：endTurn() 会复位它，不能落在 TDZ 里
+
+/* ---------------- 交互系统：交互模式 / 聊天模式 ----------------
+ * 交互模式：点/摸立绘不同部位出不同动作；动作按**核心人格**变（主进程 pet-actions.json 解析）。
+ *           这个模式**不拖拽、不戳**，摸头挪到这里。
+ * 聊天模式：可拖拽、可戳（原来的行为）。
+ * 立绘姿态槽：动作可以带一个 pose 名 → 按名字去主进程取图
+ *   %APPDATA%/dayu-pet/art/poses/<pose>.png  丢进去就生效；没有这张图就只用 CSS 形变，不报错。
+ */
+let petMode = 'interact';
+let curPose = '';
+let poseTimer = null;
+let lastDownX = 0, lastDownY = 0;
+const poseUrlCache = Object.create(null);
+
+async function setPose(name, holdMs) {
+  clearTimeout(poseTimer);
+  if (!name) return;
+  if (!(name in poseUrlCache)) {
+    let r = null;
+    try { r = await window.petAPI.artPose(name); } catch {}
+    poseUrlCache[name] = (r && r.ok && r.dataUrl) ? r.dataUrl : null;
+  }
+  const url = poseUrlCache[name];
+  if (!url) return;                     // 没画这张图 → 静默跳过
+  curPose = name;
+  pet.src = url;
+  if (holdMs) poseTimer = setTimeout(() => { curPose = ''; if (baseArtUrl) pet.src = baseArtUrl; }, holdMs);
+}
+function clearPose() {
+  clearTimeout(poseTimer);
+  if (!curPose) return;
+  curPose = '';
+  if (baseArtUrl) pet.src = baseArtUrl;
+}
+
+/* 播一个动作：形变 + 特效 + 姿态 +（预置）台词 */
+function playAction(act, cx, cy) {
+  if (!act) return;
+  const anim = act.anim && act.anim !== 'none' ? act.anim : '';
+  if (anim) {
+    const cls = 'act-' + anim;
+    pet.classList.add(cls);
+    setTimeout(() => pet.classList.remove(cls), 950);
+  }
+  if (act.fx) fx(act.fx, cx, cy);
+  if (act.pose) setPose(act.pose, 1500);
+  // 走模型的部位主进程会把台词用 pet:say 推过来，这里不重复渲染
+  // 预置台词是 { en, zh }：en 朗读 + 气泡，zh 是翻译
+  if (!act.fromLLM && act.say) {
+    const en = act.say.en || act.say.zh || '';
+    if (en) showReply({ en, zh: act.say.zh || '' }, 5000);
+  }
+}
+
+/* 点到一个热区 → 交给主进程解析动作 */
+async function interactAt(cx, cy) {
+  const rg = regionAt(cx, cy);
+  if (!rg) return;
+  let act = null;
+  try { act = await window.petAPI.petInteract(rg); }
+  catch (e) { try { window.petAPI.logErr('pet interact fail: ' + ((e && e.message) || e)); } catch {} }
+  if (!act || !act.ok) return;
+  playAction(act, cx, cy);
+}
+
+/* MOOD: 行 → 小动作（Live2D 之前的手工版：先用 CSS 形变顶上） */
+const MOOD_ANIM = [
+  [/开心|高兴|雀跃|欢喜|得意|满足|温暖|甜|兴奋|雀/, 'sparkle'],
+  [/害羞|脸红|羞|心动|怦|慌/, 'blush'],
+  [/生气|恼|怒|不爽|不满|炸|气鼓/, 'shake'],
+  [/低落|难过|失落|丧|委屈|寂寞|蔫|闷/, 'look_away'],
+  [/惊|吓|意外|愣|惊愕/, 'surprise'],
+  [/傲|挑衅|坏笑|狡|得意/, 'smug'],
+];
+function moodToAnim(mood) {
+  const s = String(mood || '');
+  if (!s) return '';
+  for (const [re, a] of MOOD_ANIM) if (re.test(s)) return a;
+  return '';
+}
+function actAnim(a) {
+  if (!a || a === 'none') return;
+  const cls = 'act-' + a;
+  pet.classList.add(cls);
+  setTimeout(() => pet.classList.remove(cls), 950);
+}
 
 /* ---------------- 互动特效 ---------------- */
 function fx(emoji, x, y, cls) {
@@ -147,7 +234,8 @@ function showReply(reply, hold) {
       if (c && c.en) sendText(c.en);
     });
   });
-  if (reply.silent) { stopSpeech(); busy = false; resumeListening(); }
+  if (reply.noSpeak) { /* 流式里英文已经读过了：只更新气泡，不打断也不重读 */ }
+  else if (reply.silent) { stopSpeech(); endTurn(); }
   else speak(reply.en);
 }
 
@@ -174,6 +262,28 @@ function stopSpeech() {
   try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch {}
 }
 
+/* 一轮对话的收尾统一走这里：清 busy + 复位安全兜底 + 恢复收音。
+   以前安全兜底用的是局部 const safety，而且 clearTimeout 紧跟在 await chatSend
+   之后就执行（finally），可 busy 真正是在朗读结束时才复位的 —— 朗读环节一卡
+   （ttsSpeak 长时间不返回、system voice 的 onend 不触发），busy 就永久为 true，
+   桌宠彻底不再收音、也不再响应，而且没有任何自救路径。现在兜底覆盖**整轮**。 */
+let turnSafety = null;
+function endTurn() {
+  clearTimeout(turnSafety);
+  turnSafety = null;
+  busy = false;
+  partialTurn = false;     // 流式标记必须一起复位：否则请求失败后，下一条回复会被误判成"已经读过"而不朗读
+  resumeListening();
+}
+function armTurnSafety(ms) {
+  clearTimeout(turnSafety);
+  turnSafety = setTimeout(() => {
+    if (!busy) return;
+    try { window.petAPI.logErr('turn safety: 一轮对话超时（' + ms + 'ms），强制复位'); } catch {}
+    endTurn();
+  }, ms || 90000);
+}
+
 function speakFallback(text, seq, done) {
   if (seq !== speakSeq || !window.speechSynthesis) { done(); return; }
   try {
@@ -187,11 +297,11 @@ function speakFallback(text, seq, done) {
 }
 
 async function speak(text) {
-  if (!text) { busy = false; resumeListening(); return; }
+  if (!text) { endTurn(); return; }
   pauseListening();
   stopSpeech();
   const seq = speakSeq;
-  const done = () => { if (seq === speakSeq) { busy = false; resumeListening(); } };
+  const done = () => { if (seq === speakSeq) endTurn(); };
   let ok = false;
   try {
     const cfg = await window.petAPI.configGet();
@@ -218,16 +328,13 @@ async function sendText(text) {
   if (!text || busy) return;
   busy = true;
   pauseListening();
-  const safety = setTimeout(() => { if (busy) { busy = false; resumeListening(); } }, 30000);
+  armTurnSafety(90000);
   try {
     await window.petAPI.chatSend({ text });
-    // 回复通过 onSay 展示，busy 在 speak 结束时清除
+    // 回复通过 onSay 展示，busy 在 speak 结束时清除（兜底在 armTurnSafety 里，覆盖到朗读结束）
   } catch (e) {
     showReply({ en: 'Sorry, something went wrong: ' + e.message, zh: '' }, 6000);
-    busy = false;
-    resumeListening();
-  } finally {
-    clearTimeout(safety);
+    endTurn();
   }
 }
 
@@ -332,18 +439,26 @@ function pauseListening() {
 function resumeListening() { if (chatOpen || busy) return; listening = true; startListening(); }
 
 /* ---------------- 拖拽 / 摸头 / 戳（全区域） ----------------
-   拖拽：mousemove 只当触发器，主进程读真实光标坐标来算目标位置，
-   所以窗口移动不会影响坐标（不会漂移）。 */
+   拖拽：mousedown 发 drag-start（主进程开 8ms 自采样定时器）、
+   mouseup 发 drag-end（关定时器）；移动由主进程定时器读真实光标坐标完成，
+   渲染层 mousemove 不再逐帧触发（只用来统计 dragMoved 判断"拖拽还是点一下"）。 */
 let dragging = false, dragMoved = 0;
 
 pet.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;               // 只左键
   holding = true;
+  lastDownX = e.clientX; lastDownY = e.clientY;
   try { window.petAPI.hold(true); } catch {}   // 按住期间强制窗口可交互，别拖到一半被穿透打断
   const r = pet.getBoundingClientRect();
-  if ((e.clientY - r.top) / Math.max(1, r.height) < 0.42) {
-    petting = true; petAccum = 0; lastPetX = e.clientX; patFired = false;   // 头部：左右滑 = 摸头
+  const ratioY = (e.clientY - r.top) / Math.max(1, r.height);
+  if (petMode === 'interact') {
+    /* 交互模式：**不拖拽、不戳**。头部左右滑 = 摸头（挪进来的），其余部位点一下出动作。 */
+    if (ratioY < 0.42) {
+      petting = true; petAccum = 0; lastPetX = e.clientX; patFired = false;
+    }
   } else {
-    dragging = true; dragMoved = 0;                                          // 身体：按住拖窗口
+    /* 聊天模式：可拖拽、可戳（头部也一样 —— 摸头已经挪去交互模式了） */
+    dragging = true; dragMoved = 0;
     window.petAPI.dragStart();
   }
   e.preventDefault();
@@ -357,23 +472,46 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragging) return;
-  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);
-  window.petAPI.dragTick();
+  dragMoved += Math.abs(e.movementX) + Math.abs(e.movementY);   // 只用来判断"拖拽还是点一下"
+  // 不再发 dragTick：主进程 8ms 定时器自采样，避免 setPosition 中断 mousemove 造成断流
 });
 window.addEventListener('mouseup', () => {
   holding = false;
   try { window.petAPI.hold(false); } catch {}
   if (petting) {
     petting = false;
-    if (!patFired) pokeBody();          // 头部点一下 = 戳
+    /* 交互模式：头部点一下（没滑动）= 摸摸头（不再戳） */
+    if (!patFired) patTrigger(lastDownX, lastDownY);
     return;
   }
-  if (!dragging) return;
+  if (!dragging) {
+    /* 交互模式：身体点一下 → 出那个部位的动作 */
+    if (petMode === 'interact') interactAt(lastDownX, lastDownY);
+    return;
+  }
   dragging = false;
   window.petAPI.dragEnd();
-  if (dragMoved < 6) pokeBody();        // 身体点一下 = 戳
+  if (dragMoved < 6) pokeBody();        // 聊天模式：身体点一下 = 戳
 });
 window.addEventListener('mouseleave', () => { try { updateHit(-1, -1); } catch {} });
+
+/* 失焦/隐藏时把"按住"状态收干净。 */
+function releasePointerState(why) {
+  if (!holding && !dragging && !petting) return;
+  const wasDragging = dragging;
+  holding = false; petting = false; dragging = false;
+  try { window.petAPI.hold(false); } catch {}
+  if (wasDragging) { try { window.petAPI.dragEnd(); } catch {} }
+  try { window.petAPI.logErr('pointer released by ' + why); } catch {}
+}
+window.addEventListener('blur', () => {
+  try { window.petAPI.logErr('[pointer-diag] blur ' + JSON.stringify({ holding, dragging, petting })); } catch {}
+  releasePointerState('blur');
+});
+document.addEventListener('visibilitychange', () => {
+  try { window.petAPI.logErr('[pointer-diag] visibility ' + JSON.stringify({ hidden: document.hidden, holding, dragging, petting })); } catch {}
+  if (document.hidden) { releasePointerState('hidden'); }
+});
 
 // 连点 15 下才打开对话窗口（避免误触）
 pet.addEventListener('click', () => {
@@ -384,7 +522,24 @@ pet.addEventListener('click', () => {
 });
 
 /* ---------------- 跨窗口 ---------------- */
-if (window.petAPI.onSay) window.petAPI.onSay((reply) => { if (reply && reply.en) showReply(reply); });
+if (window.petAPI.onSayPartial) window.petAPI.onSayPartial((d) => {
+  if (!d || !d.en) return;
+  partialTurn = true;
+  showReply({ en: d.en, zh: '', words: [], choices: [] });   // 英文先冒出来 + 先开始读
+});
+if (window.petAPI.onSay) window.petAPI.onSay((reply) => {
+  if (!reply || !reply.en) return;
+  if (partialTurn) { partialTurn = false; reply = { ...reply, noSpeak: true }; }   // 已经读过一遍，最终版别重读
+  showReply(reply);
+  /* MOOD: 行 → 小动作（Live2D 之前的手工版） */
+  try { actAnim(moodToAnim(reply.mood)); } catch {}
+  // 她若答应要操作电脑（ACTION），桌宠窗口自己执行不了 —— 自动把对话窗叫出来接着做。
+  // 但 silent=true 表示这句话是对话窗问出来的，对话窗自己会执行这个动作；
+  // 这里再转一次就成了"同一件事做两遍"（use_skill 白跑一趟，click 会点两下）。
+  if (!reply.silent && reply.action && reply.action.tool && window.petAPI.runPetAction) {
+    try { window.petAPI.runPetAction(reply.action); } catch {}
+  }
+});
 if (window.petAPI.onChatState) window.petAPI.onChatState((open) => { chatOpen = open; if (open) pauseListening(); else resumeListening(); });
 if (window.petAPI.onFeed) window.petAPI.onFeed(() => feedFish());
 if (window.petAPI.onPat) window.petAPI.onPat(() => {
@@ -485,24 +640,23 @@ window.addEventListener('wheel', (e) => {
   if (!e.deltaY) return;
   setSize(petSize + (e.deltaY < 0 ? 16 : -16));
 }, { passive: false });
-window.addEventListener('blur', () => {
-  holding = false;
-  if (petting) petting = false;
-});
 
 /* ---------------- 外部立绘热更新（免打包换图） ---------------- */
 let artMtime = -1;
 let artFallback = false;
+let baseArtUrl = '';        // 基础立绘（姿态用完要还原到这张）
 async function loadArt() {
   try {
     const a = await window.petAPI.artGet();
     // 一律用 dataUrl：file:// 的图会把 canvas 标记为不可读，像素级命中就做不了
     if (a && a.ok && a.dataUrl && a.mtime !== artMtime) {
       artMtime = a.mtime;
-      pet.src = a.dataUrl;
+      baseArtUrl = a.dataUrl;
+      if (!curPose) pet.src = a.dataUrl;      // 正在播姿态就别抢
     } else if ((!a || !a.ok) && !artFallback) {
       artFallback = true;
-      pet.src = '../assets/pet-character.png';
+      baseArtUrl = '../assets/pet-character.png';
+      if (!curPose) pet.src = baseArtUrl;
     }
   } catch {}
 }
@@ -595,7 +749,52 @@ function updateHit(cx, cy) {
   return true;
 }
 
-pet.addEventListener('load', () => { try { applySize(); buildHitCanvas(); } catch {} });
+/* ---------------- 模式徽标（交互 / 聊天） ----------------
+ * 贴在**立绘包围盒内**的右上角：包围盒外会被点穿（点不到），所以位置要跟着立绘尺寸算。 */
+const modeBadge = document.getElementById('modeBadge');
+function placeBadge() {
+  try {
+    const r = pet.getBoundingClientRect();
+    if (!r.width) return;
+    modeBadge.style.left = Math.round(r.right - 26) + 'px';
+    modeBadge.style.top = Math.round(r.top + 2) + 'px';
+  } catch {}
+}
+function applyModeUI() {
+  try {
+    modeBadge.textContent = petMode === 'chat' ? '💬' : '✋';
+    modeBadge.title = petMode === 'chat'
+      ? '聊天模式：可拖拽、可戳。点一下切到交互模式'
+      : '交互模式：点立绘不同部位出不同动作（不拖拽、不戳）。点一下切到聊天模式';
+    modeBadge.classList.toggle('chat', petMode === 'chat');
+    pet.style.cursor = petMode === 'chat' ? 'grab' : 'pointer';
+  } catch {}
+}
+async function setMode(m, fromServer) {
+  petMode = (m === 'chat') ? 'chat' : 'interact';
+  if (!fromServer) { try { await window.petAPI.petSetMode(petMode); } catch {} }
+  /* 切模式时把手上的状态收干净：别拖到一半换模式，指针状态卡住 */
+  try {
+    if (petting) petting = false;
+    if (dragging) { dragging = false; window.petAPI.dragEnd(); }
+  } catch {}
+  if (typeof clearPose === 'function') clearPose();
+  applyModeUI();
+  placeBadge();
+}
+modeBadge.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setMode(petMode === 'chat' ? 'interact' : 'chat');
+});
+modeBadge.addEventListener('mousedown', (e) => e.stopPropagation());
+if (window.petAPI.onPetMode) window.petAPI.onPetMode((d) => setMode(d && d.mode, true));
+(async () => {
+  try { const r = await window.petAPI.petGetMode(); setMode(r && r.mode, true); } catch { applyModeUI(); }
+  placeBadge();
+})();
+window.addEventListener('resize', placeBadge);
+
+pet.addEventListener('load', () => { try { applySize(); buildHitCanvas(); } catch {} try { placeBadge(); } catch {} });
 loadArt();
 setInterval(loadArt, 3000);
 

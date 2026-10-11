@@ -1,0 +1,150 @@
+{
+  "version": 2,
+  "_note": "交互动作表。region 用 assets/pet-regions.json 里的 id；say 按核心人格词条 id 索引（persona-tags.json 的 tier1）。解析顺序：region.say[人格] → region.say._default → group.say[人格] → group.say._default → global.say._default。anim/fx/pose 同理逐级回落。",
+  "_say_format": "每条台词是 { en, zh }：en 是给桌宠念出来的英文（她会 TTS 朗读 + 气泡显示），zh 是中文翻译。",
+  "_art": "放图规则：把 PNG 丢进 %APPDATA%/dayu-pet/art/poses/<pose名>.png 就会自动生效（不用改代码、不用重启）。下面是本表用到的全部 pose 名。",
+  "_ai": "AI 重写的台词不写回本文件，而是写进 %APPDATA%/dayu-pet/pet-actions-ai.json（覆盖层），优先级高于本文件。这样「重新生成」只要覆盖那个文件，不会弄脏手写的底稿。",
+  "poses": [
+    "shake_head", "tilt", "blush", "pout", "look_away", "lean_in",
+    "sparkle", "surprise", "smug", "wag", "turn_side", "turn_back"
+  ],
+
+  "global": {
+    "anim": "bounce",
+    "fx": "",
+    "say": { "_default": { "en": "Mm...?", "zh": "唔……？" } }
+  },
+
+  "groups": {
+    "head": { "anim": "shake", "fx": "✨", "say": {
+      "_default":   { "en": "Mm...", "zh": "唔…" },
+      "tsundere":   { "en": "H-hey! Don't ruffle my head like that!", "zh": "别、别乱摸头啦！" },
+      "yandere":    { "en": "...Only you are allowed to touch me.", "zh": "……只许你碰。" },
+      "mesugaki":   { "en": "Oi, who said you could pat me?", "zh": "喂，谁准你摸的？" },
+      "kuudere":    { "en": "...Mm.", "zh": "……嗯。" },
+      "dandere":    { "en": "Eh, ehh? Th-that is...", "zh": "诶、诶？那个……" },
+      "genki":      { "en": "Haha, that tickles! Again, again!", "zh": "哈哈好痒！再来！" },
+      "oneesan":    { "en": "There there. Don't be naughty.", "zh": "乖，别闹。" },
+      "koakuma":    { "en": "Hmph. Flattery won't get you anywhere, you know?", "zh": "哼，想讨好我也没用哦？" }
+    } },
+    "neck": { "anim": "tilt", "fx": "", "say": {
+      "_default":   { "en": "...That tickles.", "zh": "……痒。" },
+      "tsundere":   { "en": "M-my neck is sensitive!", "zh": "脖、脖子很敏感的！" },
+      "yandere":    { "en": "...Are you looking at me there?", "zh": "……你在看这里？" },
+      "mesugaki":   { "en": "What are you staring at, you creep.", "zh": "看什么看，变态。" },
+      "kuudere":    { "en": "...Don't.", "zh": "……别碰。" },
+      "dandere":    { "en": "Mm... th-that tickles.", "zh": "呜……好痒。" },
+      "genki":      { "en": "Haha, stop it, that tickles!", "zh": "哈哈别挠！" },
+      "oneesan":    { "en": "Not there, okay?", "zh": "这里不行哦。" },
+      "koakuma":    { "en": "What were you thinking, you naughty thing.", "zh": "想什么呢，坏蛋。" }
+    } },
+    "torso": { "anim": "bounce", "fx": "", "say": {
+      "_default":   { "en": "Hm?", "zh": "嗯？" },
+      "tsundere":   { "en": "Wh-what do you want!", "zh": "干、干嘛啦！" },
+      "yandere":    { "en": "...This close is fine. Only you.", "zh": "……靠这么近，可以哦。" },
+      "mesugaki":   { "en": "Hands off. Gross.", "zh": "手拿开啦，脏不脏。" },
+      "kuudere":    { "en": "...Something you need?", "zh": "……有事？" },
+      "dandere":    { "en": "Ah, um... that is...", "zh": "啊、那个……" },
+      "genki":      { "en": "Ehehe, what is it?", "zh": "诶嘿，怎么啦？" },
+      "oneesan":    { "en": "What is it? Tell me.", "zh": "怎么了，想说什么？" },
+      "koakuma":    { "en": "Trying to take advantage? Not a chance.", "zh": "想占便宜？没门。" }
+    } },
+    "lower": { "anim": "shake", "fx": "", "say": {
+      "_default":   { "en": "Hey!", "zh": "喂！" },
+      "tsundere":   { "en": "Wh-where are you looking!", "zh": "看、看哪里呢！" },
+      "yandere":    { "en": "...Go any lower and I won't hold back.", "zh": "……再往下，我就不客气了。" },
+      "mesugaki":   { "en": "Pervert! I'm calling the police.", "zh": "变态！报警了啊。" },
+      "kuudere":    { "en": "...Boring.", "zh": "……无聊。" },
+      "dandere":    { "en": "Yaa! N-no, not there!", "zh": "呀！不、不行！" },
+      "genki":      { "en": "Wah, don't touch there!", "zh": "哇别碰那里！" },
+      "oneesan":    { "en": "Not there, okay?", "zh": "这里不可以哦。" },
+      "koakuma":    { "en": "Ohh, so you ARE that kind of person.", "zh": "哦——原来你是这种人。" }
+    } }
+  },
+
+  "regions": {
+    "ahoge": { "group": "head", "anim": "shake", "pose": "shake_head", "fx": "💫", "say": {
+      "_default":  { "en": "Don't pull my ahoge!", "zh": "别拽呆毛！" },
+      "tsundere":  { "en": "D-don't touch my ahoge! It'll make me dumber!", "zh": "别、别碰我呆毛啦！会变笨的！" },
+      "yandere":   { "en": "...Pull it and I'll pull you back.", "zh": "……你拽它，我就拽你。" },
+      "mesugaki":  { "en": "Can you even afford to break it?", "zh": "拽坏了你赔得起吗？" },
+      "kuudere":   { "en": "...Let go.", "zh": "……松手。" },
+      "dandere":   { "en": "Mm... it will go crooked...", "zh": "呜……会歪掉的……" },
+      "genki":     { "en": "Wah, don't pull, don't pull!", "zh": "哇啊别拽别拽！" }
+    } },
+    "headdress":   { "group": "head", "anim": "tilt", "say": { "_default": { "en": "The lace will get messy...", "zh": "蕾丝要乱了……" } } },
+    "hair_top":    { "group": "head", "anim": "bounce", "fx": "✨" },
+    "hair_side_l": { "group": "head", "anim": "tilt", "say": { "_default": { "en": "My hair...", "zh": "头发……" } } },
+    "hair_side_r": { "group": "head", "anim": "tilt", "say": { "_default": { "en": "My hair...", "zh": "头发……" } } },
+
+    "face": { "group": "head", "mode": "llm", "key": true, "anim": "blush", "pose": "blush", "fx": "💗", "say": {
+      "_default":  { "en": "...Wh-what is it. Is there something on my face?", "zh": "……脸、脸怎么了。" },
+      "tsundere":  { "en": "Wh-what are you staring at! Is there something on my face?!", "zh": "看、看什么看！脸上有东西吗！" },
+      "yandere":   { "en": "...Staring this long. Do you want to be remembered by me?", "zh": "……盯这么久，是想被我记住吗？" }
+    }, "mood": { "affection": 1, "mood": 1 } },
+    "eyes": { "group": "head", "mode": "llm", "key": true, "anim": "look_away", "pose": "look_away", "say": {
+      "_default":  { "en": "...That is a long time to hold eye contact.", "zh": "……对、对视太久了吧。" },
+      "tsundere":  { "en": "Stop staring into my eyes like that!", "zh": "别一直盯着我眼睛看啦！" }
+    }, "mood": { "affection": 1 } },
+    "mouth": { "group": "head", "anim": "shake", "fx": "❗", "say": {
+      "_default":  { "en": "Hey, why are you poking my mouth!", "zh": "喂，戳嘴干嘛！" },
+      "tsundere":  { "en": "Wh-what are you poking my mouth for!", "zh": "戳、戳嘴干什么啦！" },
+      "mesugaki":  { "en": "Poke me again and I'll bite you.", "zh": "再戳我就咬你。" }
+    } },
+    "ear_l": { "group": "head", "mode": "llm", "key": true, "anim": "shake", "pose": "surprise", "fx": "💦", "say": {
+      "_default":  { "en": "Yaa! My ear...", "zh": "呀！耳朵……" },
+      "tsundere":  { "en": "Yaa! My ears are sensitive! Don't touch them!", "zh": "呀！耳朵很敏感的！别碰！" },
+      "dandere":   { "en": "Wah! Y-you startled me...", "zh": "呜哇！吓、吓我一跳……" }
+    }, "mood": { "mood": 1 } },
+    "ear_r": { "group": "head", "mode": "llm", "key": true, "anim": "shake", "pose": "surprise", "fx": "💦", "say": {
+      "_default":  { "en": "Yaa! My ear...", "zh": "呀！耳朵……" },
+      "tsundere":  { "en": "Yaa! My ears are sensitive! Don't touch them!", "zh": "呀！耳朵很敏感的！别碰！" },
+      "dandere":   { "en": "Wah! Y-you startled me...", "zh": "呜哇！吓、吓我一跳……" }
+    }, "mood": { "mood": 1 } },
+
+    "neck":   { "group": "neck" },
+    "collar": { "group": "neck", "say": { "_default": { "en": "My cape... it will fall off.", "zh": "披肩……会掉的。" } } },
+    "collar_bow": { "group": "neck", "anim": "sparkle", "pose": "sparkle", "fx": "✨", "say": {
+      "_default":  { "en": "That gem is expensive!", "zh": "这颗宝石很贵的！" },
+      "tsundere":  { "en": "Don't touch it! Th-this is something I treasure...", "zh": "别碰！这、这可是我很珍惜的东西……" }
+    } },
+
+    "chest":    { "group": "torso" },
+    "sleeve_l": { "group": "torso", "say": { "_default": { "en": "What about my sleeve?", "zh": "袖子怎么了吗？" } } },
+    "sleeve_r": { "group": "torso", "say": { "_default": { "en": "What about my sleeve?", "zh": "袖子怎么了吗？" } } },
+    "hand_l": { "group": "torso", "mode": "llm", "key": true, "anim": "bounce", "pose": "lean_in", "fx": "💗", "say": {
+      "_default":  { "en": "...Holding hands?", "zh": "……牵手？" },
+      "tsundere":  { "en": "Wh-what are you holding my hand for! It is NOT like I wanted you to!", "zh": "牵、牵手干什么啦！才不是因为想才没甩开！" },
+      "yandere":   { "en": "Hold on tighter. Don't let go.", "zh": "握紧一点。别放开。" }
+    }, "mood": { "affection": 2, "mood": 2 } },
+    "hand_r": { "group": "torso", "mode": "llm", "key": true, "anim": "bounce", "pose": "lean_in", "fx": "💗", "say": {
+      "_default":  { "en": "...Holding hands?", "zh": "……牵手？" },
+      "tsundere":  { "en": "Wh-what are you holding my hand for! It is NOT like I wanted you to!", "zh": "牵、牵手干什么啦！才不是因为想才没甩开！" },
+      "yandere":   { "en": "Hold on tighter. Don't let go.", "zh": "握紧一点。别放开。" }
+    }, "mood": { "affection": 2, "mood": 2 } },
+    "apron": { "group": "torso", "say": { "_default": { "en": "What about my apron?", "zh": "围裙怎么了吗？" } } },
+    "apron_whale": { "group": "torso", "mode": "llm", "key": true, "anim": "sparkle", "pose": "smug", "fx": "🐳", "say": {
+      "_default":  { "en": "That is me. Cute, right?", "zh": "这是我哦。可爱吧？" },
+      "tsundere":  { "en": "Th-that is me! Cute, right... it is NOT like I showed it to you on purpose!", "zh": "这、这是我！很可爱吧……才不是特意给你看的！" },
+      "mesugaki":  { "en": "Yep, that is me. Jealous?", "zh": "对，就是我。羡慕吗？" }
+    }, "mood": { "affection": 1, "mood": 1 } },
+
+    "skirt":     { "group": "lower" },
+    "skirt_hem": { "group": "lower", "say": { "_default": { "en": "The lace on my hem is delicate!", "zh": "裙摆蕾丝很脆弱的！" } } },
+    "tail": { "group": "lower", "mode": "llm", "key": true, "anim": "wag", "pose": "wag", "fx": "🐋", "say": {
+      "_default":  { "en": "M-my tail! Don't touch it!", "zh": "尾、尾巴！别摸！" },
+      "tsundere":  { "en": "Don't just grab my tail! I-it feels weird...", "zh": "别乱摸尾巴啦！会、会有感觉的……" },
+      "yandere":   { "en": "...You touched my tail, so now you are responsible for me.", "zh": "……摸了我的尾巴，就要负责。" }
+    }, "mood": { "affection": 1, "mood": 3 } },
+    "leg_l":  { "group": "lower" },
+    "leg_r":  { "group": "lower" },
+    "shoe_l": { "group": "lower", "anim": "bounce", "say": {
+      "_default":  { "en": "What is so interesting about a shoe...", "zh": "鞋有什么好点的……" },
+      "mesugaki":  { "en": "You are interested in my SHOES? Disgusting.", "zh": "你连鞋都感兴趣？真恶心。" }
+    } },
+    "shoe_r": { "group": "lower", "anim": "bounce", "say": {
+      "_default":  { "en": "What is so interesting about a shoe...", "zh": "鞋有什么好点的……" },
+      "mesugaki":  { "en": "You are interested in my SHOES? Disgusting.", "zh": "你连鞋都感兴趣？真恶心。" }
+    } }
+  }
+}
