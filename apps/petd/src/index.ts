@@ -13,16 +13,24 @@
  * 参数：--home <dir> / --port <n> / --echo / --version / --help
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { PROTOCOL_VERSION } from '@petd/protocol';
 import { EventBus } from './kernel/events.js';
 import { systemClock } from './kernel/clock.js';
 import { ensurePaths, resolvePaths } from './kernel/paths.js';
-import { loadConfig } from './kernel/config.js';
+import { loadConfig, saveConfigAtomic } from './kernel/config.js';
 import { createLogger, type Logger } from './kernel/logger.js';
+import { loadSecrets, saveSecretsAtomic } from './kernel/secrets.js';
 import { MethodRegistry } from './gateway/registry.js';
 import { Gateway } from './gateway/server.js';
 import { loadOrCreateToken, removeIfExists, writeJsonAtomic, type GatewayFileRecord } from './gateway/auth.js';
 import { registerHealth } from './gateway/methods/health.js';
+import { registerChatMethods } from './gateway/methods/chat.js';
+import { ChatStore } from './chat/store.js';
+import { ChatService } from './chat/service.js';
+import { ensureSoul, loadSoul, FALLBACK_SOUL } from './chat/persona.js';
+import { readLegacyImport } from './chat/legacy.js';
+import { createLlmClient } from './llm/client.js';
 
 interface CliArgs {
   home?: string;
@@ -115,6 +123,50 @@ async function main(): Promise<void> {
   const token = loadOrCreateToken(paths.tokenFile);
   const registry = new MethodRegistry();
   const bus = new EventBus(() => systemClock.now());
+
+  // ── 旧版迁移（只读旧目录，一次性）：config.llm / secrets.json / SOUL.md ──
+  const legacy = readLegacyImport();
+  let configDirty = false;
+  if (legacy.config) {
+    if (legacy.config.apiBase && config.llm.apiBase === 'https://api.deepseek.com/v1') {
+      config.llm.apiBase = legacy.config.apiBase;
+      configDirty = true;
+    }
+    if (legacy.config.model && config.llm.model === 'deepseek-flash') {
+      config.llm.model = legacy.config.model;
+      configDirty = true;
+    }
+  }
+  if (configDirty) {
+    saveConfigAtomic(paths.configFile, config);
+    logger.info('已从旧版 config.json 补齐 llm 设置', { apiBase: config.llm.apiBase, model: config.llm.model });
+  }
+  const secretsFile = path.join(paths.home, 'secrets.json');
+  const secrets = loadSecrets(secretsFile);
+  if (!secrets.llm.apiKey && legacy.config?.apiKey) {
+    secrets.llm.apiKey = legacy.config.apiKey;
+    saveSecretsAtomic(secretsFile, secrets);
+    logger.info('已从旧版 config.json 迁移 API Key 到 secrets.json（不打印密钥）');
+  }
+  if (!secrets.llm.apiKey) logger.warn('尚未配置模型 API Key：聊天会返回 E_LLM_AUTH（写入 secrets.json 或设 PETD_LLM_API_KEY）');
+  const soul = ensureSoul(paths.home, config.chat.systemPromptFile, legacy.persona);
+  if (soul.created) logger.info('已播种人格文件', { file: path.join(paths.home, config.chat.systemPromptFile), source: legacy.persona ? '旧 persona.json' : '内置默认' });
+
+  const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
+  const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
+  // 先发到进程内总线；网关起来后改为经 Gateway.publish 广播给 WS 客户端
+  let publishEvent: (event: string, data?: unknown) => void = (event, data) => {
+    bus.emit(event, data);
+  };
+  const chat = new ChatService({
+    store,
+    llm,
+    chat: config.chat,
+    publish: (event, data) => publishEvent(event, data),
+    systemPrompt: () => loadSoul(paths.home, config.chat.systemPromptFile) ?? FALLBACK_SOUL,
+    logger,
+  });
+
   const gateway = new Gateway({
     host: config.gateway.host,
     port: config.gateway.port,
@@ -126,6 +178,7 @@ async function main(): Promise<void> {
     logger,
     clock: systemClock,
   });
+  publishEvent = (event, data) => gateway.publish(event, data);
   registerHealth(registry, {
     version,
     startedAt,
@@ -135,6 +188,7 @@ async function main(): Promise<void> {
     gateway,
     getConfig: () => config,
   });
+  registerChatMethods(registry, { chat });
 
   const port = await gateway.start();
   const record: GatewayFileRecord = {

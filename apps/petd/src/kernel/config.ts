@@ -21,12 +21,43 @@ export interface PetdConfig {
     /** 单文件上限，超过轮转为 petd.log.1 */
     maxBytes: number;
   };
+  /** LLM 连接（apiKey 不在这里，在 secrets.json） */
+  llm: {
+    apiBase: string;
+    model: string;
+    timeoutMs: number;
+    temperature: number;
+    maxTokens: number;
+    /** V4.1-Flash 默认开思考会拖慢首字且按输出价计费，默认显式关掉 */
+    thinkingDisabled: boolean;
+  };
+  chat: {
+    /** 人格主文件（相对 home） */
+    systemPromptFile: string;
+    /** 发请求时最多带多少条历史消息 */
+    maxHistoryMessages: number;
+    /** 历史消息的字符预算（避免超长） */
+    maxHistoryChars: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
   version: CONFIG_VERSION,
   gateway: { host: '127.0.0.1', port: 0 },
   log: { level: 'info', maxBytes: 5 * 1024 * 1024 },
+  llm: {
+    apiBase: 'https://api.deepseek.com/v1',
+    model: 'deepseek-flash',
+    timeoutMs: 90_000,
+    temperature: 0.7,
+    maxTokens: 2048,
+    thinkingDisabled: true,
+  },
+  chat: {
+    systemPromptFile: 'SOUL.md',
+    maxHistoryMessages: 40,
+    maxHistoryChars: 24_000,
+  },
 };
 
 export interface LoadResult {
@@ -65,6 +96,39 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const mb = log['maxBytes'];
     if (typeof mb === 'number' && Number.isFinite(mb) && mb >= 64 * 1024) out.log.maxBytes = Math.floor(mb);
     else if (mb !== undefined) warnings.push('log.maxBytes 非法，回默认 5MB');
+  }
+  const llm = raw['llm'];
+  if (isObject(llm)) {
+    const base = llm['apiBase'];
+    if (typeof base === 'string' && base.trim()) out.llm.apiBase = base.trim().replace(/\/+$/, '');
+    else if (base !== undefined) warnings.push('llm.apiBase 非法，回默认');
+    const model = llm['model'];
+    if (typeof model === 'string' && model.trim()) out.llm.model = model.trim();
+    else if (model !== undefined) warnings.push('llm.model 非法，回默认');
+    const t = llm['timeoutMs'];
+    if (typeof t === 'number' && Number.isFinite(t) && t >= 1000 && t <= 600_000) out.llm.timeoutMs = Math.floor(t);
+    else if (t !== undefined) warnings.push('llm.timeoutMs 非法，回默认 90s');
+    const temp = llm['temperature'];
+    if (typeof temp === 'number' && Number.isFinite(temp) && temp >= 0 && temp <= 2) out.llm.temperature = temp;
+    else if (temp !== undefined) warnings.push('llm.temperature 非法，回默认 0.7');
+    const mt = llm['maxTokens'];
+    if (typeof mt === 'number' && Number.isInteger(mt) && mt >= 1 && mt <= 100_000) out.llm.maxTokens = mt;
+    else if (mt !== undefined) warnings.push('llm.maxTokens 非法，回默认 2048');
+    const td = llm['thinkingDisabled'];
+    if (typeof td === 'boolean') out.llm.thinkingDisabled = td;
+    else if (td !== undefined) warnings.push('llm.thinkingDisabled 非法，回默认 true');
+  }
+  const chat = raw['chat'];
+  if (isObject(chat)) {
+    const f = chat['systemPromptFile'];
+    if (typeof f === 'string' && f.trim()) out.chat.systemPromptFile = f.trim();
+    else if (f !== undefined) warnings.push('chat.systemPromptFile 非法，回默认 SOUL.md');
+    const mh = chat['maxHistoryMessages'];
+    if (typeof mh === 'number' && Number.isInteger(mh) && mh >= 0 && mh <= 200) out.chat.maxHistoryMessages = mh;
+    else if (mh !== undefined) warnings.push('chat.maxHistoryMessages 非法，回默认 40');
+    const mc = chat['maxHistoryChars'];
+    if (typeof mc === 'number' && Number.isInteger(mc) && mc >= 0 && mc <= 200_000) out.chat.maxHistoryChars = mc;
+    else if (mc !== undefined) warnings.push('chat.maxHistoryChars 非法，回默认 24000');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };
