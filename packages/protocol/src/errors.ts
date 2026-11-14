@@ -18,6 +18,8 @@ export const ErrorCodes = {
   INTERNAL: 'E_INTERNAL',
   /** 目标不存在 */
   NOT_FOUND: 'E_NOT_FOUND',
+  /** 乐观并发冲突（expectedVersion/锁版本不匹配） */
+  CONFLICT: 'E_CONFLICT',
   /** 权限/策略拒绝 */
   FORBIDDEN: 'E_FORBIDDEN',
   /** 服务正在关闭 */

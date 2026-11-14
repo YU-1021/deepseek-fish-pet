@@ -50,7 +50,7 @@ export function buildSoul(persona: LegacyPersona | null): string {
   const hidden = asText(persona.hidden_setting);
   const personality = Array.isArray(persona.personality) ? persona.personality.filter((p) => typeof p === 'string' && p.trim()).join('、') : asText(persona.personality);
 
-  if (identity) lines.push(identity, '');
+  if (identity) lines.push('## 身份', identity, '');
   if (world) lines.push('## 世界观', world, '');
   if (character || personality) {
     lines.push('## 性格');

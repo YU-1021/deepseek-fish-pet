@@ -26,9 +26,11 @@ import { Gateway } from './gateway/server.js';
 import { loadOrCreateToken, removeIfExists, writeJsonAtomic, type GatewayFileRecord } from './gateway/auth.js';
 import { registerHealth } from './gateway/methods/health.js';
 import { registerChatMethods } from './gateway/methods/chat.js';
+import { registerPersonaMethods } from './gateway/methods/persona.js';
 import { ChatStore } from './chat/store.js';
 import { ChatService } from './chat/service.js';
-import { ensureSoul, loadSoul, FALLBACK_SOUL } from './chat/persona.js';
+import { PersonaStore } from './persona/store.js';
+import { evolvePersona } from './persona/evolve.js';
 import { readLegacyImport } from './chat/legacy.js';
 import { createLlmClient } from './llm/client.js';
 
@@ -149,8 +151,20 @@ async function main(): Promise<void> {
     logger.info('已从旧版 config.json 迁移 API Key 到 secrets.json（不打印密钥）');
   }
   if (!secrets.llm.apiKey) logger.warn('尚未配置模型 API Key：聊天会返回 E_LLM_AUTH（写入 secrets.json 或设 PETD_LLM_API_KEY）');
-  const soul = ensureSoul(paths.home, config.chat.systemPromptFile, legacy.persona);
-  if (soul.created) logger.info('已播种人格文件', { file: path.join(paths.home, config.chat.systemPromptFile), source: legacy.persona ? '旧 persona.json' : '内置默认' });
+  const personaStore = new PersonaStore({
+    home: paths.home,
+    file: config.chat.systemPromptFile,
+    legacy: legacy.persona,
+    logger,
+  });
+  const seeded = personaStore.ensure();
+  if (seeded.createdSoul) {
+    logger.info('已播种人格文件', {
+      file: personaStore.soulFile,
+      source: legacy.persona ? '旧 persona.json' : '内置默认',
+      createdState: seeded.createdState,
+    });
+  }
 
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
@@ -163,7 +177,7 @@ async function main(): Promise<void> {
     llm,
     chat: config.chat,
     publish: (event, data) => publishEvent(event, data),
-    systemPrompt: () => loadSoul(paths.home, config.chat.systemPromptFile) ?? FALLBACK_SOUL,
+    systemPrompt: () => personaStore.read().content,
     logger,
   });
 
@@ -189,6 +203,29 @@ async function main(): Promise<void> {
     getConfig: () => config,
   });
   registerChatMethods(registry, { chat });
+
+  // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
+  const recentMessagesFor = (sessionId?: string) => {
+    const meta = sessionId
+      ? store.list().find((s) => s.id === sessionId)
+      : store.list()[0];
+    if (!meta) return [];
+    const session = store.get(meta.id);
+    if (!session) return [];
+    return session.messages.slice(-20).map((m) => ({ role: m.role, content: m.content }));
+  };
+  registerPersonaMethods(registry, {
+    store: personaStore,
+    evolve: async ({ sessionId, signal }) =>
+      evolvePersona({
+        store: personaStore,
+        llm,
+        recentMessages: () => recentMessagesFor(sessionId),
+        ...(signal === undefined ? {} : { signal }),
+        logger,
+      }),
+    publish: (event, data) => publishEvent(event, data),
+  });
 
   const port = await gateway.start();
   const record: GatewayFileRecord = {
