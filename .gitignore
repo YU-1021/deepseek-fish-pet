@@ -42,3 +42,9 @@ __pycache__/
 # convenience files placed for the user at repo root (shortcut + readme), not source
 *.lnk
 启动说明.txt
+
+# dsh-pet 插件的数据与 Electron 运行时（由 DSH 管理，不入库）
+/dsh-pet/
+
+# Coopanion 桌宠（独立 git 仓库，源码从 GitHub clone，不入本库）
+/Coopanion/
