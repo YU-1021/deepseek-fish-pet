@@ -16,6 +16,8 @@ export interface PetdPaths {
   logFile: string;
   stateDir: string;
   runDir: string;
+  /** 工作区记忆目录（文件式长期记忆 + Git 历史）。 */
+  memoryDir: string;
 }
 
 export function defaultHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -33,6 +35,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): PetdPaths {
     logFile: path.join(home, 'petd.log'),
     stateDir: path.join(home, 'state'),
     runDir: path.join(home, 'run'),
+    memoryDir: path.join(home, 'workspace'),
   };
 }
 
@@ -40,4 +43,5 @@ export function ensurePaths(p: PetdPaths): void {
   fs.mkdirSync(p.home, { recursive: true });
   fs.mkdirSync(p.stateDir, { recursive: true });
   fs.mkdirSync(p.runDir, { recursive: true });
+  fs.mkdirSync(p.memoryDir, { recursive: true });
 }

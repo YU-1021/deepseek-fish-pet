@@ -27,12 +27,17 @@ import { loadOrCreateToken, removeIfExists, writeJsonAtomic, type GatewayFileRec
 import { registerHealth } from './gateway/methods/health.js';
 import { registerChatMethods } from './gateway/methods/chat.js';
 import { registerPersonaMethods } from './gateway/methods/persona.js';
+import { registerMemoryMethods } from './gateway/methods/memory.js';
 import { ChatStore } from './chat/store.js';
 import { ChatService } from './chat/service.js';
 import { PersonaStore } from './persona/store.js';
 import { evolvePersona } from './persona/evolve.js';
 import { readLegacyImport } from './chat/legacy.js';
 import { createLlmClient } from './llm/client.js';
+import { WorkspaceMemory } from './memory/store.js';
+import { WorkspaceGit } from './memory/git.js';
+import { MemoryService } from './memory/service.js';
+import { buildChatSystemPrompt } from './memory/prefix.js';
 
 interface CliArgs {
   home?: string;
@@ -166,6 +171,13 @@ async function main(): Promise<void> {
     });
   }
 
+  // ── 工作区记忆：文件式长期记忆 + Git 版本化（形状参考 Cormini，MIT） ──
+  const memory = new WorkspaceMemory({ dir: paths.memoryDir });
+  const memoryGit = new WorkspaceGit(paths.memoryDir, (msg, data) => logger.warn(msg, data));
+  const memoryService = new MemoryService({ memory, git: memoryGit, version, logger });
+  memoryService.ensure();
+  logger.info('工作区记忆已就绪', { dir: paths.memoryDir, files: memoryService.status().fileCount });
+
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
   // 先发到进程内总线；网关起来后改为经 Gateway.publish 广播给 WS 客户端
@@ -177,7 +189,7 @@ async function main(): Promise<void> {
     llm,
     chat: config.chat,
     publish: (event, data) => publishEvent(event, data),
-    systemPrompt: () => personaStore.read().content,
+    systemPrompt: () => buildChatSystemPrompt(memory, personaStore.read().content),
     logger,
   });
 
@@ -203,6 +215,7 @@ async function main(): Promise<void> {
     getConfig: () => config,
   });
   registerChatMethods(registry, { chat });
+  registerMemoryMethods(registry, { memory: memoryService });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天）。
 
 ## 现在有什么
 
@@ -14,7 +14,8 @@
     - 会话：`session.create` / `session.list` / `session.get` / `session.rename` / `session.delete`
     - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件）
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
@@ -22,7 +23,8 @@
 1. `config.json` 不存在则按默认生成（gateway/log/llm/chat 四段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
-4. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
+5. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -48,6 +50,17 @@
 - **AI 自演化**：`persona.evolve {sessionId?}` 取最近会话（不传 sessionId 就取最近更新的会话）最后 20 条当「经历」，让模型只输出 `{changed,reason,sections}` JSON；只改未上锁的 AI 小节，单次最多 2 节，失败/拒改就 `changed=false`。改动广播 `persona.changed {version, actor, applied, reason}`。
 - **乐观并发**：`persona.patch` 可带 `expectedVersion`，版本不符返回 `E_CONFLICT`（成功后 `persona.changed` 的 version 即新版本）。
 
+## 工作区记忆（Coo 形状）
+
+记忆不是数据库，是 `workspace/` 里的一堆文本文件 + 一个 Git 仓库（参考 Coo/Cormini 的做法，来源与许可见 `docs/记忆移植来源.md`）：
+
+- **播种**：`PARTNER.md`（关于主人，短而精炼，**每轮全文进系统提示词**）、`MEMORY.md`（记忆使用索引）、`todo.md`（承诺/待办，带日期）、`partner/`（按主题/日期的细节笔记）、`notes/`、`handoffs/`（交接笔记）、`archive/`（旧内容归档）、`blobs/`（附件，Git 忽略）。
+- **每轮提示词** = 人格（SOUL.md 全文）+ `## 关于主人`（PARTNER.md，超 4000 字截断并留提示）+ `## 记忆维护约定` + `## 工作区文件`（文件清单；`handoffs/ blobs/ archive/` 只给份数，普通目录超过 10 个文件也折叠成「dir/ （N 份）」，太多时退化成只列顶层）。
+- **读写**：`memory.read/write/append/delete/move/glob/grep`；路径只能是工作区相对路径（拒绝 `..`、点开头、绝对路径、大小写/短名/链接逃逸）。
+- **写即提交**：每次写/追加/删/移动成功都自动 Git commit（作者 `petd`，消息如 `petd wrote partner/作息.md`），用串行队列避免 Git index 冲突。
+- **版本**：`memory.status` 看 Git 状态与 tags；`memory.history` 看提交；`memory.diff` 看某次提交改了啥。启动时打 `start-<版本>` tag，首次建仓是 `checkpoint0`。
+- **常驻保护**：`PARTNER.md` 不允许删除或整份移动（直接改内容即可），否则前缀会少东西。
+
 ## 跑起来
 
 ```bat
@@ -65,6 +78,9 @@ node apps/petd/scripts/chat-smoke.mjs
 
 :: 冒烟：人格自编辑（真调一次 evolve，花一点 token）
 node apps/petd/scripts/persona-smoke.mjs
+
+:: 冒烟：工作区记忆（不花 token；真工作区 + 真 Git）
+node apps/petd/scripts/memory-smoke.mjs
 ```
 
 READY 行示例：
@@ -93,16 +109,19 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 58/58（网关/聊天/人格 store+evolve+方法）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 79/79（网关/聊天/人格/记忆）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
+cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，44 项；保留 home 可翻 workspace/.git）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
 
 人格冒烟覆盖：SOUL/state 播种（v1 可回滚）、`persona.get`、用户 patch + 事件、`expectedVersion` 冲突、上锁/世界观拒锁、历史、真 LLM `persona.evolve`（会改）+ `persona.changed(agent)`、回滚到 v2、解锁、优雅退出。
 
+记忆冒烟覆盖（44 项）：工作区播种与目录、Git 仓库/`checkpoint0`/`start-<版本>` tag、`memory.status/tree/list`、write→落盘→Git 提交、append、read、glob、grep（路径+行号）、history、diff、move/delete、常驻文件禁删、路径逃逸拒绝、参数校验拒绝、重启后工作区与 Git HEAD 仍在、两次优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-记忆、语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）……
+语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、记忆的交接笔记压缩/附件 blob 存储/向量检索……
