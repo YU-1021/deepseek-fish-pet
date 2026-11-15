@@ -92,7 +92,7 @@ export function App() {
 }
 
 function PetOverlay() {
-  return <div className="pet-overlay" onDoubleClick={() => void window.petdBootstrap?.showChat()} title="双击打开聊天">
+  return <div className="pet-overlay" onDoubleClick={() => void window.petdBootstrap?.showChat()} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="双击打开聊天 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
     <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div><div className="pet-hint">双击打开聊天</div>
   </div>;

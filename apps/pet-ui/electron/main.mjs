@@ -25,6 +25,15 @@ ipcMain.handle('petd:bootstrap', () => {
   }
 });
 ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
+ipcMain.handle('pet:show-menu', () => {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  Menu.buildFromTemplate([
+    { label: '打开聊天面板', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: '隐藏宠物', click: () => petWindow?.hide() },
+    { type: 'separator' },
+    { label: '退出桌宠', click: () => app.quit() },
+  ]).popup({ window: petWindow });
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
