@@ -36,11 +36,33 @@ export function isLlmError(v: unknown): v is LlmError {
   return v instanceof LlmError;
 }
 
-export type LlmRole = 'system' | 'user' | 'assistant';
+export type LlmRole = 'system' | 'user' | 'assistant' | 'tool';
+
+/** 模型请求调用的工具（OpenAI 兼容格式） */
+export interface LlmToolCall {
+  id: string;
+  name: string;
+  /** 原始 JSON 字符串（模型给的 arguments） */
+  arguments: string;
+}
 
 export interface LlmMessage {
   role: LlmRole;
   content: string;
+  /** role=assistant 时：模型这一轮要求调用的工具 */
+  toolCalls?: LlmToolCall[];
+  /** role=tool 时：对应的 tool_call_id */
+  toolCallId?: string;
+}
+
+/** 发给模型的工具声明（OpenAI function calling 格式） */
+export interface LlmToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 export interface LlmUsage {
@@ -55,6 +77,8 @@ export interface LlmReply {
   usage: LlmUsage;
   /** 原始 usage 与 finish_reason，便于排障，日志里只记长度 */
   finishReason?: string;
+  /** 模型要求调用的工具（有值时 text 通常为空） */
+  toolCalls?: LlmToolCall[];
 }
 
 export interface LlmClientOptions {
@@ -68,6 +92,8 @@ export interface CompleteOptions {
   /** 覆盖配置的 maxTokens / temperature（例如标题生成用小的） */
   maxTokens?: number;
   temperature?: number;
+  /** 声明可调用的工具；不传则不启用 function calling */
+  tools?: LlmToolDefinition[];
   signal?: AbortSignal;
 }
 
@@ -128,6 +154,38 @@ function pickNumber(rec: Record<string, unknown>, key: string): number | undefin
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+/** 内部消息 → OpenAI 兼容 wire 格式（tool_calls / tool_call_id 只在需要时出现） */
+function toWireMessage(m: LlmMessage): Record<string, unknown> {
+  if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+    return {
+      role: 'assistant',
+      content: m.content || null,
+      tool_calls: m.toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } })),
+    };
+  }
+  if (m.role === 'tool') return { role: 'tool', tool_call_id: m.toolCallId ?? '', content: m.content };
+  return { role: m.role, content: m.content };
+}
+
+/** 解析模型返回的 tool_calls（arguments 可能是字符串，也可能已经是对象） */
+function parseToolCalls(raw: unknown): LlmToolCall[] {
+  if (!Array.isArray(raw)) return [];
+  const out: LlmToolCall[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const fn = rec['function'];
+    const fnRec = fn !== null && typeof fn === 'object' && !Array.isArray(fn) ? (fn as Record<string, unknown>) : {};
+    const id = pickString(rec, 'id') ?? `call_${out.length}`;
+    const name = pickString(fnRec, 'name') ?? '';
+    if (!name) continue;
+    const argsRaw = fnRec['arguments'];
+    const args = typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw ?? {});
+    out.push({ id, name, arguments: args });
+  }
+  return out;
+}
+
 export function createLlmClient(opts: LlmClientOptions): LlmClient {
   const cfg = opts.config;
   const apiKey = opts.apiKey.trim();
@@ -143,11 +201,15 @@ export function createLlmClient(opts: LlmClientOptions): LlmClient {
     const url = cfg.apiBase.replace(/\/+$/, '') + '/chat/completions';
     const body: Record<string, unknown> = {
       model: cfg.model,
-      messages: call.messages,
+      messages: call.messages.map(toWireMessage),
       temperature: call.temperature ?? cfg.temperature,
       max_tokens: call.maxTokens ?? cfg.maxTokens,
       stream: false,
     };
+    if (call.tools && call.tools.length > 0) {
+      body['tools'] = call.tools;
+      body['tool_choice'] = 'auto';
+    }
     if (cfg.thinkingDisabled) body['thinking'] = { type: 'disabled' };
 
     const timeoutSignal = AbortSignal.timeout(cfg.timeoutMs);
@@ -210,7 +272,8 @@ export function createLlmClient(opts: LlmClientOptions): LlmClient {
     const message = choice['message'];
     const msgRec = message !== null && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>) : {};
     const text = (pickString(msgRec, 'content') ?? '').trim();
-    if (!text) {
+    const toolCalls = parseToolCalls(msgRec['tool_calls']);
+    if (!text && toolCalls.length === 0) {
       throw new LlmError('E_LLM_EMPTY', '模型返回了空内容，稍后再试');
     }
     const usageRaw = root['usage'];
@@ -225,6 +288,7 @@ export function createLlmClient(opts: LlmClientOptions): LlmClient {
       model: pickString(root, 'model') ?? cfg.model,
       usage,
       finishReason: pickString(choice, 'finish_reason'),
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
   }
 

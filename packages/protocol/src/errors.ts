@@ -24,6 +24,8 @@ export const ErrorCodes = {
   FORBIDDEN: 'E_FORBIDDEN',
   /** 服务正在关闭 */
   UNAVAILABLE: 'E_UNAVAILABLE',
+  /** 模型只调用了工具 / 返回空内容，没有可用的回复文本 */
+  LLM_EMPTY: 'E_LLM_EMPTY',
 } as const;
 
 export type PetdErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

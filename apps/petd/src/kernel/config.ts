@@ -38,6 +38,12 @@ export interface PetdConfig {
     maxHistoryMessages: number;
     /** 历史消息的字符预算（避免超长） */
     maxHistoryChars: number;
+    /** 每轮聊天最多允许几轮工具调用（0 = 关闭记忆工具） */
+    maxToolRounds: number;
+    /** 每轮聊天最多允许几次写操作（写/追加/编辑/删除/移动） */
+    maxToolWrites: number;
+    /** 单个工具结果回给模型的最大字符数 */
+    toolResultChars: number;
   };
 }
 
@@ -57,6 +63,9 @@ export const DEFAULT_CONFIG: PetdConfig = {
     systemPromptFile: 'SOUL.md',
     maxHistoryMessages: 40,
     maxHistoryChars: 24_000,
+    maxToolRounds: 6,
+    maxToolWrites: 3,
+    toolResultChars: 4000,
   },
 };
 
@@ -129,6 +138,15 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const mc = chat['maxHistoryChars'];
     if (typeof mc === 'number' && Number.isInteger(mc) && mc >= 0 && mc <= 200_000) out.chat.maxHistoryChars = mc;
     else if (mc !== undefined) warnings.push('chat.maxHistoryChars 非法，回默认 24000');
+    const mr = chat['maxToolRounds'];
+    if (typeof mr === 'number' && Number.isInteger(mr) && mr >= 0 && mr <= 12) out.chat.maxToolRounds = mr;
+    else if (mr !== undefined) warnings.push('chat.maxToolRounds 非法，回默认 6');
+    const mw = chat['maxToolWrites'];
+    if (typeof mw === 'number' && Number.isInteger(mw) && mw >= 0 && mw <= 10) out.chat.maxToolWrites = mw;
+    else if (mw !== undefined) warnings.push('chat.maxToolWrites 非法，回默认 3');
+    const tr = chat['toolResultChars'];
+    if (typeof tr === 'number' && Number.isInteger(tr) && tr >= 200 && tr <= 20_000) out.chat.toolResultChars = tr;
+    else if (tr !== undefined) warnings.push('chat.toolResultChars 非法，回默认 4000');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

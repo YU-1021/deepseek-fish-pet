@@ -29,6 +29,14 @@ const Usage = Type.Object({
   totalTokens: Type.Optional(Type.Integer()),
 });
 
+const ToolActivity = Type.Object({
+  round: Type.Integer(),
+  name: Type.String(),
+  args: Type.String(),
+  ok: Type.Boolean(),
+  text: Type.String(),
+});
+
 export interface ChatMethodDeps {
   chat: ChatService;
 }
@@ -44,8 +52,8 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
       idempotent: false,
     },
     (params) => {
-      const p = params as { title?: string };
-      return deps.chat.createSession(p.title);
+      const p = params as { title?: string } | undefined;
+      return deps.chat.createSession(p?.title);
     }
   );
 
@@ -124,6 +132,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         userMessage: Message,
         assistantMessage: Message,
         reply: Type.Object({ text: Type.String(), model: Type.String(), usage: Usage, finishReason: Type.Optional(Type.String()) }),
+        tools: Type.Array(ToolActivity),
       }),
       timeoutMs: 120_000,
       idempotent: false,
@@ -141,6 +150,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
           usage: result.reply.usage,
           ...(result.reply.finishReason === undefined ? {} : { finishReason: result.reply.finishReason }),
         },
+        tools: result.tools,
       };
     }
   );

@@ -11,6 +11,7 @@ import type { PetdConfig } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
+import { MEMORY_TOOLS, type MemoryToolbox } from './tools.js';
 
 export interface ChatServiceOptions {
   store: ChatStore;
@@ -20,6 +21,8 @@ export interface ChatServiceOptions {
   publish: (event: string, data?: unknown) => void;
   /** 每次调用时读当前 SOUL.md（用户手改了也能立刻生效，不重启） */
   systemPrompt: () => string;
+  /** 记忆工具工厂（每轮新建，写次数配额按轮重置）；不传 = 不启用工具 */
+  toolbox?: () => MemoryToolbox;
   logger?: { info(msg: string, data?: Record<string, unknown>): void; warn(msg: string, data?: Record<string, unknown>): void };
   now?: () => string;
 }
@@ -33,11 +36,22 @@ export interface ChatSendInput {
   temperature?: number;
 }
 
+/** 一次工具调用（回给 UI 显示「它刚才翻了记忆」） */
+export interface ChatToolActivity {
+  round: number;
+  name: string;
+  args: string;
+  ok: boolean;
+  text: string;
+}
+
 export interface ChatSendResult {
   session: SessionMeta;
   userMessage: StoredMessage;
   assistantMessage: StoredMessage;
   reply: LlmReply;
+  /** 本轮模型用过的记忆工具（可能为空） */
+  tools: ChatToolActivity[];
 }
 
 export class ChatService {
@@ -46,6 +60,7 @@ export class ChatService {
   private readonly chat: PetdConfig['chat'];
   private readonly publish: (event: string, data?: unknown) => void;
   private readonly systemPrompt: () => string;
+  private readonly toolbox?: () => MemoryToolbox;
   private readonly logger?: ChatServiceOptions['logger'];
   private readonly now: () => string;
 
@@ -55,6 +70,7 @@ export class ChatService {
     this.chat = opts.chat;
     this.publish = opts.publish;
     this.systemPrompt = opts.systemPrompt;
+    this.toolbox = opts.toolbox;
     this.logger = opts.logger;
     this.now = opts.now ?? (() => new Date().toISOString());
   }
@@ -109,20 +125,68 @@ export class ChatService {
     for (const m of this.pickHistory(history)) messages.push({ role: m.role, content: m.content });
     messages.push({ role: 'user', content: text });
 
-    let reply: LlmReply;
+    const toolbox = this.chat.maxToolRounds > 0 && this.toolbox ? this.toolbox() : null;
+    const toolDefs = toolbox ? MEMORY_TOOLS : undefined;
+    const tools: ChatToolActivity[] = [];
+    let reply: LlmReply | null = null;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+
     try {
-      reply = await this.llm.complete({
-        messages,
-        signal: input.signal,
-        ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-        ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
-      });
+      for (let round = 0; round <= this.chat.maxToolRounds; round += 1) {
+        const r = await this.llm.complete({
+          messages,
+          ...(toolDefs === undefined ? {} : { tools: toolDefs }),
+          signal: input.signal,
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+          ...(input.temperature === undefined ? {} : { temperature: input.temperature }),
+        });
+        promptTokens += r.usage.promptTokens ?? 0;
+        completionTokens += r.usage.completionTokens ?? 0;
+        totalTokens += r.usage.totalTokens ?? 0;
+
+        if (!r.toolCalls || r.toolCalls.length === 0) {
+          reply = r;
+          break;
+        }
+        if (round >= this.chat.maxToolRounds) break; // 轮数用完了，不再继续调工具
+        messages.push({ role: 'assistant', content: r.text, toolCalls: r.toolCalls });
+        for (const call of r.toolCalls) {
+          const res = await toolbox!.execute(call);
+          const activity: ChatToolActivity = { round: round + 1, name: call.name, args: call.arguments, ok: res.ok, text: res.text };
+          tools.push(activity);
+          this.publish('chat.tool', {
+            sessionId: meta.id,
+            round: activity.round,
+            name: activity.name,
+            ok: activity.ok,
+            args: call.arguments.slice(0, 300),
+            preview: res.text.slice(0, 800),
+          });
+          messages.push({ role: 'tool', content: res.text, toolCallId: call.id });
+        }
+      }
     } catch (e) {
       this.publish('chat.failed', { sessionId: meta.id, code: (e as { code?: string }).code ?? 'E_INTERNAL', message: (e as Error).message });
       throw e;
     }
 
-    const assistantMessage: StoredMessage = { role: 'assistant', content: reply.text, ts: this.now() };
+    if (!reply) {
+      this.publish('chat.failed', { sessionId: meta.id, code: 'E_LLM_EMPTY', message: '模型只调用了记忆工具，没有给出回复' });
+      throw new PetdError('E_LLM_EMPTY', '模型只调用了记忆工具但没有给出回复（工具轮数已用完），再说一次试试');
+    }
+    const usage = reply.usage;
+    const mergedReply: LlmReply = {
+      ...reply,
+      usage: {
+        ...(usage.promptTokens === undefined && promptTokens === 0 ? {} : { promptTokens: promptTokens || usage.promptTokens }),
+        ...(usage.completionTokens === undefined && completionTokens === 0 ? {} : { completionTokens: completionTokens || usage.completionTokens }),
+        ...(usage.totalTokens === undefined && totalTokens === 0 ? {} : { totalTokens: totalTokens || usage.totalTokens }),
+      },
+    };
+
+    const assistantMessage: StoredMessage = { role: 'assistant', content: mergedReply.text, ts: this.now() };
     const updated = this.store.append(meta.id, [userMessage, assistantMessage]);
     if (!updated) throw new PetdError('E_NOT_FOUND', `会话不存在：${meta.id}`);
 
@@ -133,7 +197,7 @@ export class ChatService {
       if (renamed) finalMeta = renamed;
     }
 
-    this.publish('chat.assistant_message', { sessionId: meta.id, message: assistantMessage, usage: reply.usage, model: reply.model });
+    this.publish('chat.assistant_message', { sessionId: meta.id, message: assistantMessage, usage: mergedReply.usage, model: mergedReply.model });
     this.publish('session.updated', {
       sessionId: finalMeta.id,
       title: finalMeta.title,
@@ -142,11 +206,12 @@ export class ChatService {
     });
     this.logger?.info('聊天一轮完成', {
       sessionId: meta.id,
-      promptTokens: reply.usage.promptTokens,
-      completionTokens: reply.usage.completionTokens,
-      replyChars: reply.text.length,
+      promptTokens: mergedReply.usage.promptTokens,
+      completionTokens: mergedReply.usage.completionTokens,
+      replyChars: mergedReply.text.length,
+      toolCalls: tools.length,
     });
-    return { session: finalMeta, userMessage, assistantMessage, reply };
+    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools };
   }
 
   /** 从旧到新取，满足条数且总字符不超预算；开头若是 assistant 丢掉（让历史以 user 开头更稳） */

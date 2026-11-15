@@ -37,6 +37,7 @@ import { createLlmClient } from './llm/client.js';
 import { WorkspaceMemory } from './memory/store.js';
 import { WorkspaceGit } from './memory/git.js';
 import { MemoryService } from './memory/service.js';
+import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 
 interface CliArgs {
@@ -190,6 +191,12 @@ async function main(): Promise<void> {
     chat: config.chat,
     publish: (event, data) => publishEvent(event, data),
     systemPrompt: () => buildChatSystemPrompt(memory, personaStore.read().content),
+    toolbox: () =>
+      new MemoryToolbox({
+        service: memoryService,
+        maxWrites: config.chat.maxToolWrites,
+        maxResultChars: config.chat.toolResultChars,
+      }),
     logger,
   });
 

@@ -138,3 +138,83 @@ test('空消息列表直接报 E_LLM_BAD_RESPONSE', async () => {
   const fetchImpl: FetchLike = async () => okResponse('x');
   await assert.rejects(() => makeClient(fetchImpl).complete({ messages: [] }), { code: 'E_LLM_BAD_RESPONSE' } as unknown as Error);
 });
+
+test('解析 tool_calls：文本可为空，参数为 JSON 字符串或对象都能用', async () => {
+  const fetchImpl: FetchLike = async () =>
+    new Response(
+      JSON.stringify({
+        model: 'deepseek-flash',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"MEMORY.md"}' } },
+                { id: 'call_2', type: 'function', function: { name: 'list_files', arguments: { dir: '' } } },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: { prompt_tokens: 30, completion_tokens: 5, total_tokens: 35 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  const reply = await makeClient(fetchImpl).complete({ messages: [{ role: 'user', content: 'hi' }], tools: [] });
+  assert.equal(reply.text, '');
+  assert.equal(reply.finishReason, 'tool_calls');
+  assert.equal(reply.toolCalls?.length, 2);
+  assert.equal(reply.toolCalls?.[0]?.name, 'read_file');
+  assert.equal(reply.toolCalls?.[0]?.arguments, '{"path":"MEMORY.md"}');
+  assert.equal(reply.toolCalls?.[1]?.arguments, '{"dir":""}');
+});
+
+test('下发 tools 与 tool 消息的 wire 格式', async () => {
+  let body: Record<string, unknown> = {};
+  const fetchImpl: FetchLike = async (_input, init) => {
+    body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return okResponse('好');
+  };
+  const tools = [
+    { type: 'function' as const, function: { name: 'read_file', description: '读文件', parameters: { type: 'object', properties: {} } } },
+  ];
+  await makeClient(fetchImpl).complete({
+    messages: [
+      { role: 'user', content: '读一下' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call_1', name: 'read_file', arguments: '{"path":"a.md"}' }] },
+      { role: 'tool', content: '文件内容', toolCallId: 'call_1' },
+    ],
+    tools,
+  });
+  assert.equal(body['tool_choice'], 'auto');
+  assert.deepEqual(body['tools'], tools);
+  const messages = body['messages'] as Array<Record<string, unknown>>;
+  assert.deepEqual(messages[1]?.['tool_calls'], [
+    { id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.md"}' } },
+  ]);
+  assert.equal(messages[2]?.['role'], 'tool');
+  assert.equal(messages[2]?.['tool_call_id'], 'call_1');
+});
+
+test('只有 tool_calls 没有文本时不算空回复', async () => {
+  const fetchImpl: FetchLike = async () =>
+    new Response(
+      JSON.stringify({
+        model: 'deepseek-flash',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: null, tool_calls: [{ id: 'c', type: 'function', function: { name: 'list_files', arguments: '{}' } }] },
+            finish_reason: 'tool_calls',
+          },
+        ],
+        usage: {},
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  const reply = await makeClient(fetchImpl).complete({ messages: [{ role: 'user', content: 'x' }], tools: [] });
+  assert.equal(reply.text, '');
+  assert.equal(reply.toolCalls?.length, 1);
+});

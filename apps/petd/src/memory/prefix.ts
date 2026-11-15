@@ -61,8 +61,9 @@ export const SEED_FILES: ReadonlyArray<readonly [string, string]> = [
 /** 记忆维护约定：拼进系统提示词，约束模型自己怎么整理文件。 */
 export const MEMORY_NOTE = [
   '记忆就是工作区里的文件，不是数据库：想留到下次对话的东西，必须写进文件（或者请主人帮你写）。',
+  '聊天时你可以直接调用记忆工具（list_files/read_file/glob_files/grep_files/write_file/append_file/edit_file/delete_file/move_file）读写这些文件；不确定或想回忆某件事时，先读文件，不要凭空猜。',
   '一个主题一个文件，文件名要能自解释（例如 partner/称呼和作息.md，不要 notes2.md）。',
-  '新建文件前先用 memory.glob / memory.grep 找同主题的旧文件，能改旧的就改旧的；两份同主题就合并成一份。',
+  '新建文件前先用 glob_files / grep_files 找同主题的旧文件，能改旧的就改旧的；两份同主题就合并成一份。',
   '承诺和没做完的事写进 todo.md 并带日期；做完就删。',
   '跟时间有关的内容，日期写进文件名（例如 log/2026-11.md，每月一个）；正文写具体日期，不要写「今天」「明天」。',
   '长文件把旧内容移到 archive/ 归档；archive/ 在清单里折叠成一行，但仍然能被 grep 搜到。',
