@@ -75,7 +75,7 @@ export interface ChatSendInput {
 }
 
 /** 本轮带的附件（回给 UI 显示;也用于拼进模型输入） */
-export type ChatAttachment = Pick<BlobMeta, 'handle' | 'name' | 'mime' | 'size'>;
+export type ChatAttachment = Pick<BlobMeta, 'handle' | 'name' | 'mime' | 'kind' | 'size'>;
 
 /** 一次工具调用（回给 UI 显示「它刚才翻了记忆」） */
 export interface ChatToolActivity {
@@ -296,7 +296,7 @@ export class ChatService {
     if (!this.blobs) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用附件存储');
     return refs.map((ref) => {
       const meta = this.blobs!.resolve(ref);
-      return { handle: meta.handle, name: meta.name, mime: meta.mime, size: meta.size };
+      return { handle: meta.handle, name: meta.name, mime: meta.mime, kind: meta.kind, size: meta.size };
     });
   }
 

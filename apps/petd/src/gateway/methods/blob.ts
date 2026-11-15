@@ -9,11 +9,26 @@ import { PetdError } from '@petd/protocol';
 import type { MethodRegistry } from '../registry.js';
 import type { BlobStore } from '../../memory/blob.js';
 
+const BlobKindSchema = Type.Union([
+  Type.Literal('image'),
+  Type.Literal('audio'),
+  Type.Literal('video'),
+  Type.Literal('text'),
+  Type.Literal('binary'),
+]);
+
 const BlobMetaSchema = Type.Object({
   handle: Type.String(),
   path: Type.String(),
   name: Type.String(),
   mime: Type.String(),
+  kind: BlobKindSchema,
+  image: Type.Optional(
+    Type.Object({
+      width: Type.Integer(),
+      height: Type.Integer(),
+    })
+  ),
   size: Type.Integer(),
   sha256: Type.String(),
   createdAt: Type.String(),
@@ -89,6 +104,27 @@ export function registerBlobMethods(reg: MethodRegistry, deps: BlobMethodDeps): 
     async (params) => {
       const { meta, data } = deps.blobs.getBytes((params as { ref: string }).ref);
       return { meta, dataBase64: data.toString('base64') };
+    }
+  );
+
+  reg.register(
+    {
+      name: 'blob.preview',
+      scope: 'read',
+      description: '附件预览：文本返回开头摘录（截断），图片返回宽高，音视频/其他只给元数据（UI 缩略图请自己把 blob.get 的字节用 nativeImage 缩放）',
+      params: Type.Object({
+        ref: Type.String({ maxLength: 400 }),
+        maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 20000 })),
+      }),
+      result: Type.Object({
+        meta: BlobMetaSchema,
+        text: Type.Optional(Type.String()),
+        truncated: Type.Optional(Type.Boolean()),
+      }),
+    },
+    async (params) => {
+      const p = params as { ref: string; maxChars?: number };
+      return deps.blobs.preview(p.ref, p.maxChars === undefined ? {} : { maxChars: p.maxChars });
     }
   );
 

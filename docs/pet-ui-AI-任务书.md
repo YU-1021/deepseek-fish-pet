@@ -187,6 +187,9 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 2. **实时刷新**：订阅 `memory.changed` 事件（`{path, kind: 'write'|'append'|'delete'|'move', revision, from?}`）；树自动刷新；如果当前打开的文件被外部改动且本地有未保存修改 → 提示冲突，别直接重载丢掉用户输入。
 3. **常驻文件**：`PARTNER.md` 是每轮进系统提示词的「主人画像」，删/移会被后端拒绝（`E_FORBIDDEN`）——UI 上删除/移动按钮置灰并标个「常驻」徽标，编辑本身是允许的。
 4. **附件预览**：`blob.get` 返回 base64，图片直接 `<img>`；文本类可以渲染成文本（用 `meta.mime` 判断，注意 1MB 预览上限，超了提示下载）。上传用 `blob.put`，然后把句柄传给聊天（`chat.send` 的 `attachments`）。
+   - **缩略图**：`blob.preview {ref}` 会返回 `meta.kind`（`image/text/audio/video/binary`）、图片的 `meta.image {width,height}`（服务端只读文件头嗅探，不解码整图）和文本开头的 `text` 摘录（可带 `maxChars`，`truncated` 表示截断）。
+   - **列表缩略图不要每次走 WS 传整份 base64**：pet-ui 主进程和 petd 在同一台机器上，`memory.status` 会给 `workspace` 绝对路径，附件真实路径 = `<workspace>/blobs/<meta.name>`；主进程可直接用 Electron `nativeImage.createThumbnailFromPath(absPath, {width:256,height:256})`（或 `createFromPath` + `resize`）生成缩略图，缓存键用 `meta.sha256`（内容寻址，不会变）。渲染层只拿小图 dataURL。
+   - 音频/视频（`kind` 为 `audio/video`）可以直接用 file:// 打开系统播放器或 `<audio>`/`<video>` 标签，注意 CSP 设置。
 5. **一键回到某版本**：历史页选中某次提交 → 展示 diff → 提供「恢复此版本内容」（= 用该提交里的文件内容 `memory.write` 回去，并提示会生成一次新提交）。
 
 **验收**：能浏览/编辑/新建/删除记忆文件；冲突提示与双按钮；`memory.changed` 触发树刷新；历史列表 + diff + 恢复；附件列表/预览/上传/删除。截图贴 README。

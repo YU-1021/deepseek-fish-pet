@@ -88,6 +88,51 @@ test('空内容/超大内容拒绝；非法句柄拒绝', () => {
   assert.throws(() => blobs.resolve('blob:'), (e: unknown) => e instanceof PetdError);
 });
 
+test('kind 分类：图片/文本/音频/二进制', () => {
+  const { blobs } = tmpStore();
+  assert.equal(blobs.put({ data: pngBytes(), name: 'a.png' }).kind, 'image');
+  assert.equal(blobs.put({ data: Buffer.from('你好'), name: 'a.md' }).kind, 'text');
+  assert.equal(blobs.put({ data: Buffer.from('ID3'), name: 'a.mp3' }).kind, 'audio');
+  assert.equal(blobs.put({ data: Buffer.from([0, 1, 2]), name: 'a.zip' }).kind, 'binary');
+});
+
+test('图片尺寸嗅探（PNG 头，不解码整图）', () => {
+  const { blobs } = tmpStore();
+  const header = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+  header.writeUInt32BE(13, 8); // IHDR length
+  header.write('IHDR', 12, 'ascii');
+  header.writeUInt32BE(640, 16);
+  header.writeUInt32BE(360, 20);
+  const meta = blobs.put({ data: header, name: '截图.png' });
+  assert.equal(meta.kind, 'image');
+  assert.deepEqual(meta.image, { width: 640, height: 360 });
+
+  const listed = blobs.list()[0];
+  assert.equal(listed?.kind, 'image');
+  assert.deepEqual(listed?.image, { width: 640, height: 360 });
+});
+
+test('preview：文本按字符截断并标记 truncated，非文本只给元数据', () => {
+  const { blobs } = tmpStore();
+  const long = '第一段。'.repeat(100); // 400 字符
+  const text = blobs.put({ data: Buffer.from(long, 'utf8'), name: '长笔记.md' });
+  const p = blobs.preview(text.handle, { maxChars: 50 });
+  assert.equal(p.meta.kind, 'text');
+  assert.equal(p.text?.length, 50);
+  assert.equal(p.truncated, true);
+
+  const short = blobs.put({ data: Buffer.from('短短一句', 'utf8'), name: '短.md' });
+  const sp = blobs.preview(short.handle);
+  assert.equal(sp.text, '短短一句');
+  assert.equal(sp.truncated, false);
+
+  const img = blobs.put({ data: pngBytes(), name: '图.png' });
+  const ip = blobs.preview(img.handle);
+  assert.equal(ip.meta.kind, 'image');
+  assert.equal(ip.text, undefined);
+});
+
 function mainName(handle: string): string {
   return handle.replace(/^blob:/, '');
 }

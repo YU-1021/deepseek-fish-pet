@@ -15,7 +15,7 @@
     - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件；模型可在回复前调记忆工具，见下节；可带 `attachments` 附件句柄）
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
     - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
-    - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.delete`
+    - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
   - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
@@ -119,6 +119,7 @@
 - **存**：`blob.put {dataBase64, name?, mime?}` → 返回 `{handle, name, path, mime, size, sha256, createdAt}`；单文件上限 8MB，文件名是内容寻址的 `<sha256 前 16 位>-<安全化的原名>.<扩展名>`，同样内容只存一份。
 - **句柄**：统一写作 `blob:<文件名>`（也接受 `blobs/<文件名>`）；会话、事件、`chat.send` 参数里都用它引用附件，不暴露绝对路径。
 - **读/查/删**：`blob.list`（按修改时间新到旧）、`blob.info`、`blob.get`（base64 原始字节）、`blob.delete`（物理删除）。
+- **预览**：`blob.preview {ref, maxChars?}` 返回 `meta.kind`（`image/audio/video/text/binary`）、图片 `meta.image {width,height}`（只读文件头嗅探、不解码整图）和文本开头摘录（`truncated` 标记是否截断）。列表里的缩略图建议由 pet-ui 主进程直接读 `<workspace>/blobs/<name>` 用 Electron `nativeImage` 缩放（不用每次走 WS 传整份 base64），缓存键用内容寻址的 `sha256`。
 - **聊天带附件**：`chat.send {text, attachments: [句柄…]}`（最多 10 个）——petd 先校验附件存在，再把「句柄 + 文件名 + mime + size」拼成一段提示附在本轮用户消息后面；**会话 JSONL 只存原始文本**，下一轮不会重复带附件块。`chat.send` 结果里回 `attachments[]` 供 UI 显示。
 - **模型能用附件**：记忆工具里多了 `list_blobs` / `read_blob` / `save_blob`——文本附件能读出内容；图片/音频等二进制只能拿到元数据（当前没有视觉/音频解析能力，会如实说看不到）。`save_blob` 计入写配额。
 - **Git**：`blobs/` 在 `.gitignore` 里，不进版本历史（老工作区若已跟踪过 `blobs/`，启动时会自动取消跟踪并提交一条记录）；附件文件本身仍在磁盘上，靠内容 hash 名保证不重名。
@@ -181,7 +182,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 119/119（网关/聊天/工具循环/交接/人格/记忆/附件）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 124/124（网关/聊天/工具循环/交接/人格/记忆/附件）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）

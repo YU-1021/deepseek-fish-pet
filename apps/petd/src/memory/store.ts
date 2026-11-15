@@ -5,7 +5,7 @@
  * commit 8362383）；保留了路径逃逸防护、原子写、清单折叠、glob/grep 这些核心形状，
  * 去掉了 blob 附件（petd 暂不做图片句柄）。见 docs/记忆移植来源.md。
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync, appendFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PetdError } from '@petd/protocol';
 import { decodeText, fileFacts, isUtf16Le, readTextFile, retryBusy } from './util.js';
@@ -265,6 +265,26 @@ export class WorkspaceMemory {
       throw new PetdError('E_BAD_PARAMS', `${this.normalize(relPath)} 是目录，不能按文件读`);
     }
     return readFileSync(abs);
+  }
+
+  /** 读文件开头最多 maxBytes 字节（附件预览/图片尺寸探测用，不必整份读入）。 */
+  readHead(relPath: string, maxBytes: number): Buffer {
+    const abs = this.resolveSafe(relPath);
+    if (!existsSync(abs)) throw new PetdError('E_NOT_FOUND', `文件不存在：${this.normalize(relPath)}`);
+    const stat = statSync(abs);
+    if (stat.isDirectory()) {
+      throw new PetdError('E_BAD_PARAMS', `${this.normalize(relPath)} 是目录，不能按文件读`);
+    }
+    const want = Math.max(0, Math.min(maxBytes, stat.size));
+    if (want === 0) return Buffer.alloc(0);
+    const fd = openSync(abs, 'r');
+    try {
+      const buf = Buffer.alloc(want);
+      const read = readSync(fd, buf, 0, want, 0);
+      return read === want ? buf : buf.subarray(0, read);
+    } finally {
+      closeSync(fd);
+    }
   }
 
   /** 二进制原子写（附件 blob 用）：同目录临时文件写完 rename。 */
