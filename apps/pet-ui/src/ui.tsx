@@ -170,14 +170,8 @@ function PetOverlay() {
   }
   function playClickFeedback() {
     setReaction(pokeReactions[Math.floor(Math.random() * pokeReactions.length)]);
-    // Expand immediately so the bubble and the Q-bounce never paint against
-    // the old compact native-window bounds during a burst of repeated clicks.
-    void window.petdBootstrap?.resizePet?.(270);
     if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
-    reactionTimer.current = window.setTimeout(() => {
-      setReaction(null);
-      void window.petdBootstrap?.resizePet?.(190);
-    }, 6000);
+    reactionTimer.current = window.setTimeout(() => setReaction(null), 6000);
     const pet = petFloat.current;
     if (pet) {
       pet.classList.remove('pet-bounce');

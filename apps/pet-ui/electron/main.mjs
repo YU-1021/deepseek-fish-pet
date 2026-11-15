@@ -73,6 +73,10 @@ function dragPetStep() {
   const cursor = screen.getCursorScreenPoint();
   const x = Math.round(petDrag.windowX + cursor.x - petDrag.cursorX);
   const y = Math.round(petDrag.windowY + cursor.y - petDrag.cursorY);
+  // Pointer-down also precedes a normal click. Ignore DPI rounding jitter
+  // until the cursor has actually crossed the renderer's drag threshold.
+  if (!petDrag.moved && Math.hypot(cursor.x - petDrag.cursorX, cursor.y - petDrag.cursorY) < 6) return;
+  petDrag.moved = true;
   const [currentX, currentY] = petWindow.getPosition();
   if (Math.abs(x - currentX) <= 1 && Math.abs(y - currentY) <= 1) return;
   petWindow.setBounds({ ...petDrag.bounds, x, y });
@@ -97,6 +101,7 @@ ipcMain.handle('pet:resize', (event, requestedHeight) => {
   const height = Math.ceil(Math.min(420, Math.max(190, Number(requestedHeight) || 190)));
   const bounds = petWindow.getBounds();
   if (bounds.height !== height) petWindow.setBounds({ ...bounds, height });
+  if (petDrag) petDrag.bounds = { ...petDrag.bounds, height };
   return height;
 });
 ipcMain.handle('pet:show-menu', () => {
