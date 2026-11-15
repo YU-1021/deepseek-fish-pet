@@ -92,10 +92,9 @@ export function App() {
 }
 
 function PetOverlay() {
-  const [clickThrough, setClickThrough] = useState(false);
-  const toggle = () => { const next = !clickThrough; setClickThrough(next); void window.petdBootstrap?.toggleIgnoreMouse(next); };
-  return <div className="pet-overlay" onDoubleClick={() => void window.petdBootstrap?.showChat()} onAuxClick={(e) => { if (e.button === 1) toggle(); }} onContextMenu={(e) => { e.preventDefault(); toggle(); }} title="双击打开聊天 · 右键切换点击穿透">
-    <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div><div className="pet-hint">{clickThrough ? '点击穿透已开 · 中键关闭' : '右键切换穿透 · 双击聊天'}</div>
+  return <div className="pet-overlay" onDoubleClick={() => void window.petdBootstrap?.showChat()} title="双击打开聊天">
+    <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
+    <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div><div className="pet-hint">双击打开聊天</div>
   </div>;
 }
 
