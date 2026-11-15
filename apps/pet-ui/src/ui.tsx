@@ -83,14 +83,20 @@ export function App() {
   }
   async function uploadChatFiles(files: FileList | null) {
     if (!files?.length) return;
+    const selected = Array.from(files);
+    const remaining = Math.max(0, 10 - pendingAttachments.length);
+    const accepted = selected.slice(0, remaining);
+    const skipped = selected.length - accepted.length;
+    if (!accepted.length) { setError('一条消息最多附带 10 个附件，请先移除待发送附件。'); return; }
     setUploading(true); setError('');
     const added: QueuedAttachment[] = [];
-    try {
-      for (const file of Array.from(files)) added.push(await uploadAttachmentFile(file));
-    } catch (e) { setError(friendlyError(e)); }
+    let uploadError = '';
+    try { for (const file of accepted) added.push(await uploadAttachmentFile(file)); }
+    catch (e) { uploadError = friendlyError(e); }
     finally {
       setPendingAttachments((items) => [...items, ...added].slice(0, 10));
-      if (pendingAttachments.length + added.length > 10) setError('一条消息最多附带 10 个附件，多出的文件未加入待发送列表。');
+      const notices = [uploadError, skipped ? `已达 10 个附件上限，${skipped} 个文件未上传。` : ''].filter(Boolean);
+      if (notices.length) setError(notices.join(' '));
       setUploading(false); if (fileInput.current) fileInput.current.value = '';
     }
   }

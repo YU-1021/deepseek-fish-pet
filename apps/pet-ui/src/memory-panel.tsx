@@ -110,12 +110,16 @@ export function MemoryPanel({ connected, onUseAttachment, onRemoveAttachment }: 
   const [uploading, setUploading] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const savingRef = useRef(false);
+  const loadedDirsRef = useRef(new Set(['']));
+  const liveFileStateRef = useRef({ selectedPath, content, draft, baseHash });
+  liveFileStateRef.current = { selectedPath, content, draft, baseHash };
   const dirty = draft !== content;
   const hasMethod = useCallback((name: string) => methods.has(name), [methods]);
 
   const loadDirectory = useCallback(async (dir: string) => {
     const result = await request('memory.list', dir ? { dir } : {});
     const entries = (result.entries as MemoryEntry[]).filter((entry) => entry.path !== 'blobs' && !entry.path.startsWith('blobs/'));
+    loadedDirsRef.current.add(dir);
     setEntriesByDir((current) => ({ ...current, [dir]: entries }));
     return entries;
   }, []);
@@ -153,10 +157,21 @@ export function MemoryPanel({ connected, onUseAttachment, onRemoveAttachment }: 
       const names = (health.methods as Array<string | { name: string }>).map((item) => typeof item === 'string' ? item : item.name);
       setMethods(new Set(names));
       if (root) await window.petdBootstrap?.setMemoryWorkspace(root);
-      await loadDirectory('');
-      if (selectedPath) await loadHistory(selectedPath);
+      await Promise.all([...loadedDirsRef.current].map((dir) => loadDirectory(dir)));
+      const liveFile = liveFileStateRef.current;
+      if (liveFile.selectedPath) {
+        const latest = await request('memory.read', { path: liveFile.selectedPath });
+        const latestContent = String(latest.content ?? '');
+        const latestHash = await sha256(latestContent);
+        const current = liveFileStateRef.current;
+        if (current.selectedPath === liveFile.selectedPath && latestHash !== current.baseHash) {
+          if (current.draft !== current.content) setConflict({ latest: latestContent, latestHash });
+          else { setContent(latestContent); setDraft(latestContent); setBaseHash(latestHash); }
+        }
+        await loadHistory(liveFile.selectedPath);
+      }
     } catch (cause) { setError(errorText(cause)); }
-  }, [connected, loadDirectory, loadHistory, selectedPath]);
+  }, [connected, loadDirectory, loadHistory]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
