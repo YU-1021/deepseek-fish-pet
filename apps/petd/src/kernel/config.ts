@@ -160,6 +160,39 @@ export interface PetdConfig {
     /** 插件目录（相对 home 或绝对路径） */
     dir: string;
   };
+  cua: {
+    /** 电脑操作（看屏幕/动键鼠）总开关：默认关闭，打开后才把工具给模型 */
+    enabled: boolean;
+    /** 是否允许真正输入（false = 只能看不能动） */
+    control: boolean;
+    /** 询权限档位：ask-each-turn（每次看/动都问）、ask-before-acting（看免费动要问）、ask-once（看免费，动问一次授权一段时间）、never-ask */
+    permission: 'ask-each-turn' | 'ask-before-acting' | 'ask-once' | 'never-ask';
+    /** ask-once 授权有效期（分钟） */
+    grantMinutes: number;
+    /** 终端里操作是否免掉「每档都单独问」（true = 和普通输入一样按档问） */
+    skipTerminalAsk: boolean;
+    /** 截图参数 */
+    screenshot: {
+      /** 截图缩放后的最大宽度（模型拿到的是这个尺寸的图） */
+      maxWidth: number;
+      /** 截图缩放后的最大高度 */
+      maxHeight: number;
+      /** JPEG 质量 1–100 */
+      quality: number;
+      /** 每个输入动作之后是否自动再截一张图 */
+      afterAction: boolean;
+      /** 动作后等界面变化的毫秒数 */
+      settleMs: number;
+    };
+    /** 用户离开鼠标键盘多久（毫秒）才允许发输入 */
+    userIdleMs: number;
+    /** 等用户闲置最多多久（毫秒），超时就放弃这次输入 */
+    maxYieldWaitMs: number;
+    /** 打字分块大小间隔（毫秒） */
+    typeChunkDelayMs: number;
+    /** 截图是否作为图片发给模型（模型支持看图才开；默认只给文字描述） */
+    includeImages: boolean;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -247,6 +280,25 @@ export const DEFAULT_CONFIG: PetdConfig = {
   plugins: {
     enabled: true,
     dir: 'plugins',
+  },
+  cua: {
+    // 默认关闭：看屏幕/动键鼠风险高，明确打开并确认权限档位后才把工具给模型
+    enabled: false,
+    control: true,
+    permission: 'ask-once',
+    grantMinutes: 30,
+    skipTerminalAsk: false,
+    screenshot: {
+      maxWidth: 1280,
+      maxHeight: 800,
+      quality: 75,
+      afterAction: true,
+      settleMs: 500,
+    },
+    userIdleMs: 2000,
+    maxYieldWaitMs: 15_000,
+    typeChunkDelayMs: 20,
+    includeImages: false,
   },
 };
 
@@ -519,6 +571,56 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof pd === 'string' && pd.trim().length > 0 && pd.trim().length <= 200) out.plugins.dir = pd.trim().replace(/[\\/]+$/, '');
       else if (pd !== undefined) warnings.push('plugins.dir 非法，回默认 plugins');
     } else warnings.push('plugins 段必须是对象，回默认');
+  }
+  const cuaRaw = raw['cua'];
+  if (cuaRaw !== undefined) {
+    if (isObject(cuaRaw)) {
+      const ce = cuaRaw['enabled'];
+      if (typeof ce === 'boolean') out.cua.enabled = ce;
+      else if (ce !== undefined) warnings.push('cua.enabled 非法，回默认 false');
+      const cc = cuaRaw['control'];
+      if (typeof cc === 'boolean') out.cua.control = cc;
+      else if (cc !== undefined) warnings.push('cua.control 非法，回默认 true');
+      const cp = cuaRaw['permission'];
+      if (cp === 'ask-each-turn' || cp === 'ask-before-acting' || cp === 'ask-once' || cp === 'never-ask') out.cua.permission = cp;
+      else if (cp !== undefined) warnings.push('cua.permission 非法，回默认 ask-once');
+      const cg = cuaRaw['grantMinutes'];
+      if (typeof cg === 'number' && Number.isFinite(cg) && cg >= 1 && cg <= 1440) out.cua.grantMinutes = cg;
+      else if (cg !== undefined) warnings.push('cua.grantMinutes 非法，回默认 30');
+      const st = cuaRaw['skipTerminalAsk'];
+      if (typeof st === 'boolean') out.cua.skipTerminalAsk = st;
+      else if (st !== undefined) warnings.push('cua.skipTerminalAsk 非法，回默认 false');
+      const shot = cuaRaw['screenshot'];
+      if (isObject(shot)) {
+        const mw = shot['maxWidth'];
+        if (typeof mw === 'number' && Number.isInteger(mw) && mw >= 320 && mw <= 3840) out.cua.screenshot.maxWidth = mw;
+        else if (mw !== undefined) warnings.push('cua.screenshot.maxWidth 非法，回默认 1280');
+        const mh = shot['maxHeight'];
+        if (typeof mh === 'number' && Number.isInteger(mh) && mh >= 240 && mh <= 2160) out.cua.screenshot.maxHeight = mh;
+        else if (mh !== undefined) warnings.push('cua.screenshot.maxHeight 非法，回默认 800');
+        const q = shot['quality'];
+        if (typeof q === 'number' && Number.isInteger(q) && q >= 1 && q <= 100) out.cua.screenshot.quality = q;
+        else if (q !== undefined) warnings.push('cua.screenshot.quality 非法，回默认 75');
+        const aa = shot['afterAction'];
+        if (typeof aa === 'boolean') out.cua.screenshot.afterAction = aa;
+        else if (aa !== undefined) warnings.push('cua.screenshot.afterAction 非法，回默认 true');
+        const sm = shot['settleMs'];
+        if (typeof sm === 'number' && Number.isInteger(sm) && sm >= 0 && sm <= 10_000) out.cua.screenshot.settleMs = sm;
+        else if (sm !== undefined) warnings.push('cua.screenshot.settleMs 非法，回默认 500');
+      } else if (shot !== undefined) warnings.push('cua.screenshot 非法，回默认');
+      const ui = cuaRaw['userIdleMs'];
+      if (typeof ui === 'number' && Number.isInteger(ui) && ui >= 0 && ui <= 60_000) out.cua.userIdleMs = ui;
+      else if (ui !== undefined) warnings.push('cua.userIdleMs 非法，回默认 2000');
+      const mw2 = cuaRaw['maxYieldWaitMs'];
+      if (typeof mw2 === 'number' && Number.isInteger(mw2) && mw2 >= 0 && mw2 <= 120_000) out.cua.maxYieldWaitMs = mw2;
+      else if (mw2 !== undefined) warnings.push('cua.maxYieldWaitMs 非法，回默认 15000');
+      const td = cuaRaw['typeChunkDelayMs'];
+      if (typeof td === 'number' && Number.isInteger(td) && td >= 0 && td <= 500) out.cua.typeChunkDelayMs = td;
+      else if (td !== undefined) warnings.push('cua.typeChunkDelayMs 非法，回默认 20');
+      const ii = cuaRaw['includeImages'];
+      if (typeof ii === 'boolean') out.cua.includeImages = ii;
+      else if (ii !== undefined) warnings.push('cua.includeImages 非法，回默认 false');
+    } else warnings.push('cua 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

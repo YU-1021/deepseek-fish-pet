@@ -9,6 +9,7 @@ import path from 'node:path';
 import { EventBus } from '../kernel/events.js';
 import { DEFAULT_CONFIG } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import { ChatStore } from './store.js';
 import { ChatService, type HandoffIo } from './service.js';
 import { estimateTokens, handoffPath, handoffStamp, renderHandoffNote } from './handoff.js';
@@ -177,8 +178,8 @@ test('交接后下一轮：system 段带交接笔记，历史从 contextStart �
   await h.service.send({ sessionId: first.session.id, text: '交接之后的新问题' });
   const lastCall = h.llm.calls[h.llm.calls.length - 1] ?? [];
   assert.equal(lastCall[0]?.role, 'system');
-  assert.ok(lastCall[0]?.content.includes('上下文交接笔记'));
-  assert.ok(lastCall[0]?.content.includes('handoffs/'));
+  assert.ok(messageText(lastCall[0]?.content ?? '').includes('上下文交接笔记'));
+  assert.ok(messageText(lastCall[0]?.content ?? '').includes('handoffs/'));
   assert.equal(lastCall[lastCall.length - 1]?.content, '交接之后的新问题');
   // 历史只剩 contextStart 之后的 4 条（交接保留的 2 条 + 上一轮的 2 条） + 新 user
   assert.equal(lastCall.length, 1 + 4 + 1);

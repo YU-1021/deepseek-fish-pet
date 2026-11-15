@@ -8,7 +8,8 @@
  */
 import { PetdError } from '@petd/protocol';
 import type { PetdConfig } from '../kernel/config.js';
-import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import type { CompleteOptions, LlmContentPart, LlmMessage, LlmReply } from '../llm/client.js';
+import type { PauseGate } from '../kernel/pause.js';
 import type { BlobMeta, BlobStore } from '../memory/blob.js';
 import {
   buildHandoffSummaryPrompt,
@@ -42,6 +43,14 @@ export interface ChatServiceOptions {
   moodPrompt?: () => string;
   /** 每轮拼接的技能清单/常驻技能/插件提示词段（返回空串 = 不注入） */
   skillsPrompt?: () => string;
+  /** 每轮拼接的电脑操作提示词段（返回空串 = 不注入） */
+  cuaPrompt?: () => string;
+  /** 运行暂停门：暂停时聊天直接拒绝，不再花 token */
+  pauseGate?: PauseGate;
+  /** 电脑操作引擎（本轮结束负责松开按住的键鼠） */
+  cua?: { enabled: boolean; onTurnEnded(): void };
+  /** 截图是否作为图片一并发给模型（config.cua.includeImages） */
+  cuaIncludeImages?: boolean;
   /** 一轮聊天成功后的钩子（例如按互动微调情绪）；失败只记日志，不影响回复 */
   onTurnComplete?: (info: { sessionId: string; userText: string; assistantText: string }) => void | Promise<void>;
   /** 记忆工具工厂（每轮新建，写次数配额按轮重置）；不传 = 不启用工具 */
@@ -122,6 +131,10 @@ export class ChatService {
   private readonly systemPrompt: () => string;
   private readonly moodPrompt?: () => string;
   private readonly skillsPrompt?: () => string;
+  private readonly cuaPrompt?: () => string;
+  private readonly pauseGate?: PauseGate;
+  private readonly cua?: { enabled: boolean; onTurnEnded(): void };
+  private readonly cuaIncludeImages: boolean;
   private readonly onTurnComplete?: ChatServiceOptions['onTurnComplete'];
   private readonly toolbox?: () => MemoryToolbox;
   private readonly handoffIo?: HandoffIo;
@@ -139,6 +152,10 @@ export class ChatService {
     this.systemPrompt = opts.systemPrompt;
     this.moodPrompt = opts.moodPrompt;
     this.skillsPrompt = opts.skillsPrompt;
+    this.cuaPrompt = opts.cuaPrompt;
+    this.pauseGate = opts.pauseGate;
+    this.cua = opts.cua;
+    this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.onTurnComplete = opts.onTurnComplete;
     this.toolbox = opts.toolbox;
     this.handoffIo = opts.handoffIo;
@@ -181,6 +198,12 @@ export class ChatService {
     const text = (input.text ?? '').trim();
     if (!text) throw new PetdError('E_BAD_PARAMS', '消息内容不能为空');
     if (text.length > 8000) throw new PetdError('E_BAD_PARAMS', '消息太长（上限 8000 字）');
+
+    // 用户点了「暂停」：不再花 token、不再动电脑
+    if (this.pauseGate?.paused) {
+      const status = this.pauseGate.status();
+      throw new PetdError('E_UNAVAILABLE', `运行已暂停：${status.reason ?? '用户暂停了运行'}（先继续再聊）`);
+    }
 
     // 附件：只校验存在性并取元数据；正文不变，附件句柄作为额外提示拼进这一轮的用户消息
     const attachments = this.resolveAttachments(input.attachments ?? []);
@@ -231,6 +254,10 @@ export class ChatService {
 
     try {
       for (let round = 0; round <= this.chat.maxToolRounds; round += 1) {
+        if (this.pauseGate?.paused) {
+          const status = this.pauseGate.status();
+          throw new PetdError('E_UNAVAILABLE', `运行已暂停：${status.reason ?? '用户暂停了运行'}`);
+        }
         const r = await this.llm.complete({
           messages,
           ...(toolDefs === undefined ? {} : { tools: toolDefs }),
@@ -249,7 +276,7 @@ export class ChatService {
         if (round >= this.chat.maxToolRounds) break; // 轮数用完了，不再继续调工具
         messages.push({ role: 'assistant', content: r.text, toolCalls: r.toolCalls });
         for (const call of r.toolCalls) {
-          const res = await toolbox!.execute(call);
+          const res = await toolbox!.execute(call, { ...(input.signal === undefined ? {} : { signal: input.signal }) });
           const activity: ChatToolActivity = { round: round + 1, name: call.name, args: call.arguments, ok: res.ok, text: res.text };
           tools.push(activity);
           this.publish('chat.tool', {
@@ -261,9 +288,15 @@ export class ChatService {
             preview: res.text.slice(0, 800),
           });
           messages.push({ role: 'tool', content: res.text, toolCallId: call.id });
+          if (res.images !== undefined && res.images.length > 0 && this.cuaIncludeImages) {
+            const parts: LlmContentPart[] = [{ type: 'text', text: `[${call.name} 的截图]` }];
+            for (const img of res.images) parts.push({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.data}` } });
+            messages.push({ role: 'user', content: parts });
+          }
         }
       }
     } catch (e) {
+      this.cua?.onTurnEnded();
       this.publish('chat.failed', { sessionId: meta.id, code: (e as { code?: string }).code ?? 'E_INTERNAL', message: (e as Error).message });
       throw e;
     }
@@ -325,6 +358,8 @@ export class ChatService {
       }
     }
 
+    this.cua?.onTurnEnded();
+
     this.logger?.info('聊天一轮完成', {
       sessionId: meta.id,
       promptTokens: mergedReply.usage.promptTokens,
@@ -340,7 +375,7 @@ export class ChatService {
   private composeSystemPrompt(): string {
     const base = this.systemPrompt();
     const extras: string[] = [];
-    for (const provider of [this.moodPrompt, this.skillsPrompt]) {
+    for (const provider of [this.moodPrompt, this.skillsPrompt, this.cuaPrompt]) {
       if (!provider) continue;
       try {
         const text = provider();
@@ -506,7 +541,7 @@ export class ChatService {
     }
   }
 
-  private estimatePromptTokens(messages: Array<{ content: string }>): number {
+  private estimatePromptTokens(messages: Array<{ content: string | LlmContentPart[] }>): number {
     return estimateMessagesTokens(messages);
   }
 

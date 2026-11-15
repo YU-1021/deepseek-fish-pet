@@ -10,6 +10,7 @@ import path from 'node:path';
 import { EventBus } from '../kernel/events.js';
 import { DEFAULT_CONFIG } from '../kernel/config.js';
 import type { CompleteOptions, LlmReply } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import { WorkspaceMemory } from '../memory/store.js';
 import { WorkspaceGit } from '../memory/git.js';
 import { MemoryService } from '../memory/service.js';
@@ -139,7 +140,7 @@ test('工具报错也回灌给模型，让模型自己纠正', async () => {
   const res = await h.service.send({ text: '读一下 不存在.md' });
   assert.equal(res.tools[0]?.ok, false);
   const toolMsg = llm.calls[1]?.messages.find((m) => m.role === 'tool');
-  assert.match(toolMsg?.content ?? '', /错误（E_NOT_FOUND）/);
+  assert.match(messageText(toolMsg?.content ?? ''), /错误（E_NOT_FOUND）/);
 });
 
 test('写配额生效：一轮内写超过 maxToolWrites 的后续写被拒绝', async () => {

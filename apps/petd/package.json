@@ -20,6 +20,8 @@
   "dependencies": {
     "@petd/protocol": "workspace:*",
     "@sinclair/typebox": "^0.34.41",
+    "jpeg-js": "^0.4.4",
+    "koffi": "^3.3.8",
     "opencc-js": "^1.4.2",
     "ws": "^8.18.3"
   },

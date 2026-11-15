@@ -7,6 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { PetdError } from '@petd/protocol';
+import type { LlmContentPart } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import { PersonaStore } from './store.js';
 import { evolvePersona, parseEvolveReply, type EvolveLlm, type EvolveMessage } from './evolve.js';
 
@@ -15,7 +17,7 @@ function tmpHome(): string {
 }
 
 interface LlmCall {
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string | LlmContentPart[] }>;
   temperature?: number;
   maxTokens?: number;
 }
@@ -73,8 +75,8 @@ test('正常演化：JSON 提议 → 经 store.patch(agent) 落盘', async () =>
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.temperature, 0.3);
   assert.equal(calls[0]?.maxTokens, 800);
-  assert.ok(calls[0]?.messages[0]?.content.includes('人格演化器'));
-  assert.ok(calls[0]?.messages[1]?.content.includes('今天工作好累'));
+  assert.ok(messageText(calls[0]?.messages[0]?.content ?? '').includes('人格演化器'));
+  assert.ok(messageText(calls[0]?.messages[1]?.content ?? '').includes('今天工作好累'));
   assert.ok(store.read().content.includes('少绕弯子'));
   const h = store.history(3);
   assert.equal(h[0]?.actor, 'agent');
@@ -135,7 +137,7 @@ test('对话摘录有预算：超长经历被裁剪', async () => {
   }));
   const { llm, calls } = fakeLlm('{"changed": false, "reason": "无需改动", "sections": {}}');
   await evolvePersona({ store, llm, recentMessages: () => longHistory, historyBudgetChars: 3000 });
-  const prompt = calls[0]?.messages[1]?.content ?? '';
+  const prompt = messageText(calls[0]?.messages[1]?.content ?? '');
   assert.ok(prompt.length < 6000 + 3500, `prompt 过长：${prompt.length}`);
   assert.ok(prompt.includes('…'), '应出现裁剪标记');
 });

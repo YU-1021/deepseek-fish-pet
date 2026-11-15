@@ -17,6 +17,8 @@ import { isTextMime } from '../memory/blob.js';
 import type { MemoryService } from '../memory/service.js';
 import type { ReminderStore } from '../reminders/store.js';
 import type { SkillStore } from '../skills/store.js';
+import type { CuaEngine } from '../cua/engine.js';
+import { CUA_TOOL_NAMES, CUA_TOOLS, executeCuaTool } from './cua-tools.js';
 
 /** 声明给模型的工具（OpenAI function calling 格式） */
 export const MEMORY_TOOLS: LlmToolDefinition[] = [
@@ -321,12 +323,15 @@ const ALL_TOOL_NAMES = new Set<string>([
   ...REMINDER_TOOLS,
   ...AUTOMATION_TOOLS,
   ...SKILL_TOOLS,
+  ...CUA_TOOLS,
 ].map((t) => t.function.name));
 
 export interface ToolExecutionResult {
   ok: boolean;
   /** 回给模型的文本（已截断） */
   text: string;
+  /** 需要追加成图片消息的截图（base64 JPEG） */
+  images?: Array<{ mime: string; data: string }>;
 }
 
 export interface MemoryToolboxOptions {
@@ -339,6 +344,10 @@ export interface MemoryToolboxOptions {
   automation?: AutomationStore;
   /** 技能存储；不传 = 不启用技能工具 */
   skills?: SkillStore;
+  /** 电脑操作引擎；不传/未启用 = 不暴露 CUA 工具 */
+  cua?: CuaEngine;
+  /** 截图是否作为图片一起回给模型（config.cua.includeImages） */
+  cuaIncludeImages?: boolean;
   /** 每轮允许的写操作次数 */
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
@@ -379,6 +388,8 @@ export class MemoryToolbox {
   private readonly reminders?: ReminderStore;
   private readonly automation?: AutomationStore;
   private readonly skills?: SkillStore;
+  private readonly cua?: CuaEngine;
+  private readonly cuaIncludeImages: boolean;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
   /** 本轮已用掉的写操作次数 */
@@ -390,6 +401,8 @@ export class MemoryToolbox {
     this.reminders = opts.reminders;
     this.automation = opts.automation;
     this.skills = opts.skills;
+    this.cua = opts.cua;
+    this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
   }
@@ -399,11 +412,12 @@ export class MemoryToolbox {
     let tools = this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
     if (this.automation !== undefined && this.automation.isEnabled()) tools = [...tools, ...AUTOMATION_TOOLS];
     if (this.skills !== undefined) tools = [...tools, ...SKILL_TOOLS];
+    if (this.cua !== undefined && this.cua.enabled) tools = [...tools, ...CUA_TOOLS];
     return tools;
   }
 
   /** 执行一个工具调用；永远返回文本结果，不抛错（错误也交给模型自己纠正）。 */
-  async execute(call: LlmToolCall): Promise<ToolExecutionResult> {
+  async execute(call: LlmToolCall, opts: { signal?: AbortSignal } = {}): Promise<ToolExecutionResult> {
     let args: Record<string, unknown>;
     try {
       const parsed: unknown = call.arguments.trim() === '' ? {} : JSON.parse(call.arguments);
@@ -411,6 +425,26 @@ export class MemoryToolbox {
       args = parsed as Record<string, unknown>;
     } catch (e) {
       return { ok: false, text: this.truncate(`错误：工具参数不是合法 JSON（${e instanceof Error ? e.message : String(e)}）`) };
+    }
+
+    if (CUA_TOOL_NAMES.has(call.name)) {
+      if (this.cua === undefined || !this.cua.enabled) {
+        return { ok: false, text: this.truncate('错误：电脑操作没有开启（config.cua.enabled=false）') };
+      }
+      try {
+        const res = await executeCuaTool(this.cua, call.name, args, {
+          includeImages: this.cuaIncludeImages,
+          ...(opts.signal === undefined ? {} : { signal: opts.signal }),
+        });
+        return {
+          ok: res.ok,
+          text: this.truncate(res.text),
+          ...(res.images === undefined ? {} : { images: res.images }),
+        };
+      } catch (e) {
+        if (e instanceof PetdError) return { ok: false, text: this.truncate(`错误（${e.code}）：${e.message}`) };
+        return { ok: false, text: this.truncate(`错误：${e instanceof Error ? e.message : String(e)}`) };
+      }
     }
 
     if (!WRITE_TOOLS.has(call.name) && !ALL_TOOL_NAMES.has(call.name)) {

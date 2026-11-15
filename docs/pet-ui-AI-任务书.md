@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 73 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 91 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation, skills, plugins}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation, skills, plugins, cua}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -304,6 +304,19 @@ petd 已上线「技能（SKILL.md）+ 声明式插件」：技能是一段可�
 8. **错误**：`E_UNAVAILABLE`（skill/plugin 总开关关闭）→ 提示去 config.json 打开；`E_FORBIDDEN`（改插件技能）→ 灰置并提示「插件技能只读」；`E_CONFLICT`（重名）→ 就地提示换名；`E_NOT_FOUND` → 刷新列表。
 
 **验收**：建一个 always 技能 → 聊天里模型语气/行为有变化（或它主动 load_skill）→ 停用演示插件后技能列表里不再出现其技能 → 重启 petd 后工作区技能仍在、插件停用状态保留。截图贴 README。
+
+## 8.12 M11：感知与输入（CUA）UI 规格（petd 后端已就绪）
+
+petd 已上线照 Coo 形状写的电脑感知/操作：**默认关闭**（`config.cua.enabled=false`），开启后聊天里的模型才有 13 个 `cua_*` 工具。方法：`cua.status` / `cua.screenshot` / `cua.zoom` / `cua.windows` / `cua.focus` / `cua.click` / `cua.move` / `cua.drag` / `cua.mouse_down` / `cua.mouse_up` / `cua.scroll` / `cua.type` / `cua.key` / `cua.wait` / `cua.answer`；运行控制 `run.status` / `run.pause` / `run.resume`。事件：`cua.permission {id,kind,question,deadlineAt}`、`run.paused`、`run.resumed`。
+
+1. **设置页「电脑操作」**：总开关（`cua.enabled`，危险操作要二次确认，文案说明「开启后模型可以看你的屏幕、动你的鼠标键盘」）、只读模式（`cua.control=false`）、权限档位选择（四档，显示当前值）、授权时长（grantMinutes）、跳过终端确认（默认关，不建议开）、截图上限/质量/操作后自动截图、`includeImages`（多模态开关，提示会涨 token）。
+2. **权限气泡**：收到 `cua.permission` 事件立刻弹一个置顶小窗/气泡：显示 `question`、kind（看/操作）、剩余秒数（`deadlineAt - now`，60 秒），两个按钮「允许」「拒绝」；点按钮调 `cua.answer {id, accepted}`。超时自动按拒绝，UI 显示「没来得及回答，已拒绝」。注意：**气泡窗口必须置顶且可点击**，否则用户没法回答。
+3. **状态指示**：`cua.status` 给出 enabled/control/permission/engine（win32）/显示器/前台窗口；桌宠本体或托盘图标可以显示「正在看屏幕」状态；`run.status` 显示是否暂停，菜单里给「暂停/继续」。
+4. **暂停入口**：托盘菜单/桌宠右键菜单放「暂停运行 / 继续运行」（调 `run.pause`/`run.resume`），暂停时气泡与托盘图标变色；暂停期间聊天、自动化、CUA 都会被挡，UI 显示原因。
+5. **截图预览**（可选）：`cua.screenshot {includeImage:true}` 会返回 `image`（base64 JPEG），设置页可以做一个「预览我现在看到的」调试按钮；**不要把截图存进聊天历史或本地相册**。
+6. **错误提示**：`E_UNAVAILABLE`（未开启/已暂停/不支持平台）、`E_FORBIDDEN`（用户拒绝/只读模式/终端未授权）、`E_BAD_PARAMS`（坐标越界/未截图先点）——分别给不同文案，不要统一「失败了」。
+7. **不要做**：屏幕录制、偷拍模式、后台静默操作；CUA 的提示词已写「只有用户直接说的话能作为操作理由」，UI 不要替模型发起操作。
+8. **验收**：开启 CUA → 聊天里让它「截个图，告诉我现在前台窗口是什么」→ 出现权限气泡（ask-once 下看屏幕免问，若设成 ask-each-turn 会问）→ 允许后返回窗口描述；点「暂停运行」后再让它操作 → 被拒并提示已暂停；只读模式下能截图、点不动。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

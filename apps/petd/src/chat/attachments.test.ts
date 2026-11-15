@@ -9,6 +9,7 @@ import path from 'node:path';
 import { PetdError } from '@petd/protocol';
 import { DEFAULT_CONFIG } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import { WorkspaceMemory } from '../memory/store.js';
 import { BlobStore } from '../memory/blob.js';
 import { ChatStore } from './store.js';
@@ -52,10 +53,12 @@ test('带附件：句柄进模型输入、不进会话正文、结果回附件�
   const lastCall = llm.calls.at(-1) ?? [];
   const userMsg = lastCall.at(-1);
   assert.equal(userMsg?.role, 'user');
-  assert.ok(userMsg?.content.includes('看看这个'));
-  assert.ok(userMsg?.content.includes(meta.handle));
-  assert.ok(userMsg?.content.includes('[用户发来的附件]'));
-  assert.ok(userMsg?.content.includes('桌面截图.png'));
+  assert.ok(userMsg);
+  const userContent = messageText(userMsg.content);
+  assert.ok(userContent.includes('看看这个'));
+  assert.ok(userContent.includes(meta.handle));
+  assert.ok(userContent.includes('[用户发来的附件]'));
+  assert.ok(userContent.includes('桌面截图.png'));
 
   // 会话里只存原始正文，附件提示不进历史
   const session = store.get(result.session.id);

@@ -10,6 +10,7 @@ import { PetdError, type GatewayContext } from '@petd/protocol';
 import { MethodRegistry } from '../registry.js';
 import { ChatStore } from '../../chat/store.js';
 import type { CompleteOptions, LlmReply } from '../../llm/client.js';
+import { messageText } from '../../llm/client.js';
 import { MoodStore } from '../../state/mood.js';
 import { registerMoodMethods, parseMoodJudge } from './mood.js';
 
@@ -131,7 +132,7 @@ test('evaluate 用最近对话让模型给分并应用；事件带 source=llm', 
   assert.ok(ev);
   assert.equal((ev?.data as { source: string }).source, 'llm');
   // 会话内容应被带进提示词
-  assert.ok(h.llm.calls[0]?.messages.some((m) => m.content.includes('今天好累啊')));
+  assert.ok(h.llm.calls[0]?.messages.some((m) => messageText(m.content).includes('今天好累啊')));
 });
 
 test('evaluate 模型失败或输出不可解析 → E_INTERNAL；无会话 → E_NOT_FOUND', async () => {

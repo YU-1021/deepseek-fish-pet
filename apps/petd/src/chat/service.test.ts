@@ -9,6 +9,7 @@ import path from 'node:path';
 import { EventBus } from '../kernel/events.js';
 import { DEFAULT_CONFIG } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import { ChatStore } from './store.js';
 import { ChatService, type ChatServiceOptions } from './service.js';
 
@@ -142,7 +143,7 @@ test('系统提示词拼接情绪段，一轮成功后触发 onTurnComplete', as
     },
   });
   const res = await h.service.send({ text: '今天好累' });
-  const system = h.llm.calls[0]?.[0]?.content ?? '';
+  const system = messageText(h.llm.calls[0]?.[0]?.content ?? '');
   assert.ok(system.includes('你是大肥鱼'));
   assert.ok(system.includes('## 你现在的状态'));
   assert.equal(turns.length, 1);

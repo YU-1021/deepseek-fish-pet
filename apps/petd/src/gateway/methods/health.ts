@@ -160,6 +160,24 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           enabled: Type.Boolean(),
           dir: Type.String(),
         }),
+        cua: Type.Object({
+          enabled: Type.Boolean(),
+          control: Type.Boolean(),
+          permission: Type.String(),
+          grantMinutes: Type.Number(),
+          skipTerminalAsk: Type.Boolean(),
+          screenshot: Type.Object({
+            maxWidth: Type.Integer(),
+            maxHeight: Type.Integer(),
+            quality: Type.Integer(),
+            afterAction: Type.Boolean(),
+            settleMs: Type.Integer(),
+          }),
+          userIdleMs: Type.Integer(),
+          maxYieldWaitMs: Type.Integer(),
+          typeChunkDelayMs: Type.Integer(),
+          includeImages: Type.Boolean(),
+        }),
       }),
     },
     () => {
@@ -187,6 +205,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         automation: { ...cfg.automation },
         skills: { ...cfg.skills },
         plugins: { ...cfg.plugins },
+        cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
       };
     }
   );

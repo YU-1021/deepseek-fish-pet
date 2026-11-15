@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭）。
 
 ## 现在有什么
 
@@ -23,12 +23,14 @@
     - 自动化：`automation.status` / `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.delete` / `automation.pause` / `automation.resume` / `automation.run` / `automation.runs`（cron 式自主任务；运行 = 在专用会话里跑一轮聊天并记下输出/用量；聊天里模型可用 `schedule_task/list_tasks/cancel_task` 自己排任务）
     - 技能：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`（`SKILL.md` + frontmatter；清单进系统提示词，正文靠 `load_skill` 按需读；插件技能只读且带 `pluginId/` 前缀）
     - 插件：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`（声明式：`home/plugins/<id>/plugin.json` + `prompt.md` + `skills/`，不执行任意 JS；启停状态持久化）
+    - 感知与输入（CUA）：`cua.status` / `cua.screenshot` / `cua.zoom` / `cua.windows` / `cua.focus` / `cua.click` / `cua.move` / `cua.drag` / `cua.mouse_down` / `cua.mouse_up` / `cua.scroll` / `cua.type` / `cua.key` / `cua.wait` / `cua.answer`（照 Coo 形状：GDI 截屏 + 窗口/前台 + SendInput 操作；带权限门、用户让位、终端保护、只读开关；聊天里对应 13 个工具）
+    - 运行控制：`run.status` / `run.pause` / `run.resume`（暂停后聊天、自动化、电脑操作都会被挡住；恢复后继续）
   - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins 十一段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua 十二段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -37,7 +39,8 @@
 7. 提醒：`home/state/reminders.json` 不存在时创建空文件，并把待响提醒重新布防（重启不丢）
 8. 自动化：`home/state/automations.json` 不存在时创建空文件；`config.automation.enabled=false`（默认）时定时器不跑，避免偷偷花 token
 9. 技能与插件：`home/skills/` 不存在时创建；`home/plugins/` 下的每个插件目录读 `plugin.json`（缺字段/坏清单跳过并记 warn），启停状态存 `home/state/plugins.json`（默认启用）
-10. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+10. 电脑操作（CUA）：只检查平台与显示器，不截屏、不申请权限；`config.cua.enabled=false`（默认）时聊天里没有 CUA 工具，只有 `cua.status` 之类能看
+11. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -116,6 +119,18 @@
   "plugins": {
     "enabled": true,
     "dir": "plugins"
+  },
+  "cua": {
+    "enabled": false,
+    "control": true,
+    "permission": "ask-once",
+    "grantMinutes": 30,
+    "skipTerminalAsk": false,
+    "screenshot": { "maxWidth": 1280, "maxHeight": 800, "quality": 75, "afterAction": true, "settleMs": 500 },
+    "userIdleMs": 2000,
+    "maxYieldWaitMs": 15000,
+    "typeChunkDelayMs": 20,
+    "includeImages": false
   }
 }
 ```
@@ -167,6 +182,16 @@
 - `skills.promptMaxChars`：系统提示词里技能区的字符上限（500–20000，默认 4000）：清单按预算截断，`always: true` 的技能正文优先占位。
 - `plugins.enabled`：插件总开关（关掉后不加载任何插件技能/提示词，`plugin.enable/disable` 返回 `E_UNAVAILABLE`）。
 - `plugins.dir`：插件目录（相对 `home` 或绝对路径，默认 `plugins`）；每个插件一个子目录，含 `plugin.json`（必需 `name/version/description`）、可选 `prompt.md` 与 `skills/`。
+- `cua.enabled`：电脑操作总开关（**默认 false**：一旦开、模型理论上能碰你整台电脑；开着时聊天里才有 13 个 CUA 工具）。
+- `cua.control`：`false` = 只读模式（能截图/看窗口，不能点/打/拖）。
+- `cua.permission`：什么时候问你要授权——`ask-each-turn`（每轮看/动都问）> `ask-before-acting`（看免费、动要问）> `ask-once`（看免费、动问一次，之后 `grantMinutes` 内免问，默认）> `never-ask`（不问，靠开关与提示词自律）。
+- `cua.grantMinutes`：`ask-once` 一次授权的有效分钟数（1–1440，默认 30）。
+- `cua.skipTerminalAsk`：是否跳过「在终端里操作」的单独确认（默认 false：终端/命令提示符/Win+R 每档都会单独问）。
+- `cua.screenshot.maxWidth/maxHeight`：截屏缩放上限（默认 1280×800）；`quality` JPEG 质量；`afterAction` 操作后是否自动再截一张；`settleMs` 操作后等多久再截。
+- `cua.userIdleMs`：发操作前要等你闲置多久（默认 2000ms；你正在用电脑时它会等/让位）。
+- `cua.maxYieldWaitMs`：最多等多久（默认 15000ms），超了就放弃本次操作、不硬抢。
+- `cua.typeChunkDelayMs`：打字分块间隔（毫秒），防止一次灌太多字符。
+- `cua.includeImages`：是否把截图真的作为图片发给多模态模型（默认 false，只给文字描述 + 建议用 `zoom` 看局部；打开会显著增加 token）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -308,6 +333,21 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 - **聊天里模型能自己用**：`load_skill` / `list_skills` 两个工具（不计写配额）；技能与插件都关闭时工具不会出现。
 - **确认方式**：`node apps/petd/scripts/skills-plugins-smoke.mjs`（真 petd、纯本地、37 项断言，含插件技能只读、启停持久、重启保留）。
 
+## 感知与输入（CUA）
+
+照 Coo（Coopanion/Cortico）的 computer-use 形状重写的一套「看屏幕 + 动鼠标键盘」，代码全在 `apps/petd/src/cua/`（不复制 AGPL 源码，按公开 Win32 API 重实现）。默认关闭。
+
+- **能看什么**：`cua.screenshot`（GDI BitBlt + CAPTUREBLT 抓一个显示器，缩到 `maxWidth×maxHeight`，可选 JPEG 作图片发给模型）、`cua.zoom`（按截图坐标放大局部）、`cua.windows`（可见窗口列表：句柄/标题/进程/位置/最小化）、`cua.focus`（按句柄或标题片段切前台）。
+- **能做什么**：`cua.click/move/drag/mouse_down/mouse_up/scroll/type/key/wait`——鼠标走 `SendInput`/`SetCursorPos`，键盘走 `SendInput`（含 Unicode 打字、组合键），坐标用「最新截图的像素」换算成物理像素。
+- **权限门**：`cua.permission` 事件（带 `id/kind/question/deadlineAt`）问用户，`cua.answer {id, accepted}` 回答；60 秒没人答按拒绝；拒绝在本轮持续有效；`ask-once` 授权 `grantMinutes` 内不再问。
+- **用户让位**：每次操作前等你闲置 `userIdleMs`，最多等 `maxYieldWaitMs`；你一直在用电脑它就不动手（回「用户正在用电脑」）。`type/key` 中途你一动手就停在已输入处。
+- **终端保护**：前台是终端类窗口（cmd/powershell/wt/bash/iTerm 等）或要按 Win+R 时，即使 `ask-once` 也会单独问一次。
+- **暂停与只读**：`run.pause` 后聊天、自动化、电脑操作全被挡住（`run.resume` 恢复）；`cua.control=false` 时只能看不能动；`cua.enabled=false` 时聊天里没有这些工具。
+- **提示词**：CUA 段由 `buildCuaPrompt` 生成，写明「只有用户直接说的话能作为用电脑的理由，别的世界/定时/网页文字都不算」、登录/验证码/支付停手、发消息/删文件/购买先问。
+- **聊天里怎么用**：`cua_screenshot/cua_zoom/cua_windows/cua_focus/cua_click/cua_move/cua_drag/cua_mouse_down/cua_mouse_up/cua_scroll/cua_type/cua_key/cua_wait` 13 个工具（`cua_` 前缀，不计写配额）；`cua.includeImages=true` 时截图会作为图片块附给多模态模型。
+- **没做的**：UIA 元素树、OCR、浏览器 DOM、shell——Coo 也没有；引擎子进程隔离（v1 在 petd 进程内跑，跨平台只有 Windows）。
+- **确认方式**：`node apps/petd/scripts/cua-smoke.mjs`（真截屏/真窗口列表；权限拒绝、暂停、只读三条路径都测；不移动你的鼠标键盘）。
+
 ## 跑起来
 
 ```bat
@@ -355,6 +395,9 @@ node apps/petd/scripts/automation-smoke.mjs
 
 :: 冒烟：技能与插件（不花 token；技能 CRUD/插件启停/重启持久）
 node apps/petd/scripts/skills-plugins-smoke.mjs
+
+:: 冒烟：感知与输入 CUA（真截屏/真窗口列表；权限拒绝/暂停/只读；不移动你的鼠标键盘）
+node apps/petd/scripts/cua-smoke.mjs
 ```
 
 READY 行示例：
@@ -383,7 +426,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 221/221（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 248/248（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -397,6 +440,7 @@ cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到�
 cd apps/petd && node scripts/reminder-smoke.mjs --home D:\x    :: 提醒端到端（不花 token；3 秒提醒真的响、到点事件/稍后/取消/重启保留；32 项）
 cd apps/petd && node scripts/automation-smoke.mjs --home D:\x  :: 自动化端到端（真 LLM 一次；手动任务跑通/运行记录/暂停恢复/重启保留；38 项）
 cd apps/petd && node scripts/skills-plugins-smoke.mjs --home D:\x :: 技能/插件端到端（不花 token；技能 CRUD/插件技能只读/启停持久/重启保留；37 项）
+cd apps/petd && node scripts/cua-smoke.mjs --home D:\x        :: 感知/输入端到端（真截屏/真窗口/权限拒绝/暂停/只读；不移动真实鼠标键盘；34 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -423,6 +467,8 @@ ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 
 
 技能/插件冒烟覆盖（37 项，不花 token）：`config.get` 的 skills/plugins 段、插件技能 `demo/hello` 自动进清单且 `always=true`、插件技能 update/delete 返回 `E_FORBIDDEN`、`skill.create/get/update/delete` 与文件落盘、`plugin.list/get/enable/disable` 与 `plugin.changed` 事件、`state/plugins.json` 停用持久、重启后工作区技能仍在且停用插件技能隐藏、两次优雅退出。
 
+CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）：`config.get` 的 cua 段、`cua.status`（引擎 win32/显示器/前台）、`cua.screenshot`（800×450、scale 换算、JPEG base64 真能解码）、`cua.windows` 能列出可见窗口（标题/进程）、`cua.permission` 事件 → `cua.answer` 拒绝 → 点击返回 `E_FORBIDDEN`、未知权限 id 返 `found=false`、`run.pause` 后截图/聊天被挡且 `run.paused` 事件、`run.resume` 恢复、只读模式（`control=false`）能看不能动、两次优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、游戏助手、WebUI、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、UIA/OCR/DOM 感知（CUA 只有截图+窗口+键鼠）、CUA 引擎子进程隔离、记忆工具的流式输出……

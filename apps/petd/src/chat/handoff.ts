@@ -11,6 +11,8 @@
  *   - Coo 的 handoffNote 由模型渲染、含 tool call / 回执 / 语音调用等富结构；
  *   - petd 这里是机械摘录（用户/助手文本 + 截断），更省 token、可预期、无需额外 LLM 调用。
  */
+import type { LlmContentPart } from '../llm/client.js';
+import { messageText } from '../llm/client.js';
 import type { StoredMessage } from './store.js';
 
 /** 机器可读的笔记类型（与 Coo 的 HANDOFF_NOTE_TYPE 对齐，便于以后做 UI/检索） */
@@ -29,9 +31,9 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3);
 }
 
-export function estimateMessagesTokens(messages: Array<{ content: string }>): number {
+export function estimateMessagesTokens(messages: Array<{ content: string | LlmContentPart[] }>): number {
   let total = 0;
-  for (const m of messages) total += estimateTokens(m.content) + 8;
+  for (const m of messages) total += estimateTokens(messageText(m.content)) + 8;
   return total;
 }
 

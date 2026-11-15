@@ -46,9 +46,23 @@ export interface LlmToolCall {
   arguments: string;
 }
 
+/** 多段消息内容：文本 + 图片（OpenAI 兼容 content parts） */
+export type LlmContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/** 把消息内容压成纯文本（忽略图片段）；日志、统计、测试用。 */
+export function messageText(content: string | LlmContentPart[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map((p) => p.text)
+    .join('\n');
+}
+
 export interface LlmMessage {
   role: LlmRole;
-  content: string;
+  content: string | LlmContentPart[];
   /** role=assistant 时：模型这一轮要求调用的工具 */
   toolCalls?: LlmToolCall[];
   /** role=tool 时：对应的 tool_call_id */

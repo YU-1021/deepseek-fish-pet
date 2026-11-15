@@ -55,6 +55,12 @@ import { SkillStore } from './skills/store.js';
 import { PluginStore } from './plugins/store.js';
 import { registerSkillMethods } from './gateway/methods/skill.js';
 import { registerPluginMethods } from './gateway/methods/plugin.js';
+import { PauseGate } from './kernel/pause.js';
+import { PermissionBroker } from './cua/permission.js';
+import { CuaEngine } from './cua/engine.js';
+import { buildCuaPrompt } from './cua/prompt.js';
+import { registerCuaMethods } from './gateway/methods/cua.js';
+import { registerRunMethods } from './gateway/methods/run.js';
 
 interface CliArgs {
   home?: string;
@@ -270,6 +276,26 @@ async function main(): Promise<void> {
   });
 
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
+
+  // ── 电脑操作（CUA）：看屏幕 + 动鼠标键盘；默认关闭；权限门 + 暂停门 + 用户让位 ──
+  // 平台不是 Windows 时 enabled 为 false；v1 直接跑在 petd 进程里（koffi），子进程隔离留后续。
+  const pauseGate = new PauseGate();
+  const permissionBroker = new PermissionBroker({
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+  });
+  const cua = new CuaEngine({
+    config: config.cua,
+    logger,
+    ask: (kind, question) => permissionBroker.ask(kind, question),
+    pauseGate,
+  });
+  logger.info('电脑操作已就绪', {
+    enabled: cua.enabled,
+    control: config.cua.control,
+    permission: config.cua.permission,
+    platform: process.platform,
+  });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
@@ -305,6 +331,11 @@ async function main(): Promise<void> {
       }
       return parts.join('\n\n');
     },
+    // 电脑操作说明段（权限档位/坐标规则/安全边界）；关闭时不注入
+    cuaPrompt: () => (cua.enabled ? buildCuaPrompt(cua.status(), config.cua) : ''),
+    pauseGate,
+    cua: { enabled: cua.enabled, onTurnEnded: () => cua.onTurnEnded() },
+    cuaIncludeImages: config.cua.includeImages,
     // 聊天后的小步互动：开心一点、更亲近一点、稍微耗点精力（都是很小的量，靠模型评估可另外跑 mood.evaluate）
     onTurnComplete: config.mood.enabled && config.mood.chatNudge
       ? () => {
@@ -328,6 +359,8 @@ async function main(): Promise<void> {
         reminders,
         ...(automation === undefined ? {} : { automation }),
         ...(config.skills.enabled ? { skills: skillStore } : {}),
+        ...(cua.enabled ? { cua } : {}),
+        cuaIncludeImages: config.cua.includeImages,
       }),
     blobs,
     voice,
@@ -453,6 +486,11 @@ async function main(): Promise<void> {
   });
   registerSkillMethods(registry, { store: skillStore, enabled: () => config.skills.enabled });
   registerPluginMethods(registry, { store: pluginStore, enabled: () => config.plugins.enabled });
+  registerCuaMethods(registry, {
+    cua,
+    answerPermission: (id, accepted) => permissionBroker.answer(id, accepted),
+  });
+  registerRunMethods(registry, { pauseGate, publish: (event, data) => publishEvent(event, data) });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {
@@ -503,6 +541,8 @@ async function main(): Promise<void> {
     }, 5000);
     force.unref?.();
     try {
+      cua.onTurnEnded();
+      permissionBroker.cancelAll();
       automation?.stop();
       reminders.stop();
       await gateway.stop();
