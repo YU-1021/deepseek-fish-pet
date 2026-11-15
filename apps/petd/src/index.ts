@@ -197,6 +197,11 @@ async function main(): Promise<void> {
         maxWrites: config.chat.maxToolWrites,
         maxResultChars: config.chat.toolResultChars,
       }),
+    // 交接笔记跟着工作区走：写进 handoffs/ 会像普通记忆一样 Git 提交
+    handoffIo: {
+      readFile: (relPath) => memoryService.read(relPath).content,
+      writeFile: (relPath, content) => memoryService.write(relPath, content),
+    },
     logger,
   });
 

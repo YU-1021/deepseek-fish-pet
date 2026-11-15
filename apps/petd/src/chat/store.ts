@@ -27,6 +27,15 @@ export interface SessionMeta {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  /**
+   * 已压缩进交接笔记的消息数（从会话开头算）。
+   * 0/缺省 = 没有做过交接；之后每轮对话只带 messages[contextStart..] + 最新交接笔记。
+   */
+  contextStart?: number;
+  /** 最近一次请求的 prompt token 估算（只做观测，不参与判断） */
+  lastPromptTokens?: number;
+  /** 最近几次交接笔记在工作区的相对路径（新 → 旧，最多 3 个） */
+  handoffFiles?: string[];
 }
 
 export interface Session extends SessionMeta {
@@ -112,6 +121,15 @@ export class ChatStore {
             createdAt: item['createdAt'],
             updatedAt: item['updatedAt'],
             messageCount: item['messageCount'],
+            ...(typeof item['contextStart'] === 'number' && item['contextStart'] >= 0
+              ? { contextStart: item['contextStart'] }
+              : {}),
+            ...(typeof item['lastPromptTokens'] === 'number' && item['lastPromptTokens'] >= 0
+              ? { lastPromptTokens: item['lastPromptTokens'] }
+              : {}),
+            ...(Array.isArray(item['handoffFiles'])
+              ? { handoffFiles: item['handoffFiles'].filter((x): x is string => typeof x === 'string') }
+              : {}),
           });
         }
       }
@@ -205,6 +223,22 @@ export class ChatStore {
     const meta = index.sessions.find((s) => s.id === id);
     if (!meta) return null;
     meta.title = clampTitle(title);
+    meta.updatedAt = nowIso();
+    this.writeMeta(meta);
+    return { ...meta };
+  }
+
+  /** 更新会话元数据（交接状态/提示词 token 估算），返回新元数据。 */
+  update(
+    id: string,
+    patch: Partial<Pick<SessionMeta, 'contextStart' | 'lastPromptTokens' | 'handoffFiles'>>,
+  ): SessionMeta | null {
+    const index = this.loadIndex();
+    const meta = index.sessions.find((s) => s.id === id);
+    if (!meta) return null;
+    if (patch.contextStart !== undefined) meta.contextStart = patch.contextStart;
+    if (patch.lastPromptTokens !== undefined) meta.lastPromptTokens = patch.lastPromptTokens;
+    if (patch.handoffFiles !== undefined) meta.handoffFiles = patch.handoffFiles.slice(0, 3);
     meta.updatedAt = nowIso();
     this.writeMeta(meta);
     return { ...meta };

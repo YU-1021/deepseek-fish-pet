@@ -21,6 +21,17 @@ const SessionMeta = Type.Object({
   createdAt: Type.String(),
   updatedAt: Type.String(),
   messageCount: Type.Integer(),
+  contextStart: Type.Optional(Type.Integer()),
+  lastPromptTokens: Type.Optional(Type.Integer()),
+  handoffFiles: Type.Optional(Type.Array(Type.String())),
+});
+
+const HandoffActivity = Type.Object({
+  file: Type.String(),
+  compressed: Type.Integer(),
+  kept: Type.Integer(),
+  tokensBefore: Type.Integer(),
+  tokensAfter: Type.Integer(),
 });
 
 const Usage = Type.Object({
@@ -133,6 +144,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         assistantMessage: Message,
         reply: Type.Object({ text: Type.String(), model: Type.String(), usage: Usage, finishReason: Type.Optional(Type.String()) }),
         tools: Type.Array(ToolActivity),
+        handoff: Type.Union([HandoffActivity, Type.Null()]),
       }),
       timeoutMs: 120_000,
       idempotent: false,
@@ -151,7 +163,24 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
           ...(result.reply.finishReason === undefined ? {} : { finishReason: result.reply.finishReason }),
         },
         tools: result.tools,
+        handoff: result.handoff,
       };
+    }
+  );
+
+  reg.register(
+    {
+      name: 'chat.handoff',
+      scope: 'write',
+      description: '手动整理上下文：把更早的对话机械压缩成工作区 handoffs/ 里的交接笔记（保留最近 2 条）',
+      params: Type.Object({ sessionId: Type.String({ minLength: 1 }) }),
+      result: HandoffActivity,
+      timeoutMs: 30_000,
+      idempotent: false,
+    },
+    async (params) => {
+      const p = params as { sessionId: string };
+      return deps.chat.handoff(p.sessionId);
     }
   );
 }

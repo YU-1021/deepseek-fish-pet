@@ -1,4 +1,4 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接）
 
 这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）。
 
@@ -37,7 +37,12 @@
     "maxHistoryChars": 24000,
     "maxToolRounds": 6,
     "maxToolWrites": 3,
-    "toolResultChars": 4000
+    "toolResultChars": 4000,
+    "contextMaxTokens": 64000,
+    "softRatio": 0.85,
+    "keepRatio": 0.25,
+    "handoffDir": "handoffs",
+    "handoffNoteMaxChars": 12000
   }
 }
 ```
@@ -46,6 +51,11 @@
 - `chat.maxToolRounds`：一轮聊天里最多允许几轮「模型调工具 → 结果回灌」（0 = 关闭记忆工具）。
 - `chat.maxToolWrites`：一轮聊天里最多几次写操作（写/追加/编辑/删除/移动都算），防止它一时上头把记忆写乱。
 - `chat.toolResultChars`：单个工具结果回给模型的字符上限，超了截断并提示分段读。
+- `chat.contextMaxTokens`：上下文预算的粗估（按字符/3 估 token，不是模型真实计数），0 = 关闭自动交接。
+- `chat.softRatio`：估算用量超过 `contextMaxTokens × softRatio` 时触发自动交接。
+- `chat.keepRatio`：交接时保留最近这段 ≈ `contextMaxTokens × keepRatio`，其余压成笔记。
+- `chat.handoffDir`：笔记写进工作区的哪个目录（默认 `handoffs`，跟着 Git 一起提交）。
+- `chat.handoffNoteMaxChars`：单篇笔记的字符上限（默认 12000）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -82,6 +92,19 @@
 - **失败语义**：模型只调工具不给文本、且轮数用完 → `E_LLM_EMPTY`（提示再说一次），并广播 `chat.failed`。
 - **提示词配合**：`## 记忆维护约定` 明确告诉模型可以直接调这些工具、不确定先读文件、一主题一文件、先 glob/grep 再新建等。
 
+## 上下文交接笔记
+
+对话不可能无限长。Coo 的做法是「超预算就把旧对话压成笔记存进工作区，再清空重来」，petd 借了这个形状（机械版，不带 LLM 摘要）：
+
+- **触发**：每轮 `chat.send` 先粗估「system 提示词 + 当前有效历史 + 本轮输入」的 token（字符/3），超过 `chat.contextMaxTokens × chat.softRatio` 就自动交接；至少 6 条有效消息才触发。
+- **保留多少**：最近约 `contextMaxTokens × keepRatio` 的消息原样留着，更早的压进笔记；至少压 2 条、至少留 2 条。
+- **笔记内容**：`handoffs/<UTC 时间戳>.md`——`# 交接笔记` 抬头、会话标题与时间范围、每条消息的角色/时间/正文（单条上限 600 字，预算不够逐级递减，丢掉的计数折叠）；纯机械摘录，注明细节请用 `read_file` / `grep_files` 核对。
+- **不丢消息**：`sessions/*.jsonl` 一条不少；会话元数据只记 `contextStart`（从第几条开始算「当前上下文」）、`handoffFiles`（最近 3 篇）、`lastPromptTokens`（观测用）。
+- **之后每轮**：只带 `messages[contextStart..]` + 最近一篇笔记（拼在系统提示词后面），模型仍能读到摘要，也能随时去读全文。
+- **收益守卫**：如果压完反而更长（很短的对话 + 笔记头开销），自动交接会跳过并记 warn，避免瞎折腾。
+- **手动**：`chat.handoff {sessionId}` 立刻交接一次（`force`，一定写笔记），返回 `{file,compressed,kept,tokensBefore,tokensAfter}`；自动交接成功也会广播 `chat.handoff` 事件，`chat.send` 结果里带 `handoff`。
+- **注意**：这是估算不是精算，真实 token 以模型返回的 `usage` 为准（`session.lastPromptTokens` 记的就是它）；`chat.contextMaxTokens` 设 0 可完全关掉自动交接。
+
 ## 跑起来
 
 ```bat
@@ -105,6 +128,9 @@ node apps/petd/scripts/memory-smoke.mjs
 
 :: 冒烟：聊天自动读写记忆（真调两次模型：先记再问）
 node apps/petd/scripts/chat-memory-smoke.mjs
+
+:: 冒烟：上下文交接（真调六次模型；会看到 handoffs/ 笔记和 Git 提交）
+node apps/petd/scripts/chat-handoff-smoke.mjs
 ```
 
 READY 行示例：
@@ -133,12 +159,13 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 96/96（网关/聊天/工具循环/人格/记忆）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 104/104（网关/聊天/工具循环/交接/人格/记忆）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
 cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，44 项；保留 home 可翻 workspace/.git）
 cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆端到端（真 LLM 两次：让它记一件事→工作区出现文件；再问→先读记忆再答）
+cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 六次；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -149,6 +176,8 @@ cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆�
 
 聊天记忆冒烟覆盖（21 项，真 LLM）：模型第一轮读旧文件→用 `write_file` 写新文件（工作区真的多出 `partner/*.md`，Git 有 `petd wrote …` 提交）→`chat.tool` 事件→工具过程不落库；第二轮先 `read_file` 再回答，答案里带出记忆要点；两轮后会话 4 条；优雅退出。
 
+交接冒烟覆盖（26 项，真 LLM）：自动交接（4 轮后 compressed 4/kept 2、token 估算变小、`chat.handoff` 事件、`handoffs/*.md` 以 `# 交接笔记` 开头、Git 有 `petd wrote handoffs/…` 提交、会话 JSONL 8 条不丢、`contextStart`/`handoffFiles`/`lastPromptTokens` 落元数据）→ 下一轮历史从 `contextStart` 起且 system 带笔记；手动 `chat.handoff`（compressed 2/kept 2、第二篇笔记）；优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、记忆的交接笔记压缩/附件 blob 存储/向量检索、记忆工具的流式输出……
+语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、附件 blob 存储/向量检索、记忆工具的流式输出……

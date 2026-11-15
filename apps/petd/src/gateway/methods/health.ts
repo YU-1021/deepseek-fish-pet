@@ -86,11 +86,38 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         version: Type.Integer(),
         gateway: Type.Object({ host: Type.String(), port: Type.Integer() }),
         log: Type.Object({ level: Type.String(), maxBytes: Type.Integer() }),
+        llm: Type.Object({
+          apiBase: Type.String(),
+          model: Type.String(),
+          timeoutMs: Type.Integer(),
+          temperature: Type.Number(),
+          maxTokens: Type.Integer(),
+          thinkingDisabled: Type.Boolean(),
+        }),
+        chat: Type.Object({
+          systemPromptFile: Type.String(),
+          maxHistoryMessages: Type.Integer(),
+          maxHistoryChars: Type.Integer(),
+          maxToolRounds: Type.Integer(),
+          maxToolWrites: Type.Integer(),
+          toolResultChars: Type.Integer(),
+          contextMaxTokens: Type.Integer(),
+          softRatio: Type.Number(),
+          keepRatio: Type.Number(),
+          handoffDir: Type.String(),
+          handoffNoteMaxChars: Type.Integer(),
+        }),
       }),
     },
     () => {
       const cfg = deps.getConfig();
-      return { version: cfg.version, gateway: { ...cfg.gateway }, log: { ...cfg.log } };
+      return {
+        version: cfg.version,
+        gateway: { ...cfg.gateway },
+        log: { ...cfg.log },
+        llm: { ...cfg.llm },
+        chat: { ...cfg.chat },
+      };
     }
   );
 }

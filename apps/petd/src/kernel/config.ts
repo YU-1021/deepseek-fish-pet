@@ -44,6 +44,16 @@ export interface PetdConfig {
     maxToolWrites: number;
     /** 单个工具结果回给模型的最大字符数 */
     toolResultChars: number;
+    /** 上下文预算（token 估算值）：超过 softRatio 触发交接（0 = 关闭交接） */
+    contextMaxTokens: number;
+    /** 上下文达到 max×softRatio 就准备交接 */
+    softRatio: number;
+    /** 交接时保留最近这段上下文（max×keepRatio），更早的压成交接笔记 */
+    keepRatio: number;
+    /** 交接笔记写在工作区的哪个目录（相对路径） */
+    handoffDir: string;
+    /** 交接笔记字符上限（超了折叠更早的条目） */
+    handoffNoteMaxChars: number;
   };
 }
 
@@ -66,6 +76,11 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxToolRounds: 6,
     maxToolWrites: 3,
     toolResultChars: 4000,
+    contextMaxTokens: 64_000,
+    softRatio: 0.85,
+    keepRatio: 0.25,
+    handoffDir: 'handoffs',
+    handoffNoteMaxChars: 12_000,
   },
 };
 
@@ -147,6 +162,21 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const tr = chat['toolResultChars'];
     if (typeof tr === 'number' && Number.isInteger(tr) && tr >= 200 && tr <= 20_000) out.chat.toolResultChars = tr;
     else if (tr !== undefined) warnings.push('chat.toolResultChars 非法，回默认 4000');
+    const cm = chat['contextMaxTokens'];
+    if (typeof cm === 'number' && Number.isInteger(cm) && cm >= 0 && cm <= 2_000_000) out.chat.contextMaxTokens = cm;
+    else if (cm !== undefined) warnings.push('chat.contextMaxTokens 非法，回默认 64000');
+    const sr = chat['softRatio'];
+    if (typeof sr === 'number' && Number.isFinite(sr) && sr > 0.1 && sr <= 1) out.chat.softRatio = sr;
+    else if (sr !== undefined) warnings.push('chat.softRatio 非法，回默认 0.85');
+    const kr = chat['keepRatio'];
+    if (typeof kr === 'number' && Number.isFinite(kr) && kr > 0.01 && kr <= 0.9) out.chat.keepRatio = kr;
+    else if (kr !== undefined) warnings.push('chat.keepRatio 非法，回默认 0.25');
+    const hd = chat['handoffDir'];
+    if (typeof hd === 'string' && hd.trim()) out.chat.handoffDir = hd.trim().replace(/^\/+|\/+$/g, '');
+    else if (hd !== undefined) warnings.push('chat.handoffDir 非法，回默认 handoffs');
+    const hn = chat['handoffNoteMaxChars'];
+    if (typeof hn === 'number' && Number.isInteger(hn) && hn >= 1000 && hn <= 200_000) out.chat.handoffNoteMaxChars = hn;
+    else if (hn !== undefined) warnings.push('chat.handoffNoteMaxChars 非法，回默认 12000');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

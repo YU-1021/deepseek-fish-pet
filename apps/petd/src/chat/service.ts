@@ -9,9 +9,16 @@
 import { PetdError } from '@petd/protocol';
 import type { PetdConfig } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import { handoffPath, renderHandoffNote, estimateMessagesTokens, estimateTokens } from './handoff.js';
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
 import { MEMORY_TOOLS, type MemoryToolbox } from './tools.js';
+
+/** 交接笔记的读写通道（petd 接工作区记忆；测试接内存 fake） */
+export interface HandoffIo {
+  readFile(relPath: string): string;
+  writeFile(relPath: string, content: string): Promise<unknown>;
+}
 
 export interface ChatServiceOptions {
   store: ChatStore;
@@ -23,8 +30,24 @@ export interface ChatServiceOptions {
   systemPrompt: () => string;
   /** 记忆工具工厂（每轮新建，写次数配额按轮重置）；不传 = 不启用工具 */
   toolbox?: () => MemoryToolbox;
+  /** 交接笔记读写；不传 = 不做上下文交接 */
+  handoffIo?: HandoffIo;
   logger?: { info(msg: string, data?: Record<string, unknown>): void; warn(msg: string, data?: Record<string, unknown>): void };
   now?: () => string;
+}
+
+/** 一次上下文交接的结果（回给 UI 显示「它把更早的对话压缩了」） */
+export interface HandoffActivity {
+  /** 笔记在工作区的相对路径 */
+  file: string;
+  /** 被压进笔记的消息条数 */
+  compressed: number;
+  /** 仍保留在上下文里的最近消息条数 */
+  kept: number;
+  /** 交接前的上下文 token 估算 */
+  tokensBefore: number;
+  /** 交接后的上下文 token 估算 */
+  tokensAfter: number;
 }
 
 export interface ChatSendInput {
@@ -52,6 +75,8 @@ export interface ChatSendResult {
   reply: LlmReply;
   /** 本轮模型用过的记忆工具（可能为空） */
   tools: ChatToolActivity[];
+  /** 本轮是否触发了上下文交接（没触发为 null） */
+  handoff: HandoffActivity | null;
 }
 
 export class ChatService {
@@ -61,6 +86,7 @@ export class ChatService {
   private readonly publish: (event: string, data?: unknown) => void;
   private readonly systemPrompt: () => string;
   private readonly toolbox?: () => MemoryToolbox;
+  private readonly handoffIo?: HandoffIo;
   private readonly logger?: ChatServiceOptions['logger'];
   private readonly now: () => string;
 
@@ -71,6 +97,7 @@ export class ChatService {
     this.publish = opts.publish;
     this.systemPrompt = opts.systemPrompt;
     this.toolbox = opts.toolbox;
+    this.handoffIo = opts.handoffIo;
     this.logger = opts.logger;
     this.now = opts.now ?? (() => new Date().toISOString());
   }
@@ -121,8 +148,25 @@ export class ChatService {
     const userMessage: StoredMessage = { role: 'user', content: text, ts: this.now() };
     this.publish('chat.user_message', { sessionId: meta.id, message: userMessage });
 
-    const messages: LlmMessage[] = [{ role: 'system', content: this.systemPrompt() }];
-    for (const m of this.pickHistory(history)) messages.push({ role: m.role, content: m.content });
+    const systemPrompt = this.systemPrompt();
+    let handoff: HandoffActivity | null = null;
+    let note = '';
+    try {
+      const created = await this.maybeHandoff(meta, history, text, systemPrompt);
+      if (created) {
+        handoff = created.activity;
+        note = created.note;
+      } else {
+        note = this.readLatestNote(meta);
+      }
+    } catch (e) {
+      this.logger?.warn('上下文交接失败，继续用原历史', { sessionId: meta.id, error: (e as Error).message });
+    }
+
+    const fresh = this.store.get(meta.id) ?? meta;
+    const active = history.slice(fresh.contextStart ?? 0);
+    const messages: LlmMessage[] = [{ role: 'system', content: note ? systemPrompt + '\n\n' + note : systemPrompt }];
+    for (const m of this.pickHistory(active)) messages.push({ role: m.role, content: m.content });
     messages.push({ role: 'user', content: text });
 
     const toolbox = this.chat.maxToolRounds > 0 && this.toolbox ? this.toolbox() : null;
@@ -197,6 +241,10 @@ export class ChatService {
       if (renamed) finalMeta = renamed;
     }
 
+    // 记录本轮 prompt token 估算（只做观测；交接判断用 estimate，不依赖模型返回）
+    const withTokens = this.store.update(meta.id, { lastPromptTokens: mergedReply.usage.promptTokens ?? this.estimatePromptTokens(messages) });
+    if (withTokens) finalMeta = withTokens;
+
     this.publish('chat.assistant_message', { sessionId: meta.id, message: assistantMessage, usage: mergedReply.usage, model: mergedReply.model });
     this.publish('session.updated', {
       sessionId: finalMeta.id,
@@ -211,7 +259,110 @@ export class ChatService {
       replyChars: mergedReply.text.length,
       toolCalls: tools.length,
     });
-    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools };
+    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, handoff };
+  }
+
+  /**
+   * 手动交接：立刻把更早的对话压成笔记（保留最近 2 条），不管是否超阈值。
+   * 用于 UI 的「整理上下文」按钮，或对话超长前的主动整理。
+   */
+  async handoff(sessionId: string): Promise<HandoffActivity> {
+    const session = this.getSession(sessionId);
+    const contextStart = session.contextStart ?? 0;
+    const active = session.messages.slice(contextStart);
+    if (active.length < 3) throw new PetdError('E_BAD_PARAMS', '消息太少，不需要交接');
+    const keep = Math.max(1, Math.min(2, active.length - 1));
+    const olderCount = active.length - keep;
+    const result = await this.performHandoff(session, active, olderCount, '', this.systemPrompt(), true);
+    if (!result) throw new PetdError('E_INTERNAL', '交接失败');
+    return result.activity;
+  }
+
+  /** 超过软阈值时自动交接；返回 null = 没触发 */
+  private async maybeHandoff(
+    meta: SessionMeta,
+    history: StoredMessage[],
+    incomingText: string,
+    systemPrompt: string,
+  ): Promise<{ activity: HandoffActivity; note: string } | null> {
+    const io = this.handoffIo;
+    if (!io || this.chat.contextMaxTokens <= 0) return null;
+    const contextStart = meta.contextStart ?? 0;
+    const active = history.slice(contextStart);
+    if (active.length < 6) return null;
+    const projected =
+      estimateTokens(systemPrompt) + estimateMessagesTokens(active) + estimateTokens(incomingText) + 8;
+    const soft = this.chat.contextMaxTokens * this.chat.softRatio;
+    if (projected <= soft) return null;
+    // 从最新往前累计，保留 keepRatio 预算内的最近消息（至少 2 条，且至少压掉 2 条）
+    const keepBudget = Math.floor(this.chat.contextMaxTokens * this.chat.keepRatio);
+    let keepFrom = active.length;
+    let acc = 0;
+    for (let i = active.length - 1; i >= 0; i -= 1) {
+      acc += estimateTokens(active[i]!.content) + 8;
+      keepFrom = i;
+      if (acc > keepBudget) break;
+    }
+    keepFrom = Math.max(keepFrom, 2);
+    keepFrom = Math.min(keepFrom, active.length - 2);
+    if (keepFrom <= 0) return null;
+    return this.performHandoff(meta, active, keepFrom, incomingText, systemPrompt);
+  }
+
+  private async performHandoff(
+    meta: SessionMeta,
+    active: StoredMessage[],
+    olderCount: number,
+    incomingText: string,
+    systemPrompt: string,
+    force = false,
+  ): Promise<{ activity: HandoffActivity; note: string } | null> {
+    const io = this.handoffIo;
+    if (!io) throw new PetdError('E_UNAVAILABLE', '没有配置交接笔记存储');
+    const older = active.slice(0, olderCount);
+    if (older.length === 0) throw new PetdError('E_BAD_PARAMS', '没有可压缩的消息');
+    const rendered = renderHandoffNote({
+      messages: older,
+      maxChars: this.chat.handoffNoteMaxChars,
+      sessionTitle: meta.title,
+    });
+    const file = handoffPath(this.chat.handoffDir, new Date(this.now()));
+    const kept = active.slice(older.length);
+    const note = '## 上下文交接笔记（更早的对话已压缩到工作区 `' + file + '`）\n\n' + rendered.content;
+    const tokensBefore =
+      estimateTokens(systemPrompt) + estimateMessagesTokens(active) + estimateTokens(incomingText) + 8;
+    const tokensAfter =
+      estimateTokens(systemPrompt) + estimateTokens(note) + estimateMessagesTokens(kept) + estimateTokens(incomingText) + 8;
+    // 收益检查：笔记本身有头部开销，消息太少/太短时可能反而更长——自动交接就跳过（手动的照做）
+    if (!force && tokensAfter >= tokensBefore) {
+      this.logger?.warn('交接没有减少上下文，跳过', { sessionId: meta.id, tokensBefore, tokensAfter, compressed: older.length });
+      return null;
+    }
+    await io.writeFile(file, rendered.content);
+    const contextStart = (meta.contextStart ?? 0) + older.length;
+    const handoffFiles = [file, ...(meta.handoffFiles ?? [])].slice(0, 3);
+    this.store.update(meta.id, { contextStart, handoffFiles });
+    const activity: HandoffActivity = { file, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter };
+    this.publish('chat.handoff', { sessionId: meta.id, ...activity });
+    this.logger?.info('上下文交接完成', { sessionId: meta.id, file, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter });
+    return { activity, note };
+  }
+
+  /** 后续轮次：从工作区读回最近一篇交接笔记，拼进 system 段 */
+  private readLatestNote(meta: SessionMeta): string {
+    const io = this.handoffIo;
+    const file = meta.handoffFiles?.[0];
+    if (!io || !file) return '';
+    try {
+      const text = io.readFile(file);
+      return '## 上下文交接笔记（更早的对话已压缩到工作区 `' + file + '`）\n\n' + text.slice(0, this.chat.handoffNoteMaxChars);
+    } catch {
+      return '';
+    }
+  }
+
+  private estimatePromptTokens(messages: Array<{ content: string }>): number {
+    return estimateMessagesTokens(messages);
   }
 
   /** 从旧到新取，满足条数且总字符不超预算；开头若是 assistant 丢掉（让历史以 user 开头更稳） */
