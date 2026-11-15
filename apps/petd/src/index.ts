@@ -39,6 +39,8 @@ import { WorkspaceMemory } from './memory/store.js';
 import { WorkspaceGit } from './memory/git.js';
 import { MemoryService } from './memory/service.js';
 import { BlobStore } from './memory/blob.js';
+import { VoiceService } from './voice/service.js';
+import { registerVoiceMethods } from './gateway/methods/voice.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 
@@ -199,6 +201,14 @@ async function main(): Promise<void> {
 
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
+  // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
+  const voice = new VoiceService({
+    config: config.voice,
+    home: paths.home,
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+  });
+  logger.info('语音服务已就绪', { engine: config.voice.engine, voice: config.voice.voice, enabled: config.voice.enabled });
   const chat = new ChatService({
     store,
     llm,
@@ -213,6 +223,8 @@ async function main(): Promise<void> {
         blobs,
       }),
     blobs,
+    voice,
+    autoSpeak: config.voice.autoSpeak,
     // 交接笔记跟着工作区走：写进 handoffs/ 会像普通记忆一样 Git 提交
     handoffIo: {
       readFile: (relPath) => memoryService.read(relPath).content,
@@ -245,6 +257,7 @@ async function main(): Promise<void> {
   registerChatMethods(registry, { chat });
   registerMemoryMethods(registry, { memory: memoryService });
   registerBlobMethods(registry, { blobs });
+  registerVoiceMethods(registry, { voice });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

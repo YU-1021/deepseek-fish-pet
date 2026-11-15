@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）。
 
 ## 现在有什么
 
@@ -16,12 +16,13 @@
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
     - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
     - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat 四段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice 五段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -46,6 +47,16 @@
     "handoffNoteMaxChars": 12000,
     "handoffUseLlm": true,
     "handoffSummaryTokens": 600
+  },
+  "voice": {
+    "enabled": true,
+    "engine": "edge",
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": 1,
+    "pitch": 1,
+    "maxChars": 1200,
+    "autoSpeak": false,
+    "fallbackToSapi": true
   }
 }
 ```
@@ -61,6 +72,13 @@
 - `chat.handoffNoteMaxChars`：单篇笔记的字符上限（默认 12000）。
 - `chat.handoffUseLlm`：交接笔记是否让模型整理成摘要（默认 true；失败/太短自动回退机械摘录）。
 - `chat.handoffSummaryTokens`：摘要那一次模型调用的输出上限（默认 600，100–4000）。
+- `voice.enabled`：语音总开关；关掉后 `voice.speak` 返回 `E_UNAVAILABLE`、`chat.send` 不朗读。
+- `voice.engine`：`edge`（微软 Edge 在线神经语音，音质好、需要网络）或 `sapi`（本机 Windows SAPI 离线，音色少但断网可用）；默认 `edge`。
+- `voice.voice`：音色 id，默认 `zh-CN-XiaoxiaoNeural`；`voice.voices` 能列出所有可选项（Edge 内置表 + 本机 SAPI 音色）。
+- `voice.rate` / `voice.pitch`：语速/音调倍率（0.5–2，1 为原速）。
+- `voice.maxChars`：单次朗读文本上限（超了拒绝，先截断再请求）。
+- `voice.autoSpeak`：聊天回复是否默认朗读（`chat.send` 里的 `speak` 参数优先级更高）。
+- `voice.fallbackToSapi`：Edge 失败时是否自动用本机 SAPI 兜底（默认 true；两边都失败才报错）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -125,6 +143,16 @@
 - **Git**：`blobs/` 在 `.gitignore` 里，不进版本历史（老工作区若已跟踪过 `blobs/`，启动时会自动取消跟踪并提交一条记录）；附件文件本身仍在磁盘上，靠内容 hash 名保证不重名。
 
 
+## 语音（TTS）
+
+聊天回复可以让 petd 直接合成语音（`voice.*`），音频以 base64 随结果返回，UI 拿到 data URL 就能播，不需要额外的音频通道：
+
+- **引擎**：默认 `edge`（微软 Edge 朗读的新端点 `api.msedgeservices.com` + Sec-MS-GEC v2 签名，2026-10 后旧端点会 403，这里已按新协议实现）；断网或端点失败时若 `fallbackToSapi=true` 自动切本机 SAPI（离线、音色少）。`voice.voices` 返回可用音色（Edge 内置表 9 个 + 本机 SAPI 音色）。
+- **`voice.speak {text, voice?, rate?, pitch?}`** → `{id, file, mime, bytes, durationMs, cached, engine, voice, rate, pitch, text, audioBase64, elapsedMs}`：先做文本清理（去 `[..]`/`【..】` 脚本标记、压空白），按句切到 180 字以内分段合成，缓存按 `sha256(engine|voice|rate|pitch|text)` 存 `voice-cache/`，同一句第二次直接命中（`cached=true`）。
+- **聊天联动**：`chat.send {text, speak: true}` → 结果里多一个 `speech`（同 `voice.speak` 的形状，可为 null）；不传 `speak` 时看 `voice.autoSpeak`。语音合成失败只记 warn，不影响聊天回复；朗读文本取最终 assistant 回复（不含工具过程）。
+- **事件**：合成成功广播 `voice.speech {id,file,mime,bytes,durationMs,cached,engine,voice,text}`；UI 可用 `durationMs` 做口型/动画时长。
+- **离线可用**：`voice.engine=sapi` 时完全不联网（本机 `System.Speech`），适合断网或不想走在线语音的场景。
+
 ## 跑起来
 
 ```bat
@@ -154,6 +182,9 @@ node apps/petd/scripts/chat-handoff-smoke.mjs
 
 :: 冒烟：附件 blob（真调一次模型；会看到 blobs/ 文件与句柄）
 node apps/petd/scripts/blob-smoke.mjs
+
+:: 冒烟：语音（本机 SAPI 离线；真调一次模型验证 chat.send 朗读）
+node apps/petd/scripts/voice-smoke.mjs
 ```
 
 READY 行示例：
@@ -182,7 +213,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 124/124（网关/聊天/工具循环/交接/人格/记忆/附件）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 134/134（网关/聊天/工具循环/交接/人格/记忆/附件/语音）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -190,6 +221,7 @@ cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端�
 cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆端到端（真 LLM 两次：让它记一件事→工作区出现文件；再问→先读记忆再答）
 cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 若干次（含摘要）；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
 cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
+cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到端（本机 SAPI 离线；真 LLM 一次；合成/缓存/事件/聊天朗读）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -204,6 +236,8 @@ cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到�
 
 附件冒烟覆盖（25 项，真 LLM 一次）：`blob.put` 句柄格式/mime/size、同内容去重、`blob.list/info`（含 `blobs/<文件名>` 写法）、`blob.get` 原字节一致、文件真的在 `workspace/blobs/`、`.gitignore` 忽略且 Git 历史里没有 `blobs/` 路径、带附件 `chat.send`（真模型回复「看不到画面但确认是 PNG」、`attachments[]` 返回、会话正文与落盘都不含附件提示）、`blob.delete` 后列表为空且磁盘文件删除、优雅退出。
 
+语音冒烟覆盖（26 项，本机 SAPI 离线 + 真 LLM 一次）：`voice.status` 开关/引擎/音色/缓存统计、`voice.voices` 含本机 SAPI 音色、`voice.speak` 出 WAV/字节数合理/时长>0/base64 是 RIFF、缓存命中且 id 一致、`voice.speech` 事件广播、`chat.send {speak:true}` 返回 `speech` 且会话里只有文字、JSONL 不存音频、优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……
+ASR/唤醒词、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……

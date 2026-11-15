@@ -22,6 +22,7 @@ import {
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
 import { MEMORY_TOOLS, type MemoryToolbox } from './tools.js';
+import type { SpeechResult, VoiceService } from '../voice/service.js';
 
 /** 交接笔记的读写通道（petd 接工作区记忆；测试接内存 fake） */
 export interface HandoffIo {
@@ -43,6 +44,10 @@ export interface ChatServiceOptions {
   handoffIo?: HandoffIo;
   /** 附件存储；不传 = 聊天不能带附件 */
   blobs?: BlobStore;
+  /** 语音服务；不传 = 聊天不能朗读 */
+  voice?: VoiceService;
+  /** 是否默认朗读每条回复（config.voice.autoSpeak） */
+  autoSpeak?: boolean;
   logger?: { info(msg: string, data?: Record<string, unknown>): void; warn(msg: string, data?: Record<string, unknown>): void };
   now?: () => string;
 }
@@ -69,6 +74,8 @@ export interface ChatSendInput {
   /** 附件引用（句柄 `blob:x.png` 或 `blobs/x.png`），最多 10 个 */
   attachments?: string[];
   signal?: AbortSignal;
+  /** 本次是否把回复读出来（不传 = 取 config.voice.autoSpeak） */
+  speak?: boolean;
   /** 测试/内部调用可覆盖 */
   maxTokens?: number;
   temperature?: number;
@@ -97,6 +104,8 @@ export interface ChatSendResult {
   attachments: ChatAttachment[];
   /** 本轮是否触发了上下文交接（没触发为 null） */
   handoff: HandoffActivity | null;
+  /** 本轮语音（没朗读为 null；合成失败也只记日志，不影响聊天） */
+  speech: SpeechResult | null;
 }
 
 export class ChatService {
@@ -108,6 +117,8 @@ export class ChatService {
   private readonly toolbox?: () => MemoryToolbox;
   private readonly handoffIo?: HandoffIo;
   private readonly blobs?: BlobStore;
+  private readonly voice?: VoiceService;
+  private readonly autoSpeak: boolean;
   private readonly logger?: ChatServiceOptions['logger'];
   private readonly now: () => string;
 
@@ -120,6 +131,8 @@ export class ChatService {
     this.toolbox = opts.toolbox;
     this.handoffIo = opts.handoffIo;
     this.blobs = opts.blobs;
+    this.voice = opts.voice;
+    this.autoSpeak = opts.autoSpeak ?? false;
     this.logger = opts.logger;
     this.now = opts.now ?? (() => new Date().toISOString());
   }
@@ -279,14 +292,27 @@ export class ChatService {
       messageCount: finalMeta.messageCount,
       updatedAt: finalMeta.updatedAt,
     });
+
+    // 朗读：默认取 config.voice.autoSpeak；合成失败只记日志，不影响这轮聊天
+    let speech: SpeechResult | null = null;
+    const shouldSpeak = input.speak ?? this.autoSpeak;
+    if (shouldSpeak && this.voice) {
+      try {
+        speech = await this.voice.speak(assistantMessage.content);
+      } catch (e) {
+        this.logger?.warn('语音合成失败（不影响本轮回复）', { sessionId: meta.id, error: (e as Error).message });
+      }
+    }
+
     this.logger?.info('聊天一轮完成', {
       sessionId: meta.id,
       promptTokens: mergedReply.usage.promptTokens,
       completionTokens: mergedReply.usage.completionTokens,
       replyChars: mergedReply.text.length,
       toolCalls: tools.length,
+      speech: speech === null ? 'none' : speech.engine,
     });
-    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, attachments, handoff };
+    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, attachments, handoff, speech };
   }
 
   /** 校验附件引用并取元数据：不存在的直接报错，不让模型瞎猜 */

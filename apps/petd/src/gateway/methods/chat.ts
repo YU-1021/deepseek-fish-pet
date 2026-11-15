@@ -53,7 +53,24 @@ const Attachment = Type.Object({
   handle: Type.String(),
   name: Type.String(),
   mime: Type.String(),
+  kind: Type.Optional(Type.String()),
   size: Type.Integer(),
+});
+
+const Speech = Type.Object({
+  id: Type.String(),
+  file: Type.String(),
+  mime: Type.String(),
+  bytes: Type.Integer(),
+  durationMs: Type.Integer(),
+  cached: Type.Boolean(),
+  engine: Type.Union([Type.Literal('edge'), Type.Literal('sapi')]),
+  voice: Type.String(),
+  rate: Type.Number(),
+  pitch: Type.Number(),
+  text: Type.String(),
+  audioBase64: Type.String(),
+  elapsedMs: Type.Integer(),
 });
 
 export interface ChatMethodDeps {
@@ -146,6 +163,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         sessionId: Type.Optional(Type.String({ minLength: 1 })),
         text: Type.String({ minLength: 1, maxLength: 8000 }),
         attachments: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 400 }), { maxItems: 10 })),
+        speak: Type.Optional(Type.Boolean()),
       }),
       result: Type.Object({
         session: SessionMeta,
@@ -155,16 +173,18 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         tools: Type.Array(ToolActivity),
         attachments: Type.Array(Attachment),
         handoff: Type.Union([HandoffActivity, Type.Null()]),
+        speech: Type.Union([Speech, Type.Null()]),
       }),
       timeoutMs: 120_000,
       idempotent: false,
     },
     async (params, ctx) => {
-      const p = params as { sessionId?: string; text: string; attachments?: string[] };
+      const p = params as { sessionId?: string; text: string; attachments?: string[]; speak?: boolean };
       const result = await deps.chat.send({
         sessionId: p.sessionId,
         text: p.text,
         ...(p.attachments === undefined ? {} : { attachments: p.attachments }),
+        ...(p.speak === undefined ? {} : { speak: p.speak }),
         signal: ctx.signal,
       });
       return {
@@ -180,6 +200,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         tools: result.tools,
         attachments: result.attachments,
         handoff: result.handoff,
+        speech: result.speech,
       };
     }
   );

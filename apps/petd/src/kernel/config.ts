@@ -59,6 +59,24 @@ export interface PetdConfig {
     /** 摘要最多生成多少 token */
     handoffSummaryTokens: number;
   };
+  voice: {
+    /** 语音总开关：关闭后 voice.* 返回 E_UNAVAILABLE，聊天也不自动朗读 */
+    enabled: boolean;
+    /** 主引擎：edge（在线神经语音，音质好）/ sapi（Windows 离线音色） */
+    engine: 'edge' | 'sapi';
+    /** 默认音色（edge 用 zh-CN-xxxNeural；sapi 用系统音色名） */
+    voice: string;
+    /** 语速，1 = 正常（0.5–2） */
+    rate: number;
+    /** 音调，1 = 正常（0.5–2，仅 edge 生效） */
+    pitch: number;
+    /** 单次朗读文本上限（字符） */
+    maxChars: number;
+    /** chat.send 未显式指定 speak 时，是否自动朗读助手回复 */
+    autoSpeak: boolean;
+    /** edge 失败时是否自动回退到本地 SAPI（离线兜底） */
+    fallbackToSapi: boolean;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -87,6 +105,16 @@ export const DEFAULT_CONFIG: PetdConfig = {
     handoffNoteMaxChars: 12_000,
     handoffUseLlm: true,
     handoffSummaryTokens: 600,
+  },
+  voice: {
+    enabled: true,
+    engine: 'edge',
+    voice: 'zh-CN-XiaoxiaoNeural',
+    rate: 1,
+    pitch: 1,
+    maxChars: 1200,
+    autoSpeak: false,
+    fallbackToSapi: true,
   },
 };
 
@@ -189,6 +217,33 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const ht = chat['handoffSummaryTokens'];
     if (typeof ht === 'number' && Number.isInteger(ht) && ht >= 100 && ht <= 4000) out.chat.handoffSummaryTokens = ht;
     else if (ht !== undefined) warnings.push('chat.handoffSummaryTokens 非法，回默认 600');
+  }
+  const voice = raw['voice'];
+  if (isObject(voice)) {
+    const ve = voice['enabled'];
+    if (typeof ve === 'boolean') out.voice.enabled = ve;
+    else if (ve !== undefined) warnings.push('voice.enabled 非法，回默认 true');
+    const eng = voice['engine'];
+    if (eng === 'edge' || eng === 'sapi') out.voice.engine = eng;
+    else if (eng !== undefined) warnings.push('voice.engine 非法，回默认 edge');
+    const vn = voice['voice'];
+    if (typeof vn === 'string' && vn.trim()) out.voice.voice = vn.trim();
+    else if (vn !== undefined) warnings.push('voice.voice 非法，回默认 zh-CN-XiaoxiaoNeural');
+    const vr = voice['rate'];
+    if (typeof vr === 'number' && Number.isFinite(vr) && vr >= 0.5 && vr <= 2) out.voice.rate = vr;
+    else if (vr !== undefined) warnings.push('voice.rate 非法，回默认 1');
+    const vp = voice['pitch'];
+    if (typeof vp === 'number' && Number.isFinite(vp) && vp >= 0.5 && vp <= 2) out.voice.pitch = vp;
+    else if (vp !== undefined) warnings.push('voice.pitch 非法，回默认 1');
+    const vm = voice['maxChars'];
+    if (typeof vm === 'number' && Number.isInteger(vm) && vm >= 1 && vm <= 4000) out.voice.maxChars = vm;
+    else if (vm !== undefined) warnings.push('voice.maxChars 非法，回默认 1200');
+    const va = voice['autoSpeak'];
+    if (typeof va === 'boolean') out.voice.autoSpeak = va;
+    else if (va !== undefined) warnings.push('voice.autoSpeak 非法，回默认 false');
+    const vf = voice['fallbackToSapi'];
+    if (typeof vf === 'boolean') out.voice.fallbackToSapi = vf;
+    else if (vf !== undefined) warnings.push('voice.fallbackToSapi 非法，回默认 true');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

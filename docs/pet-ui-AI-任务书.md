@@ -194,6 +194,28 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 **验收**：能浏览/编辑/新建/删除记忆文件；冲突提示与双按钮；`memory.changed` 触发树刷新；历史列表 + diff + 恢复；附件列表/预览/上传/删除。截图贴 README。
 
+## 8.6 M5：语音/朗读 UI 规格（petd 后端已就绪）
+
+目标：让聊天回复能出声，设置里能选音色/开关。
+
+**数据来源（已上线；方法清单以 `health.status` 为准）**
+- `voice.status` → `{enabled, engine, voice, cacheDir, cacheFiles, cacheBytes}`
+- `voice.voices` → `{voices: [{id, label, lang, engine}]}`（Edge 内置音色表 + 本机 SAPI 音色）
+- `voice.speak {text, voice?, rate?, pitch?}` → `{id, file, mime, bytes, durationMs, cached, engine, voice, rate, pitch, text, audioBase64, elapsedMs}`（`audioBase64` 是 MP3/WAV 原始字节的 base64）
+- `chat.send {text, speak: true}` → 结果多一个 `speech`（形状同上，可为 null）；不传 `speak` 时按 `config.voice.autoSpeak` 决定。
+- 事件 `voice.speech {id, file, mime, bytes, durationMs, cached, engine, voice, text}`：合成成功广播，可驱动口型/动画。
+
+**关键交互（别漏）**
+1. **播放**：`audioBase64` → data URL（`data:${mime};base64,...`）→ `new Audio(...)`。Electron 有自动播放策略：用户手势之前 `play()` 可能被拒；先 `audio.play().catch(...)`，失败就提示「点一下再播」，或在首次点击时解锁同一个 `Audio` 实例复用。
+2. **停止**：自己维护当前 `Audio`，换句/点停止时 `audio.pause(); audio.currentTime = 0`。
+3. **口型/动画**：用 `durationMs` 驱动（别等 `ended` 事件才动，会迟）；音频实际结束后再停。
+4. **聊天里每条 assistant 消息**：旁边加「朗读/停止」小按钮（对已落盘的消息用 `voice.speak {text}` 现合成，不依赖 chat.send 的 speech）；带 `speak:true` 发出的消息自动播。
+5. **设置页**：开关、引擎选择（edge/sapi）、音色下拉（`voice.voices` 按 engine 分组）、语速/音调滑条（0.5–2）、`autoSpeak` 开关；`config.get` 里有 `voice` 段当前值。
+6. **错误**：`E_UNAVAILABLE`（语音关闭/两个引擎都失败）→ 气泡提示一次，别反复弹；`E_BAD_PARAMS`（文本为空/超长）→ 提示用户，不自作主张截断。
+7. **不要把音频 base64 存进聊天历史或状态库**，随用随取。
+
+**验收**：聊天能出声、能停；设置能选音色并持久（下次启动仍用）；断网/Edge 失败自动回退 SAPI 时 UI 有小提示。
+
 ## 9. 测试策略（省 token）
 
 - 单测/组件测试用 **mock WS server**：自己写 `apps/pet-ui/scripts/mock-gateway.mjs`，按第 5 节帧格式回答
