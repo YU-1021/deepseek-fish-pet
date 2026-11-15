@@ -134,7 +134,6 @@ export function App() {
 
 function PetOverlay() {
   const { enabled } = useMoodState();
-  const clickTimer = useRef<number | undefined>(undefined);
   const bounceTimer = useRef<number | undefined>(undefined);
   const clickAudio = useRef<HTMLAudioElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
@@ -178,20 +177,13 @@ function PetOverlay() {
     pointerMoved.current = false;
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* capture may already be released */ }
     void window.petdBootstrap?.endDrag();
-    if (!moved) {
-      if (clickTimer.current) window.clearTimeout(clickTimer.current);
-      clickTimer.current = window.setTimeout(playClickFeedback, 240);
-    }
+    if (!moved) playClickFeedback();
   }
   function onPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
     if (pointerStart.current?.id !== event.pointerId) return;
     pointerStart.current = null;
     pointerMoved.current = false;
     void window.petdBootstrap?.endDrag();
-  }
-  function openChat() {
-    if (clickTimer.current) window.clearTimeout(clickTimer.current);
-    void window.petdBootstrap?.showChat();
   }
   useEffect(() => {
     const releasePointer = () => {
@@ -203,12 +195,11 @@ function PetOverlay() {
     window.addEventListener('blur', releasePointer);
     return () => {
       window.removeEventListener('blur', releasePointer);
-      if (clickTimer.current) window.clearTimeout(clickTimer.current);
       if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
       releasePointer();
     };
   }, []);
-  return <div className="pet-overlay" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
+  return <div className="pet-overlay" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 拖动移动 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
     <div className={`pet-float ${bouncing ? 'pet-bounce' : ''}`}><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
   </div>;

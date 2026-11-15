@@ -39,36 +39,37 @@ describe('PetOverlay mood interaction', () => {
   it('pokes once on a single click while keeping the pet window artwork-only', async () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork); pointerUp(artwork);
     await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
     expect(mocks.startDrag).toHaveBeenCalledTimes(1);
     expect(mocks.endDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.showChat).not.toHaveBeenCalled();
     expect(pet.querySelector('.pet-bounce')).toBeTruthy();
     expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
     expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
     expect(pet.textContent).toBe('');
   });
 
-  it('opens chat on double-click without poking', async () => {
+  it('keeps double-click on the pet and does not open chat', async () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork); pointerUp(artwork);
     pointerDown(artwork); pointerUp(artwork);
     fireEvent.doubleClick(pet, { detail: 2 });
-    expect(mocks.showChat).toHaveBeenCalledTimes(1);
+    expect(mocks.showChat).not.toHaveBeenCalled();
     await new Promise((resolve) => window.setTimeout(resolve, 300));
-    expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
-    expect(mocks.audioPlay).not.toHaveBeenCalled();
+    expect(mocks.request.mock.calls.filter(([method]) => method === 'mood.poke')).toHaveLength(2);
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(2);
   });
 
   it('does not poke when mood is disabled', async () => {
     mocks.moodEnabled = false;
     render(<App/>);
-    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork); pointerUp(artwork);
     await new Promise((resolve) => window.setTimeout(resolve, 300));
@@ -80,7 +81,7 @@ describe('PetOverlay mood interaction', () => {
   it('moves the pet without treating a drag as a poke', async () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork, 2, 20, 20);
     fireEvent.pointerMove(artwork, { pointerId: 2, clientX: 40, clientY: 20 });
@@ -96,7 +97,7 @@ describe('PetOverlay mood interaction', () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
     act(() => { for (const listener of mocks.events) listener({ type: 'event', event: 'mood.changed', data: { state: snapshot, applied: [], source: 'chat' } }); });
-    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
     expect(pet.textContent).toBe('');
     expect(pet.classList.contains('pet-chat-nudge')).toBe(false);
   });
