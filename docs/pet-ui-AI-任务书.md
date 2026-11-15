@@ -126,12 +126,16 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 `E_HANDSHAKE / E_UNAUTHORIZED / E_BAD_FRAME / E_UNKNOWN_METHOD / E_BAD_PARAMS / E_TIMEOUT / E_INTERNAL / E_NOT_FOUND / E_FORBIDDEN / E_UNAVAILABLE`。
 
-## 6. git 纪律（和 Lead 共用一个仓库）
+## 6. git 纪律（和 Lead 各用一个工作目录）
 
-- 从当前 `refactor/petd`（HEAD 6647e10）切分支：`git switch -c feature/pet-ui`。
-- 只提交你自己目录的改动：`git add apps/pet-ui`（lockfile 允许一起提交）。
+从 2026-11-15 起，前端单独用 git worktree，不再和 Lead 抢同一个工作区：
+
+- **你的工作目录**：`F:\DSH\大肥鱼\桌宠-ui`，分支已建好 `feat/pet-ui`（HEAD 75539a5）。进这个目录干活，不要在主目录 `桌宠\` 里切换分支或提交。
+- 主目录 `F:\DSH\大肥鱼\桌宠` 归 Lead（`refactor/petd`），他在那边改 petd/协议；你只读那边的 `docs/` 和 `apps/petd` 源码。
+- 已存在 `apps/petd` 的新方法/事件请以主目录 `refactor/petd` 的最新代码为准（只读 `apps/petd/src/gateway/methods/*.ts` 即可）。
+- 只提交你自己目录的改动：`git add apps/pet-ui`（`pnpm-lock.yaml` 允许一起提交）。
 - 小步提交，消息用中文，例如 `feat(pet-ui): M1 壳+连接状态`。
-- 不要 merge/rebase 到 `refactor/petd`，不要 force push；做完告诉用户「分支 feature/pet-ui 可以看」。
+- 不要 merge/rebase 到 `refactor/petd`，不要 force push；做完告诉用户「分支 feat/pet-ui 可以看」。
 - 不提交 `node_modules/`、`dist/`、构建产物、大截图；截图放 `apps/pet-ui/docs/evidence/`（<2MB/张）。
 
 ## 7. 环境坑（Windows + 这台机器，必须知道）
@@ -179,7 +183,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ## 11. 可直接粘贴给 AI 的开场提示词
 
-> 你的任务：在 `F:\DSH\大肥鱼\桌宠\apps\pet-ui` 做一个新的 Electron + React 前端（pet-ui）。
-> 先完整读 `F:\DSH\大肥鱼\桌宠\docs\pet-ui-AI-任务书.md`，严格按里面的边界、技术栈、协议、git 纪律、环境坑执行。
-> 只改 `apps/pet-ui/**`；先交 M1（壳 + 连 petd + 连接状态），截图和 build 证据贴 README；完成后不要合并分支，告诉用户分支名即可。
-> 后端 petd 已在 `refactor/petd` 分支可用，启动与连接方式见任务书第 4、5 节。
+> 你的任务：在 `F:\DSH\大肥鱼\桌宠-ui\apps\pet-ui`（独立 git worktree，分支 `feat/pet-ui`）做一个新的 Electron + React 前端（pet-ui）。
+> 先完整读 `F:\DSH\大肥鱼\桌宠-ui\docs\pet-ui-AI-任务书.md`，严格按里面的边界、技术栈、协议、git 纪律、环境坑执行。
+> 只改 `桌宠-ui` 里的 `apps/pet-ui/**`；先交 M1（壳 + 连 petd + 连接状态），截图和 build 证据贴 README；完成后不要合并分支，告诉用户分支名即可。
+> 后端 petd 在另一个目录 `F:\DSH\大肥鱼\桌宠\`（分支 `refactor/petd`，只读参考），启动与连接方式见任务书第 4、5 节。
