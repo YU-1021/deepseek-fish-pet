@@ -43,7 +43,9 @@
     "softRatio": 0.85,
     "keepRatio": 0.25,
     "handoffDir": "handoffs",
-    "handoffNoteMaxChars": 12000
+    "handoffNoteMaxChars": 12000,
+    "handoffUseLlm": true,
+    "handoffSummaryTokens": 600
   }
 }
 ```
@@ -57,6 +59,8 @@
 - `chat.keepRatio`：交接时保留最近这段 ≈ `contextMaxTokens × keepRatio`，其余压成笔记。
 - `chat.handoffDir`：笔记写进工作区的哪个目录（默认 `handoffs`，跟着 Git 一起提交）。
 - `chat.handoffNoteMaxChars`：单篇笔记的字符上限（默认 12000）。
+- `chat.handoffUseLlm`：交接笔记是否让模型整理成摘要（默认 true；失败/太短自动回退机械摘录）。
+- `chat.handoffSummaryTokens`：摘要那一次模型调用的输出上限（默认 600，100–4000）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -95,16 +99,18 @@
 
 ## 上下文交接笔记
 
-对话不可能无限长。Coo 的做法是「超预算就把旧对话压成笔记存进工作区，再清空重来」，petd 借了这个形状（机械版，不带 LLM 摘要）：
+对话不可能无限长。Coo 的做法是「超预算就把旧对话压成笔记存进工作区，再清空重来」，petd 借了这个形状，并做了两个版本：
 
+- **LLM 摘要版（默认）**：交接时先让模型当一次「记忆整理员」，把更早的对话整理成给未来自己看的笔记（保留主人画像/关系/偏好/承诺待办/日期事实，允许省略寒暄重复，按主题分小节）；失败、超时或内容太短时自动回退机械版，不会让交接本身失败。
+- **机械摘录版（兜底）**：不调模型，逐条摘录角色/时间/正文（单条上限 600 字，预算不够逐级递减，丢掉的计数折叠）。
 - **触发**：每轮 `chat.send` 先粗估「system 提示词 + 当前有效历史 + 本轮输入」的 token（字符/3），超过 `chat.contextMaxTokens × chat.softRatio` 就自动交接；至少 6 条有效消息才触发。
 - **保留多少**：最近约 `contextMaxTokens × keepRatio` 的消息原样留着，更早的压进笔记；至少压 2 条、至少留 2 条。
-- **笔记内容**：`handoffs/<UTC 时间戳>.md`——`# 交接笔记` 抬头、会话标题与时间范围、每条消息的角色/时间/正文（单条上限 600 字，预算不够逐级递减，丢掉的计数折叠）；纯机械摘录，注明细节请用 `read_file` / `grep_files` 核对。
+- **笔记文件**：`handoffs/<UTC 时间戳>.md`——两种模式都用同一个 `# 交接笔记` 抬头；摘要版多一段 `## 摘要`，并注明「由我自己整理的摘要，可能漏细节，用 read_file / grep_files 核对」。
 - **不丢消息**：`sessions/*.jsonl` 一条不少；会话元数据只记 `contextStart`（从第几条开始算「当前上下文」）、`handoffFiles`（最近 3 篇）、`lastPromptTokens`（观测用）。
 - **之后每轮**：只带 `messages[contextStart..]` + 最近一篇笔记（拼在系统提示词后面），模型仍能读到摘要，也能随时去读全文。
 - **收益守卫**：如果压完反而更长（很短的对话 + 笔记头开销），自动交接会跳过并记 warn，避免瞎折腾。
-- **手动**：`chat.handoff {sessionId}` 立刻交接一次（`force`，一定写笔记），返回 `{file,compressed,kept,tokensBefore,tokensAfter}`；自动交接成功也会广播 `chat.handoff` 事件，`chat.send` 结果里带 `handoff`。
-- **注意**：这是估算不是精算，真实 token 以模型返回的 `usage` 为准（`session.lastPromptTokens` 记的就是它）；`chat.contextMaxTokens` 设 0 可完全关掉自动交接。
+- **手动**：`chat.handoff {sessionId}` 立刻交接一次（`force`，一定写笔记），返回 `{file,compressed,kept,tokensBefore,tokensAfter,mode}`（`mode` = `llm` / `mechanical`）；自动交接成功也会广播 `chat.handoff` 事件，`chat.send` 结果里带 `handoff`。
+- **注意**：这是估算不是精算，真实 token 以模型返回的 `usage` 为准（`session.lastPromptTokens` 记的就是它）；`chat.contextMaxTokens` 设 0 可完全关掉自动交接，`chat.handoffUseLlm=false` 可只用机械版（省一次模型调用）。
 
 ## 附件 blob（图片/文件）
 
@@ -142,7 +148,7 @@ node apps/petd/scripts/memory-smoke.mjs
 :: 冒烟：聊天自动读写记忆（真调两次模型：先记再问）
 node apps/petd/scripts/chat-memory-smoke.mjs
 
-:: 冒烟：上下文交接（真调六次模型；会看到 handoffs/ 笔记和 Git 提交）
+:: 冒烟：上下文交接（真调若干次模型（含两次记忆整理摘要）；会看到 handoffs/ 笔记和 Git 提交）
 node apps/petd/scripts/chat-handoff-smoke.mjs
 
 :: 冒烟：附件 blob（真调一次模型；会看到 blobs/ 文件与句柄）
@@ -175,13 +181,13 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 116/116（网关/聊天/工具循环/交接/人格/记忆/附件）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 119/119（网关/聊天/工具循环/交接/人格/记忆/附件）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
 cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，44 项；保留 home 可翻 workspace/.git）
 cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆端到端（真 LLM 两次：让它记一件事→工作区出现文件；再问→先读记忆再答）
-cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 六次；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
+cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 若干次（含摘要）；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
 cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
 ```
 
@@ -193,7 +199,7 @@ cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到�
 
 聊天记忆冒烟覆盖（21 项，真 LLM）：模型第一轮读旧文件→用 `write_file` 写新文件（工作区真的多出 `partner/*.md`，Git 有 `petd wrote …` 提交）→`chat.tool` 事件→工具过程不落库；第二轮先 `read_file` 再回答，答案里带出记忆要点；两轮后会话 4 条；优雅退出。
 
-交接冒烟覆盖（26 项，真 LLM）：自动交接（4 轮后 compressed 4/kept 2、token 估算变小、`chat.handoff` 事件、`handoffs/*.md` 以 `# 交接笔记` 开头、Git 有 `petd wrote handoffs/…` 提交、会话 JSONL 8 条不丢、`contextStart`/`handoffFiles`/`lastPromptTokens` 落元数据）→ 下一轮历史从 `contextStart` 起且 system 带笔记；手动 `chat.handoff`（compressed 2/kept 2、第二篇笔记）；优雅退出。
+交接冒烟覆盖（29 项，真 LLM）：自动交接（4 轮后 compressed 4/kept 2、token 估算变小、`chat.handoff` 事件带 `mode=llm`、`handoffs/*.md` 以 `# 交接笔记` 开头且含 `## 摘要`、Git 有 `petd wrote handoffs/…` 提交、会话 JSONL 8 条不丢、`contextStart`/`handoffFiles`/`lastPromptTokens` 落元数据）→ 下一轮历史从 `contextStart` 起且 system 带笔记；手动 `chat.handoff`（compressed 2/kept 2、第二篇笔记）；优雅退出。
 
 附件冒烟覆盖（25 项，真 LLM 一次）：`blob.put` 句柄格式/mime/size、同内容去重、`blob.list/info`（含 `blobs/<文件名>` 写法）、`blob.get` 原字节一致、文件真的在 `workspace/blobs/`、`.gitignore` 忽略且 Git 历史里没有 `blobs/` 路径、带附件 `chat.send`（真模型回复「看不到画面但确认是 PNG」、`attachments[]` 返回、会话正文与落盘都不含附件提示）、`blob.delete` 后列表为空且磁盘文件删除、优雅退出。
 

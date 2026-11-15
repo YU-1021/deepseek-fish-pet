@@ -32,6 +32,7 @@ const HandoffActivity = Type.Object({
   kept: Type.Integer(),
   tokensBefore: Type.Integer(),
   tokensAfter: Type.Integer(),
+  mode: Type.Union([Type.Literal('llm'), Type.Literal('mechanical')]),
 });
 
 const Usage = Type.Object({

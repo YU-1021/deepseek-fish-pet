@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 上下文交接笔记端到端冒烟：真起 petd → 真 WS → 真 LLM（会花几次 token）。
  *
  * 验证：
@@ -162,12 +162,14 @@ try {
   check(Boolean(handoffEv), 'chat.handoff 事件已广播');
   check(handoffEv.data.compressed > 0 && handoffEv.data.kept >= 2, '事件里有 compressed/kept');
   check(typeof handoffEv.data.tokensAfter === 'number' && handoffEv.data.tokensAfter < handoffEv.data.tokensBefore, '交接后 token 估算变小');
+  check(handoffEv.data.mode === 'llm' || handoffEv.data.mode === 'mechanical', `事件里有 mode（${handoffEv.data.mode}）`);
 
   const files = handoffFiles();
   check(files.length === 1, `工作区 handoffs/ 里有 1 篇笔记（实际 ${files.length}）`);
   const note = fs.readFileSync(path.join(workspace, 'handoffs', files[0]), 'utf8');
   check(note.startsWith('# 交接笔记'), '笔记以 # 交接笔记 开头');
   check(note.length > 100, '笔记有内容');
+  if (handoffEv.data.mode === 'llm') check(note.includes('## 摘要'), 'LLM 摘要版笔记里有 ## 摘要 段');
 
   const got = await call(ws, client, 'session.get', { sessionId });
   check(got.ok, 'session.get 可调用');
@@ -187,6 +189,7 @@ try {
   const manual = await call(ws, client, 'chat.handoff', { sessionId: b1.data.session.id }, 30000);
   check(manual.ok, 'chat.handoff 手动调用成功');
   check(manual.data.compressed === 2 && manual.data.kept === 2, `手动交接压缩 2 条保留 2 条（实际 ${manual.data.compressed}/${manual.data.kept}）`);
+  check(manual.data.mode === 'llm' || manual.data.mode === 'mechanical', `手动交接事件里有 mode（${manual.data.mode}）`);
   check(handoffFiles().length === 2, '手动交接又写了一篇笔记（共 2 篇）');
 
   ws.close();

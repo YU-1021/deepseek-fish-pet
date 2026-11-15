@@ -138,3 +138,99 @@ export function renderHandoffNote(opts: RenderHandoffOptions): RenderedHandoff {
   const content = header.concat(lines).join('\n') + '\n';
   return { content, entries: picked.length, folded: dropped };
 }
+
+// ── LLM 摘要版：让模型把旧对话整理成一篇「记得住事」的笔记 ──────────────────────
+
+/** 摘要太短视为无效（模型敷衍/只回一句废话），回退机械摘录 */
+const SUMMARY_MIN_CHARS = 40;
+
+export interface HandoffSummaryPromptOptions {
+  /** 被压缩的那段消息（不含当前轮用户输入） */
+  messages: StoredMessage[];
+  sessionTitle?: string;
+  /** 摘要正文的字符上限（不含抬头） */
+  maxChars: number;
+}
+
+/**
+ * 给「整理交接笔记」的模型提示词。
+ *
+ * 关键取舍：输出的是给「未来的自己」看的记忆，不是给用户看的总结——
+ * 所以要保留人物/关系/承诺/待办/偏好/事实/未完成事项/时间点，允许省略寒暄与重复。
+ */
+export function buildHandoffSummaryPrompt(opts: HandoffSummaryPromptOptions): { system: string; user: string } {
+  const messages = opts.messages;
+  const transcript: string[] = [];
+  for (const msg of messages) {
+    const body = cleanText(msg.content);
+    if (!body) continue;
+    const tag = msg.role === 'user' ? '主人' : '我';
+    const when = shortTime(msg.ts);
+    transcript.push('- ' + (when ? '[' + when + '] ' : '') + tag + '：' + body.slice(0, 800));
+  }
+  const system = [
+    '你是桌宠的「记忆整理员」。把下面这段更早的对话压缩成一篇交接笔记，交给未来的自己。',
+    '只输出 Markdown 正文，不要解释、不要代码围栏、不要复述全部对话。',
+    '必须保留：主人是谁/怎么称呼、我们之间的关系与相处细节、主人的偏好与雷点、我答应过或没做完的事、重要日期与计划、值得记住的事实。',
+    '可以省略：寒暄、重复、已经被后续消息否定的内容。',
+    '按主题分小节（例如「## 关于主人」「## 待办与承诺」「## 相处细节」），每节 1–5 条短句；不确定的细节写「不确定」，绝不编造。',
+    '总长不超过 ' + Math.max(200, opts.maxChars) + ' 字。',
+  ].join('\n');
+  const user = [
+    opts.sessionTitle ? '会话：' + opts.sessionTitle : '会话：（未命名）',
+    '',
+    '对话原文：',
+    transcript.join('\n'),
+  ].join('\n');
+  return { system, user };
+}
+
+/** 清洗模型返回：去代码围栏与首尾废话；太短/空返回 null。 */
+export function cleanHandoffSummary(raw: string): string | null {
+  let text = raw.trim();
+  if (!text) return null;
+  const fence = /^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i.exec(text);
+  if (fence && fence[1]) text = fence[1].trim();
+  text = text.replace(/^#\s*交接笔记[^\n]*\n+/i, '').trim();
+  if (text.length < SUMMARY_MIN_CHARS) return null;
+  return text;
+}
+
+export interface RenderSummaryHandoffOptions {
+  /** 模型整理出的摘要正文（已清洗） */
+  summary: string;
+  /** 被压缩的那段消息（只用来算时间范围与条数） */
+  messages: StoredMessage[];
+  sessionTitle?: string;
+  now?: Date;
+  /** 压进这篇笔记的消息条数 */
+  compressed: number;
+  /** 保留在原上下文里的消息条数 */
+  kept: number;
+}
+
+/**
+ * 用模型整理的摘要渲染交接笔记：抬头格式与机械版一致（第一行都是 `# 交接笔记 …`），
+ * 目的让「解析笔记」的代码/UI 不用区分两种模式。
+ */
+export function renderSummaryHandoffNote(opts: RenderSummaryHandoffOptions): RenderedHandoff {
+  const now = opts.now ?? new Date();
+  const messages = opts.messages;
+  const firstTs = messages.find((m) => m.ts)?.ts ?? '';
+  const lastTs = [...messages].reverse().find((m) => m.ts)?.ts ?? '';
+  const header: string[] = [
+    '# 交接笔记 ' + handoffStamp(now),
+    '',
+    '- 会话' + (opts.sessionTitle ? '：' + opts.sessionTitle : ''),
+    '- 时间：' + (shortTime(firstTs) || '?') + ' → ' + (shortTime(lastTs) || '?'),
+    '- 范围：压缩了 ' + opts.compressed + ' 条更早的消息，最近 ' + opts.kept + ' 条仍在当前上下文里。',
+    '- 说明：下面是「由我自己整理的摘要」，可能漏掉细节；需要核对原文时用 read_file / grep_files 去工作区文件里找。',
+    '',
+    '## 摘要',
+    '',
+    opts.summary.trim(),
+    '',
+  ];
+  return { content: header.join('\n') + '\n', entries: opts.compressed, folded: 0 };
+}
+

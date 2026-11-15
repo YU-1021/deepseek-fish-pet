@@ -10,7 +10,15 @@ import { PetdError } from '@petd/protocol';
 import type { PetdConfig } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
 import type { BlobMeta, BlobStore } from '../memory/blob.js';
-import { handoffPath, renderHandoffNote, estimateMessagesTokens, estimateTokens } from './handoff.js';
+import {
+  buildHandoffSummaryPrompt,
+  cleanHandoffSummary,
+  estimateMessagesTokens,
+  estimateTokens,
+  handoffPath,
+  renderHandoffNote,
+  renderSummaryHandoffNote,
+} from './handoff.js';
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
 import { MEMORY_TOOLS, type MemoryToolbox } from './tools.js';
@@ -51,6 +59,8 @@ export interface HandoffActivity {
   tokensBefore: number;
   /** 交接后的上下文 token 估算 */
   tokensAfter: number;
+  /** 笔记怎么来的：llm = 模型整理摘要；mechanical = 机械摘录（模型失败/关闭时兜底） */
+  mode: 'llm' | 'mechanical';
 }
 
 export interface ChatSendInput {
@@ -169,7 +179,7 @@ export class ChatService {
     let handoff: HandoffActivity | null = null;
     let note = '';
     try {
-      const created = await this.maybeHandoff(meta, history, promptText, systemPrompt);
+      const created = await this.maybeHandoff(meta, history, promptText, systemPrompt, input.signal);
       if (created) {
         handoff = created.activity;
         note = created.note;
@@ -319,6 +329,7 @@ export class ChatService {
     history: StoredMessage[],
     incomingText: string,
     systemPrompt: string,
+    signal?: AbortSignal,
   ): Promise<{ activity: HandoffActivity; note: string } | null> {
     const io = this.handoffIo;
     if (!io || this.chat.contextMaxTokens <= 0) return null;
@@ -341,7 +352,7 @@ export class ChatService {
     keepFrom = Math.max(keepFrom, 2);
     keepFrom = Math.min(keepFrom, active.length - 2);
     if (keepFrom <= 0) return null;
-    return this.performHandoff(meta, active, keepFrom, incomingText, systemPrompt);
+    return this.performHandoff(meta, active, keepFrom, incomingText, systemPrompt, false, signal);
   }
 
   private async performHandoff(
@@ -351,16 +362,52 @@ export class ChatService {
     incomingText: string,
     systemPrompt: string,
     force = false,
+    signal?: AbortSignal,
   ): Promise<{ activity: HandoffActivity; note: string } | null> {
     const io = this.handoffIo;
     if (!io) throw new PetdError('E_UNAVAILABLE', '没有配置交接笔记存储');
     const older = active.slice(0, olderCount);
     if (older.length === 0) throw new PetdError('E_BAD_PARAMS', '没有可压缩的消息');
-    const rendered = renderHandoffNote({
+    let rendered = renderHandoffNote({
       messages: older,
       maxChars: this.chat.handoffNoteMaxChars,
       sessionTitle: meta.title,
     });
+    let mode: HandoffActivity['mode'] = 'mechanical';
+    if (this.chat.handoffUseLlm) {
+      try {
+        const prompt = buildHandoffSummaryPrompt({
+          messages: older,
+          sessionTitle: meta.title,
+          maxChars: Math.min(this.chat.handoffNoteMaxChars, this.chat.handoffSummaryTokens * 3),
+        });
+        const summarized = await this.llm.complete({
+          messages: [
+            { role: 'system', content: prompt.system },
+            { role: 'user', content: prompt.user },
+          ],
+          temperature: 0.2,
+          maxTokens: this.chat.handoffSummaryTokens,
+          ...(signal ? { signal } : {}),
+        });
+        const summary = cleanHandoffSummary(summarized.text);
+        if (summary) {
+          rendered = renderSummaryHandoffNote({
+            summary,
+            messages: older,
+            sessionTitle: meta.title,
+            compressed: older.length,
+            kept: active.length - older.length,
+          });
+          mode = 'llm';
+        } else {
+          this.logger?.warn('交接摘要太短，回退机械摘录', { sessionId: meta.id, rawChars: summarized.text.length });
+        }
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        this.logger?.warn('交接摘要生成失败，回退机械摘录', { sessionId: meta.id, error: (e as Error).message });
+      }
+    }
     const file = handoffPath(this.chat.handoffDir, new Date(this.now()));
     const kept = active.slice(older.length);
     const note = '## 上下文交接笔记（更早的对话已压缩到工作区 `' + file + '`）\n\n' + rendered.content;
@@ -377,9 +424,9 @@ export class ChatService {
     const contextStart = (meta.contextStart ?? 0) + older.length;
     const handoffFiles = [file, ...(meta.handoffFiles ?? [])].slice(0, 3);
     this.store.update(meta.id, { contextStart, handoffFiles });
-    const activity: HandoffActivity = { file, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter };
+    const activity: HandoffActivity = { file, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter, mode };
     this.publish('chat.handoff', { sessionId: meta.id, ...activity });
-    this.logger?.info('上下文交接完成', { sessionId: meta.id, file, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter });
+    this.logger?.info('上下文交接完成', { sessionId: meta.id, file, mode, compressed: older.length, kept: kept.length, tokensBefore, tokensAfter });
     return { activity, note };
   }
 

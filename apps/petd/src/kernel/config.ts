@@ -54,6 +54,10 @@ export interface PetdConfig {
     handoffDir: string;
     /** 交接笔记字符上限（超了折叠更早的条目） */
     handoffNoteMaxChars: number;
+    /** 交接时是否让模型把旧对话整理成摘要（false = 只用机械摘录） */
+    handoffUseLlm: boolean;
+    /** 摘要最多生成多少 token */
+    handoffSummaryTokens: number;
   };
 }
 
@@ -81,6 +85,8 @@ export const DEFAULT_CONFIG: PetdConfig = {
     keepRatio: 0.25,
     handoffDir: 'handoffs',
     handoffNoteMaxChars: 12_000,
+    handoffUseLlm: true,
+    handoffSummaryTokens: 600,
   },
 };
 
@@ -177,6 +183,12 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const hn = chat['handoffNoteMaxChars'];
     if (typeof hn === 'number' && Number.isInteger(hn) && hn >= 1000 && hn <= 200_000) out.chat.handoffNoteMaxChars = hn;
     else if (hn !== undefined) warnings.push('chat.handoffNoteMaxChars 非法，回默认 12000');
+    const hl = chat['handoffUseLlm'];
+    if (typeof hl === 'boolean') out.chat.handoffUseLlm = hl;
+    else if (hl !== undefined) warnings.push('chat.handoffUseLlm 非法，回默认 true');
+    const ht = chat['handoffSummaryTokens'];
+    if (typeof ht === 'number' && Number.isInteger(ht) && ht >= 100 && ht <= 4000) out.chat.handoffSummaryTokens = ht;
+    else if (ht !== undefined) warnings.push('chat.handoffSummaryTokens 非法，回默认 600');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

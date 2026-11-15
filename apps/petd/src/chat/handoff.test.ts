@@ -19,8 +19,22 @@ function tmpDir(): string {
 
 class FakeLlm {
   readonly calls: LlmMessage[][] = [];
+  /** 非 null 时「记忆整理员」那次调用返回这段摘要正文 */
+  summaryText: string | null = null;
+  /** 非 null 时「记忆整理员」那次调用直接抛错 */
+  summaryError: Error | null = null;
+
   async complete(opts: CompleteOptions): Promise<LlmReply> {
     this.calls.push(opts.messages.map((m) => ({ ...m })));
+    const system = typeof opts.messages[0]?.content === 'string' ? opts.messages[0].content : '';
+    if (system.includes('记忆整理员')) {
+      if (this.summaryError) throw this.summaryError;
+      return {
+        text: this.summaryText ?? '收到',
+        model: 'fake',
+        usage: { promptTokens: 30, completionTokens: 20, totalTokens: 50 },
+      };
+    }
     return { text: '收到', model: 'fake', usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 } };
   }
 }
@@ -183,4 +197,60 @@ test('手动交接：压缩到剩 2 条；消息太少报 E_BAD_PARAMS', async (
 
   const fresh = await h.service.send({ text: '只有一个来回' });
   await assert.rejects(() => h.service.handoff(fresh.session.id), { code: 'E_BAD_PARAMS' } as unknown as Error);
+});
+
+const GOOD_SUMMARY = [
+  '## 关于主人',
+  '- 主人下周三去医院复查眼睛，记得提前提醒。',
+  '- 主人喜欢安静地陪着，不喜欢被追问太多。',
+  '## 待办与承诺',
+  '- 帮主人盯着复查这件事。',
+].join('\n');
+
+test('LLM 摘要版：清理成功时 mode=llm，笔记里有「## 摘要」与摘要正文', async () => {
+  const h = makeHarness({ maxToolRounds: 0 });
+  h.llm.summaryText = GOOD_SUMMARY;
+  const first = await h.service.send({ text: '一' });
+  await h.service.send({ sessionId: first.session.id, text: '二' });
+  const act = await h.service.handoff(first.session.id);
+  assert.equal(act.mode, 'llm');
+  const saved = h.io.files.get(act.file) ?? '';
+  assert.ok(saved.startsWith('# 交接笔记 '), '抬头与机械版一致');
+  assert.ok(saved.includes('## 摘要'));
+  assert.ok(saved.includes('复查眼睛'));
+  assert.ok(saved.includes('由我自己整理的摘要'));
+  // 摘要那次调用确实带上了「记忆整理员」提示词
+  const summaryCall = h.llm.calls.find((msgs) => String(msgs[0]?.content).includes('记忆整理员'));
+  assert.ok(summaryCall, '应调用摘要模型');
+  assert.equal(h.store.get(first.session.id)?.contextStart, 2);
+});
+
+test('LLM 摘要失败或太短：回退机械摘录 mode=mechanical', async () => {
+  const broken = makeHarness({ maxToolRounds: 0 });
+  broken.llm.summaryError = new Error('boom');
+  const s1 = await broken.service.send({ text: '一' });
+  await broken.service.send({ sessionId: s1.session.id, text: '二' });
+  const failAct = await broken.service.handoff(s1.session.id);
+  assert.equal(failAct.mode, 'mechanical');
+  const failSaved = broken.io.files.get(failAct.file) ?? '';
+  assert.ok(failSaved.startsWith('# 交接笔记 '));
+  assert.ok(!failSaved.includes('## 摘要'));
+
+  const short = makeHarness({ maxToolRounds: 0 });
+  short.llm.summaryText = '太短';
+  const s2 = await short.service.send({ text: '一' });
+  await short.service.send({ sessionId: s2.session.id, text: '二' });
+  const shortAct = await short.service.handoff(s2.session.id);
+  assert.equal(shortAct.mode, 'mechanical');
+});
+
+test('handoffUseLlm=false：手动交接不调用摘要模型', async () => {
+  const h = makeHarness({ maxToolRounds: 0, handoffUseLlm: false });
+  h.llm.summaryText = GOOD_SUMMARY;
+  const first = await h.service.send({ text: '一' });
+  await h.service.send({ sessionId: first.session.id, text: '二' });
+  const callsBefore = h.llm.calls.length;
+  const act = await h.service.handoff(first.session.id);
+  assert.equal(h.llm.calls.length, callsBefore, '关闭后不应有任何额外模型调用');
+  assert.equal(act.mode, 'mechanical');
 });
