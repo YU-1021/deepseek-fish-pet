@@ -21,7 +21,7 @@ import {
 } from './handoff.js';
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
-import { MEMORY_TOOLS, type MemoryToolbox } from './tools.js';
+import type { MemoryToolbox } from './tools.js';
 import type { SpeechResult, VoiceService } from '../voice/service.js';
 
 /** 交接笔记的读写通道（petd 接工作区记忆；测试接内存 fake） */
@@ -218,7 +218,7 @@ export class ChatService {
     messages.push({ role: 'user', content: promptText });
 
     const toolbox = this.chat.maxToolRounds > 0 && this.toolbox ? this.toolbox() : null;
-    const toolDefs = toolbox ? MEMORY_TOOLS : undefined;
+    const toolDefs = toolbox ? toolbox.definitions() : undefined;
     const tools: ChatToolActivity[] = [];
     let reply: LlmReply | null = null;
     let promptTokens = 0;

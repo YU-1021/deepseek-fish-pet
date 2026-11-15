@@ -13,6 +13,7 @@ import type { LlmToolCall, LlmToolDefinition } from '../llm/client.js';
 import type { BlobStore } from '../memory/blob.js';
 import { isTextMime } from '../memory/blob.js';
 import type { MemoryService } from '../memory/service.js';
+import type { ReminderStore } from '../reminders/store.js';
 
 /** 声明给模型的工具（OpenAI function calling 格式） */
 export const MEMORY_TOOLS: LlmToolDefinition[] = [
@@ -185,6 +186,63 @@ export const MEMORY_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/** 提醒工具：让模型能在聊天里直接设/查/取消提醒（不占记忆写配额，但创建本身有上限） */
+export const REMINDER_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'remind_in',
+      description: '设一个「N 分钟后」的一次性提醒。主人说「过一会儿/半小时后提醒我」时用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          minutes: { type: 'number', minimum: 0.01, maximum: 43200, description: '多少分钟后（正数，最多 30 天）' },
+          text: { type: 'string', maxLength: 300, description: '提醒内容，如「喝水」「开会」' },
+        },
+        required: ['minutes', 'text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remind_at',
+      description: '设一个「今天/明天某个时刻」的提醒（HH:MM，今天已过就排在明天）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          at_clock: { type: 'string', description: '时刻，形如 14:30 或 9:05' },
+          text: { type: 'string', maxLength: 300, description: '提醒内容' },
+        },
+        required: ['at_clock', 'text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remind_list',
+      description: '列出当前还没响的提醒（确认自己设过什么、什么时候响）。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remind_cancel',
+      description: '取消一条还没响的提醒（需要 id，可先用 remind_list 查）。',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: '提醒编号，如 r3' } },
+        required: ['id'],
+      },
+    },
+  },
+];
+
+/** 聊天里可用的全部工具（记忆 + 提醒） */
+export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
+
 export interface ToolExecutionResult {
   ok: boolean;
   /** 回给模型的文本（已截断） */
@@ -195,6 +253,8 @@ export interface MemoryToolboxOptions {
   service: MemoryService;
   /** 附件存储（blobs/）；不传 = 不启用附件工具 */
   blobs?: BlobStore;
+  /** 提醒存储；不传 = 不启用提醒工具 */
+  reminders?: ReminderStore;
   /** 每轮允许的写操作次数 */
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
@@ -204,9 +264,26 @@ export interface MemoryToolboxOptions {
 /** 写操作：写/追加/编辑/删除/移动/存附件，都算一次配额 */
 const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'delete_file', 'move_file', 'save_blob']);
 
+/** 本地时间（给模型看的，形如 2026-11-15 20:30） */
+function formatAt(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 剩余时长（给模型看的人话，如「约 30 分钟」） */
+function formatMinutes(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  if (min < 60) return `约 ${min} 分钟`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest === 0 ? `约 ${h} 小时` : `约 ${h} 小时 ${rest} 分钟`;
+}
+
 export class MemoryToolbox {
   private readonly service: MemoryService;
   private readonly blobs?: BlobStore;
+  private readonly reminders?: ReminderStore;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
   /** 本轮已用掉的写操作次数 */
@@ -215,8 +292,14 @@ export class MemoryToolbox {
   constructor(opts: MemoryToolboxOptions) {
     this.service = opts.service;
     this.blobs = opts.blobs;
+    this.reminders = opts.reminders;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
+  }
+
+  /** 声明给模型的工具列表（没配提醒就不暴露提醒工具） */
+  definitions(): LlmToolDefinition[] {
+    return this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
   }
 
   /** 执行一个工具调用；永远返回文本结果，不抛错（错误也交给模型自己纠正）。 */
@@ -230,7 +313,7 @@ export class MemoryToolbox {
       return { ok: false, text: this.truncate(`错误：工具参数不是合法 JSON（${e instanceof Error ? e.message : String(e)}）`) };
     }
 
-    if (!WRITE_TOOLS.has(call.name) && !MEMORY_TOOLS.some((t) => t.function.name === call.name)) {
+    if (!WRITE_TOOLS.has(call.name) && !CHAT_TOOLS.some((t) => t.function.name === call.name)) {
       return { ok: false, text: `错误：没有这个工具（${call.name}）` };
     }
     if (WRITE_TOOLS.has(call.name)) {
@@ -360,6 +443,29 @@ export class MemoryToolbox {
         });
         return `已保存附件 ${meta.handle}（${meta.mime}，${meta.size} 字节）`;
       }
+      case 'remind_in': {
+        const minutes = Number(args['minutes']);
+        const text = str('text');
+        const item = this.requireReminders().create({ text, inMinutes: minutes, source: 'tool' });
+        return `已设提醒 ${item.id}：${item.text}（${formatAt(item.at)}，约 ${formatMinutes(item.at - Date.now())}后）`;
+      }
+      case 'remind_at': {
+        const atClock = str('at_clock');
+        const text = str('text');
+        const item = this.requireReminders().create({ text, atClock, source: 'tool' });
+        return `已设提醒 ${item.id}：${item.text}（${formatAt(item.at)}）`;
+      }
+      case 'remind_list': {
+        const items = this.requireReminders().list();
+        if (items.length === 0) return '当前没有待响的提醒。';
+        return `待响提醒（${items.length} 条）：\n${items
+          .map((it) => `- ${it.id}｜${formatAt(it.at)}｜${it.text}`)
+          .join('\n')}`;
+      }
+      case 'remind_cancel': {
+        const item = this.requireReminders().cancel(str('id'));
+        return `已取消提醒 ${item.id}：${item.text}`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
@@ -369,6 +475,12 @@ export class MemoryToolbox {
   private requireBlobs(): BlobStore {
     if (!this.blobs) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用附件存储');
     return this.blobs;
+  }
+
+  /** 提醒工具必须配了 ReminderStore 才能用 */
+  private requireReminders(): ReminderStore {
+    if (!this.reminders) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用提醒');
+    return this.reminders;
   }
 
   private truncate(text: string): string {

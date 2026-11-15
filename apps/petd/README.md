@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用），以及**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），以及**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒）。
 
 ## 现在有什么
 
@@ -19,18 +19,20 @@
     - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
     - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
     - 情绪与状态：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`（心情/好感/精力 0–100，离线回落，聊天时给行为指导、聊完小步变化，可让模型评估一段对话）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 提醒与日程：`reminder.status` / `reminder.list` / `reminder.create` / `reminder.cancel` / `reminder.snooze`（一次性提醒；到点广播 `reminder.due`，错过太久的标 skipped；聊天里模型可用 `remind_in/remind_at/remind_list/remind_cancel` 自己设提醒）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr 六段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders 八段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
 5. ASR：找 `whisper-cli`（环境变量 `PETD_WHISPER_DIR` → `asr.binaryDir` → `apps/petd/vendor/whisper` → 仓库 `app/vendor/whisper`）和模型（`asr.modelDir` → `home/asr` → 旧版 `%APPDATA%/dayu-pet/asr`）；缺模型时 `asr.download` 会从 hf-mirror 拉（模型很大，建议提前下）
 6. 情绪状态：`home/state/mood.json` 不存在时播种默认值（心情 70 / 好感 30 / 精力 80）
-7. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+7. 提醒：`home/state/reminders.json` 不存在时创建空文件，并把待响提醒重新布防（重启不丢）
+8. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -86,6 +88,12 @@
     "chatNudge": true,
     "moodDecayPerHour": 2,
     "energyRecoverPerHour": 8
+  },
+  "reminders": {
+    "enabled": true,
+    "maxPending": 50,
+    "catchUpHours": 24,
+    "keepFiredDays": 7
   }
 }
 ```
@@ -122,6 +130,10 @@
 - `mood.chatNudge`：一轮聊天成功后是否自动小幅调整（心情 +0.6 / 好感 +0.4 / 精力 -0.2，并广播 `mood.changed`）。
 - `mood.moodDecayPerHour`：离线时心情每小时自然回落多少（默认 2，单次最多回落 30）。
 - `mood.energyRecoverPerHour`：离线时精力每小时恢复多少（默认 8，恢复不超过 100）。
+- `reminders.enabled`：提醒系统总开关（关掉后 `reminder.create/cancel/snooze` 返回 `E_UNAVAILABLE`，列表仍可读）。
+- `reminders.maxPending`：最多同时挂多少条待响提醒（默认 50，防手滑刷屏）。
+- `reminders.catchUpHours`：错过多少小时内的提醒还会补报；更老的标记为 skipped 不补。
+- `reminders.keepFiredDays`：已响/已取消的记录保留多少天（之后自动清理）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -226,6 +238,17 @@
 - **落盘**：`home/state/mood.json`（当前值 + 最近 100 条变化历史），坏档或老格式会自动兜底。
 - **确认方式**：`node apps/petd/scripts/mood-smoke.mjs`（真 LLM 两次：一轮聊天 + 一次情绪评估；31 项断言）。
 
+## 提醒与日程（reminders）
+
+一次性提醒（不重复）：给「N 分钟后 / HH:MM / 绝对时间」三者之一，落盘成绝对时间戳；到点只广播 `reminder.due`，由 UI 或聊天决定怎么提醒（弹 toast、桌宠说话、朗读都行）。
+
+- **方法**：`reminder.status`（待响数 / 下一条时间 / 是否已布防）、`reminder.list`（待响列表，按时间、带 `inMinutes`）、`reminder.create`（`text` + `inMinutes`/`atClock`/`at` 三选一）、`reminder.cancel`、`reminder.snooze`（默认 5 分钟，1–1440）。
+- **事件**：`reminder.created` / `reminder.due` / `reminder.snoozed` / `reminder.cancelled` / `reminder.skipped`，都带 `item`；`due` 里还有 `firedLateMs`（补报延迟）。
+- **聊天联动**：模型在聊天里拿到 `remind_in` / `remind_at` / `remind_list` / `remind_cancel` 四个工具，可以直接答应「十分钟后提醒我喝水」并真的设上；设提醒不计记忆写配额。
+- **补报规则**：重启后到点的提醒会补报；但错过超过 `catchUpHours`（默认 24 小时）的标 skipped 不再补，避免一次炸出十几条。
+- **落盘**：`home/state/reminders.json`（待响 + 已响历史），坏条目自动跳过、不整档报废。
+- **确认方式**：`node apps/petd/scripts/reminder-smoke.mjs`（不需要模型：3 秒提醒真的响、稍后/取消、重启保留；32 项断言）。
+
 ## 跑起来
 
 ```bat
@@ -264,6 +287,9 @@ node apps/petd/scripts/asr-smoke.mjs
 
 :: 冒烟：情绪与状态（真调两次模型：一轮聊天 + 一次情绪评估）
 node apps/petd/scripts/mood-smoke.mjs
+
+:: 冒烟：提醒与日程（不花 token；3 秒提醒真的响、稍后/取消、重启保留）
+node apps/petd/scripts/reminder-smoke.mjs
 ```
 
 READY 行示例：
@@ -292,7 +318,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 168/168（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 181/181（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -303,6 +329,7 @@ cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到�
 cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到端（本机 SAPI 离线；真 LLM 一次；合成/缓存/事件/聊天朗读）
 cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端（本机 SAPI 合成 16k WAV + whisper.cpp 真识别；43 项；不花 token）
 cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到端（真 LLM 两次：一轮聊天 + 一次评估；status/adjust/poke/history/聊天微调/重启保留；31 项）
+cd apps/petd && node scripts/reminder-smoke.mjs --home D:\x    :: 提醒端到端（不花 token；3 秒提醒真的响、到点事件/稍后/取消/重启保留；32 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -322,6 +349,8 @@ cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到�
 ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 token）：`asr.status`（引擎/binary/模型就绪）、`asr.models` 三档、SAPI 合成 16k 中文 WAV、`asr.transcribe` 识别出「你好大肥鱼,今天天气不错,陪我聊两句吧。」（自动转简体）且唤醒词命中、`asr.listen.start`→16 片 300ms PCM feed + 静音→能量 VAD 切 1 句、`asr.segment` 事件、`asr.listen.stop`、流式识别文本一致、优雅退出。
 
 情绪冒烟覆盖（31 项，真 LLM 两次）：默认值 70/30/80 与档位、`config.get` 的 mood 段、`mood.adjust`（记历史 + `mood.changed`）、`mood.poke`（pokes+1、心情 +1、好感 +0.5）、`mood.history`、一轮聊天后的微调（心情升/好感升/精力降 + `mood.changed(source=chat)`）、`mood.evaluate` 真模型评估（`source=llm` 事件）、`state/mood.json` 落盘、重启后数值与被戳次数保留、两次优雅退出。
+
+提醒冒烟覆盖（32 项，不花 token）：`config.get` 的 reminders 段、`reminder.status` 初始无待响、`reminder.create`（3 秒后 / 60 分钟后 / HH:MM 三种）、`reminder.list` 排序与 inMinutes、到点真的广播 `reminder.due` 且携带 item、响过的移出待响列表、`reminder.snooze` 改到 10 分钟后且 `snoozes=1`、`reminder.cancel` + 从列表消失、`reminder.created/snoozed/cancelled` 事件、`state/reminders.json` 落盘（fired/pending 状态正确）、重启后待响提醒还在且重新布防、两次优雅退出。
 
 ## 刻意没做（等需求逐个说）
 

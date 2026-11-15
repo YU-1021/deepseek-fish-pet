@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 49 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 54 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -260,6 +260,20 @@ petd 已有 3 个可见数值（0–100）：心情 `mood`、好感 `affection`�
 9. **错误**：`E_INTERNAL`（评估模型失败/输出不可解析）→ 提示「这次没想明白，等会儿再试」；`mood.enabled=false` 时隐藏入口或置灰。
 
 **验收**：戳一下 → 数值/表情有反馈；聊 2–3 句 → 心情上升、好感上升、精力略降的小动画；切换页签/重启后回显一致；关闭 `mood.enabled` 后入口消失；评估按钮有 loading 与结果提示。截图贴 README。
+
+## 8.9 M8：提醒/日程 UI 规格（petd 后端已就绪）
+
+petd 已上线一次性提醒：`reminder.status` / `reminder.list` / `reminder.create` / `reminder.cancel` / `reminder.snooze`，事件 `reminder.created` / `reminder.due` / `reminder.snoozed` / `reminder.cancelled` / `reminder.skipped`（都带 `item`，`due` 里还有 `firedLateMs`）。聊天里的模型也能自己调 `remind_in` / `remind_at` / `remind_list` / `remind_cancel` 设提醒。
+
+1. **入口**：设置页「提醒」tab 或托盘菜单「提醒/日程」；列表显示待响项（`text`、`at`、`inMinutes`、`snoozes`），按时间升序；`reminder.status.nextAt` 可用于「下一条：xx 分钟后」这一行。
+2. **新建**：一个输入框 + 三种时间选择（N 分钟后 / 今天 HH:MM / 选日期时间）；提交 `reminder.create`，成功后本地插入并显示 toast「已设提醒：喝水（20:30）」。`text` 超过 300 字前端先截断提示。
+3. **到点**：订阅 `reminder.due` → 弹 toast / 系统通知 / 让桌宠说话或朗读（若 `voice.enabled`，可调 `voice.speak` 念这条；注意不要和聊天朗读抢音频）；toast 上给「稍后 5 分钟」「稍后 10 分钟」「知道了」按钮（稍后调 `reminder.snooze`）。
+4. **取消/稍后**：列表项 hover 出「稍后」「取消」；`reminder.cancel` 后从待响列表移除并 toast 确认。
+5. **重启与补报**：后端重启后会重新布防，错过 ≤ `catchUpHours` 的会在启动后补发 `reminder.due`；UI 若在同一时刻收到多条，合并成一个「你有 N 条提醒」面板，别连弹 N 个 toast。skipped 的只记日志、不打扰用户。
+6. **错误**：`E_UNAVAILABLE`（`reminder.enabled=false` 或待响太多）→ 提示「提醒功能已关闭 / 待响提醒太多，先取消几条」；`E_BAD_PARAMS`（时间格式/已过去/文本空）→ 就地标红输入框。
+7. **配置只读**：设置页展示 `config.get.reminders`（enabled/maxPending/catchUpHours/keepFiredDays），改配置由后端文件控制。
+
+**验收**：建一条 1 分钟后的提醒 → 到点弹 toast 且桌宠说一句 → 点「稍后 5 分钟」后列表时间 +5 分钟 → 重启 petd 后列表仍在 → 关闭 `reminders.enabled` 后新建按钮置灰。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

@@ -47,6 +47,8 @@ import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 import { MoodStore } from './state/mood.js';
 import { registerMoodMethods } from './gateway/methods/mood.js';
+import { ReminderStore } from './reminders/store.js';
+import { registerReminderMethods } from './gateway/methods/reminder.js';
 
 interface CliArgs {
   home?: string;
@@ -220,6 +222,22 @@ async function main(): Promise<void> {
     chatNudge: config.mood.chatNudge,
   });
 
+  // ── 提醒：一次性提醒落盘 + 到点广播 reminder.due（不自动发消息，UI/聊天决定怎么提醒） ──
+  const reminders = new ReminderStore({
+    file: path.join(paths.home, 'state', 'reminders.json'),
+    log: logger,
+    publish: (event, data) => publishEvent(event, data),
+    maxPending: config.reminders.maxPending,
+    catchUpHours: config.reminders.catchUpHours,
+    keepFiredDays: config.reminders.keepFiredDays,
+  });
+  const reminderStatus = reminders.ensure();
+  logger.info('提醒服务已就绪', {
+    pending: reminderStatus.pending,
+    nextAt: reminderStatus.nextAt,
+    enabled: config.reminders.enabled,
+  });
+
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
   const voice = new VoiceService({
@@ -257,6 +275,7 @@ async function main(): Promise<void> {
         maxWrites: config.chat.maxToolWrites,
         maxResultChars: config.chat.toolResultChars,
         blobs,
+        reminders,
       }),
     blobs,
     voice,
@@ -332,6 +351,10 @@ async function main(): Promise<void> {
     publish: (event, data) => publishEvent(event, data),
     enabled: () => config.mood.enabled,
   });
+  registerReminderMethods(registry, {
+    store: reminders,
+    enabled: () => config.reminders.enabled,
+  });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {
@@ -382,6 +405,7 @@ async function main(): Promise<void> {
     }, 5000);
     force.unref?.();
     try {
+      reminders.stop();
       await gateway.stop();
     } finally {
       removeIfExists(paths.gatewayFile);

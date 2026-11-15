@@ -137,6 +137,12 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           moodDecayPerHour: Type.Number(),
           energyRecoverPerHour: Type.Number(),
         }),
+        reminders: Type.Object({
+          enabled: Type.Boolean(),
+          maxPending: Type.Integer(),
+          catchUpHours: Type.Number(),
+          keepFiredDays: Type.Number(),
+        }),
       }),
     },
     () => {
@@ -160,6 +166,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           sampleRate: cfg.asr.sampleRate,
         },
         mood: { ...cfg.mood },
+        reminders: { ...cfg.reminders },
       };
     }
   );

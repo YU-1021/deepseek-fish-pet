@@ -122,6 +122,16 @@ export interface PetdConfig {
     moodDecayPerHour: number;
     energyRecoverPerHour: number;
   };
+  reminders: {
+    /** 提醒总开关：关闭后 reminder.* 与聊天里的提醒工具返回 E_UNAVAILABLE */
+    enabled: boolean;
+    /** 最多同时挂多少条未响提醒 */
+    maxPending: number;
+    /** 到点时，超过多少小时的旧提醒不再补报（直接标记 skipped） */
+    catchUpHours: number;
+    /** 已响/已取消的记录保留多少天后清理 */
+    keepFiredDays: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -185,6 +195,12 @@ export const DEFAULT_CONFIG: PetdConfig = {
     chatNudge: true,
     moodDecayPerHour: 2,
     energyRecoverPerHour: 8,
+  },
+  reminders: {
+    enabled: true,
+    maxPending: 50,
+    catchUpHours: 24,
+    keepFiredDays: 7,
   },
 };
 
@@ -392,6 +408,23 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof er === 'number' && Number.isFinite(er) && er >= 0 && er <= 50) out.mood.energyRecoverPerHour = er;
       else if (er !== undefined) warnings.push('mood.energyRecoverPerHour 非法，回默认 8');
     } else warnings.push('mood 段必须是对象，回默认');
+  }
+  const remindersRaw = raw['reminders'];
+  if (remindersRaw !== undefined) {
+    if (isObject(remindersRaw)) {
+      const re = remindersRaw['enabled'];
+      if (typeof re === 'boolean') out.reminders.enabled = re;
+      else if (re !== undefined) warnings.push('reminders.enabled 非法，回默认 true');
+      const mp = remindersRaw['maxPending'];
+      if (typeof mp === 'number' && Number.isInteger(mp) && mp >= 1 && mp <= 200) out.reminders.maxPending = mp;
+      else if (mp !== undefined) warnings.push('reminders.maxPending 非法，回默认 50');
+      const ch = remindersRaw['catchUpHours'];
+      if (typeof ch === 'number' && Number.isFinite(ch) && ch >= 1 && ch <= 168) out.reminders.catchUpHours = ch;
+      else if (ch !== undefined) warnings.push('reminders.catchUpHours 非法，回默认 24');
+      const kf = remindersRaw['keepFiredDays'];
+      if (typeof kf === 'number' && Number.isFinite(kf) && kf >= 1 && kf <= 30) out.reminders.keepFiredDays = kf;
+      else if (kf !== undefined) warnings.push('reminders.keepFiredDays 非法，回默认 7');
+    } else warnings.push('reminders 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

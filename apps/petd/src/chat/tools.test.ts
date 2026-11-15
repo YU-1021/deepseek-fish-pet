@@ -11,6 +11,7 @@ import { WorkspaceMemory } from '../memory/store.js';
 import { WorkspaceGit } from '../memory/git.js';
 import { MemoryService } from '../memory/service.js';
 import { BlobStore } from '../memory/blob.js';
+import { ReminderStore } from '../reminders/store.js';
 import { MemoryToolbox } from './tools.js';
 import type { LlmToolCall } from '../llm/client.js';
 
@@ -183,4 +184,42 @@ test('没配 BlobStore 时 blob 工具给出明确错误文本', async () => {
   const r = await box.execute(call('list_blobs', {}));
   assert.equal(r.ok, false);
   assert.match(r.text, /没有启用附件存储/);
+});
+
+test('remind_in / remind_at / remind_list / remind_cancel：模型能设提醒并看到列表', async () => {
+  const service = tmpService();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-reminder-tool-'));
+  const reminders = new ReminderStore({ file: path.join(dir, 'reminders.json'), armTimers: false });
+  reminders.ensure();
+  const box = new MemoryToolbox({ service, maxWrites: 3, maxResultChars: 4000, reminders });
+
+  const created = await box.execute(call('remind_in', { minutes: 30, text: '喝水' }));
+  assert.equal(created.ok, true);
+  assert.match(created.text, /已设提醒 r1：喝水/);
+  assert.match(created.text, /约 30 分钟后/);
+  assert.equal(box.writes, 0, '设提醒不计记忆写配额');
+
+  const at = await box.execute(call('remind_at', { at_clock: '18:30', text: '一小时后开会' }));
+  assert.equal(at.ok, true);
+  assert.match(at.text, /18:30/);
+
+  const listed = await box.execute(call('remind_list', {}));
+  assert.equal(listed.ok, true);
+  assert.match(listed.text, /r1/);
+  assert.match(listed.text, /r2/);
+
+  const cancelled = await box.execute(call('remind_cancel', { id: 'r1' }));
+  assert.equal(cancelled.ok, true);
+  assert.match(cancelled.text, /取消/);
+  assert.equal(reminders.list().length, 1);
+
+  const bad = await box.execute(call('remind_cancel', { id: 'r999' }));
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /E_NOT_FOUND/);
+
+  // 没配 ReminderStore 时给出明确说明
+  const plain = makeToolbox(service);
+  const off = await plain.execute(call('remind_in', { minutes: 5, text: 'x' }));
+  assert.equal(off.ok, false);
+  assert.match(off.text, /没有启用提醒/);
 });
