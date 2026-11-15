@@ -8,6 +8,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
 let petWindow;
 let tray;
+const petHitRegions = [
+  { x: 112, y: 40, width: 56, height: 34 },
+  { x: 94, y: 66, width: 92, height: 68 },
+  { x: 99, y: 128, width: 82, height: 34 },
+  { x: 80, y: 163, width: 120, height: 22 },
+];
+function applyPetHitRegions(window) {
+  if (process.platform === 'win32' && typeof window.setShape === 'function') window.setShape(petHitRegions);
+}
 function petdHome() {
   if (process.env.PETD_HOME?.trim()) return path.resolve(process.env.PETD_HOME);
   const base = process.env.APPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -48,6 +57,7 @@ function createWindow() {
     alwaysOnTop: true, resizable: false, skipTaskbar: true, show: true,
     webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  applyPetHitRegions(petWindow);
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   if (process.env.VITE_DEV_SERVER_URL) void petWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?pet=1`);
   else void petWindow.loadFile(path.join(here, '../dist/index.html'), { query: { pet: '1' } });
@@ -64,6 +74,7 @@ function createWindow() {
 }
 function createPetWindow() {
   petWindow = new BrowserWindow({ width: 280, height: 190, x: 80, y: 120, frame: false, transparent: true, alwaysOnTop: true, resizable: false, skipTaskbar: true, show: true, webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  applyPetHitRegions(petWindow);
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   if (process.env.VITE_DEV_SERVER_URL) void petWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?pet=1`); else void petWindow.loadFile(path.join(here, '../dist/index.html'), { query: { pet: '1' } });
   petWindow.on('closed', () => { petWindow = undefined; });
