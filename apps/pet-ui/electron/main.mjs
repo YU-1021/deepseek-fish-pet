@@ -12,6 +12,7 @@ let memoryWorkspace;
 const thumbnailCache = new Map();
 let petDragTimer;
 let petDrag;
+let chatWindowTemporarilyTopmost = false;
 const petHitRegions = [
   { x: 112, y: 40, width: 56, height: 34 },
   { x: 94, y: 66, width: 92, height: 68 },
@@ -76,7 +77,21 @@ ipcMain.handle('blob:file-url', (_event, input) => {
   const { name } = input && typeof input === 'object' ? input : {};
   return pathToFileURL(resolveBlobPath(name)).href;
 });
-ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
+function showChatWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  mainWindow.show();
+  mainWindow.focus();
+  if (chatWindowTemporarilyTopmost) return;
+  chatWindowTemporarilyTopmost = true;
+  const shownWindow = mainWindow;
+  shownWindow.once('blur', () => {
+    chatWindowTemporarilyTopmost = false;
+    if (!shownWindow.isDestroyed()) shownWindow.setAlwaysOnTop(false);
+  });
+}
+ipcMain.handle('pet:show-chat', showChatWindow);
 function dragPetStep() {
   if (!petDrag || !petWindow || petWindow.isDestroyed()) return endPetDrag();
   const cursor = screen.getCursorScreenPoint();
@@ -104,7 +119,7 @@ ipcMain.handle('pet:drag-end', (event) => { if (event.sender === petWindow?.webC
 ipcMain.handle('pet:show-menu', () => {
   if (!petWindow || petWindow.isDestroyed()) return;
   Menu.buildFromTemplate([
-    { label: '打开聊天面板', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: '打开聊天面板', click: showChatWindow },
     { label: '隐藏宠物', click: () => petWindow?.hide() },
     { type: 'separator' },
     { label: '退出桌宠', click: () => app.quit() },
@@ -133,7 +148,7 @@ function createWindow() {
   tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}`));
   tray.setToolTip('大肥鱼桌宠');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开聊天面板', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: '打开聊天面板', click: showChatWindow },
     { label: '显示/隐藏宠物', click: () => { if (!petWindow || petWindow.isDestroyed()) createPetWindow(); else petWindow.isVisible() ? petWindow.hide() : petWindow.show(); } },
     { type: 'separator' },
     { label: '退出桌宠', click: () => app.quit() },
