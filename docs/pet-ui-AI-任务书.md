@@ -167,6 +167,30 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 **证据**：每个里程碑给 1–2 张截图 + 一条 `pnpm --filter @petd/pet-ui build` 输出，贴在 `apps/pet-ui/README.md`。
 
+## 8.5 M4：Memory 面板规格（petd 后端已就绪）
+
+目标：让用户能看到、编辑、回滚桌宠的工作区记忆（`workspace/`，就是它的长期记忆），并管附件。
+
+**布局建议**：左栏目录树；中栏编辑器/Markdown 预览；右栏「历史 / 附件」两个 tab。整个面板放在设置窗里作为一页（Memory）。
+
+**数据来源（全部已在 petd 上线，方法清单以 `health.status` 为准）**
+- 树与列表：`memory.tree`（整棵文本树）或 `memory.list {dir}`（逐层展开，更适合树控件）。
+- 读：`memory.read {path}` → `{path, content, revision}`；`revision` 是当前内容的版本号。
+- 写：`memory.write {path, content, baseRevision}`、追加 `memory.append`。
+- 删/移：`memory.delete {path}`、`memory.move {from, to}`。
+- 搜索：`memory.glob {pattern}`、`memory.grep {match, regex?, path?}`（做全工作区搜索框很好用）。
+- 历史：`memory.history {path?, limit?}` → `{commits: [{hash, fullHash, author, email, date, message}]}`；`memory.diff {hash, path?}` → `{diff}`（纯文本 patch，直接等宽展示）。
+- 附件：`blob.list`、`blob.put {dataBase64, name?, mime?}`（≤8MB，返回句柄 `blob:<文件名>`）、`blob.info {ref}`、`blob.get {ref}` → `{meta, dataBase64}`、`blob.delete {ref}`。
+
+**关键交互（别漏）**
+1. **保存冲突**：保存时把读到的 `revision` 作为 `baseRevision` 传回。后端内容变了会报 `E_CONFLICT`，`error.details.currentRevision` 是最新版本；UI 提示「文件已被桌宠/另一端改过」，给「载入最新（丢弃我的修改）/ 覆盖（用最新 revision 再写一次）」两个选择，**不要静默覆盖**。
+2. **实时刷新**：订阅 `memory.changed` 事件（`{path, kind: 'write'|'append'|'delete'|'move', revision, from?}`）；树自动刷新；如果当前打开的文件被外部改动且本地有未保存修改 → 提示冲突，别直接重载丢掉用户输入。
+3. **常驻文件**：`PARTNER.md` 是每轮进系统提示词的「主人画像」，删/移会被后端拒绝（`E_FORBIDDEN`）——UI 上删除/移动按钮置灰并标个「常驻」徽标，编辑本身是允许的。
+4. **附件预览**：`blob.get` 返回 base64，图片直接 `<img>`；文本类可以渲染成文本（用 `meta.mime` 判断，注意 1MB 预览上限，超了提示下载）。上传用 `blob.put`，然后把句柄传给聊天（`chat.send` 的 `attachments`）。
+5. **一键回到某版本**：历史页选中某次提交 → 展示 diff → 提供「恢复此版本内容」（= 用该提交里的文件内容 `memory.write` 回去，并提示会生成一次新提交）。
+
+**验收**：能浏览/编辑/新建/删除记忆文件；冲突提示与双按钮；`memory.changed` 触发树刷新；历史列表 + diff + 恢复；附件列表/预览/上传/删除。截图贴 README。
+
 ## 9. 测试策略（省 token）
 
 - 单测/组件测试用 **mock WS server**：自己写 `apps/pet-ui/scripts/mock-gateway.mjs`，按第 5 节帧格式回答

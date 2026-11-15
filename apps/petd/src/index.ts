@@ -174,10 +174,21 @@ async function main(): Promise<void> {
     });
   }
 
+  // 先发到进程内总线；网关起来后改为经 Gateway.publish 广播给 WS 客户端
+  let publishEvent: (event: string, data?: unknown) => void = (event, data) => {
+    bus.emit(event, data);
+  };
+
   // ── 工作区记忆：文件式长期记忆 + Git 版本化（形状参考 Cormini，MIT） ──
   const memory = new WorkspaceMemory({ dir: paths.memoryDir });
   const memoryGit = new WorkspaceGit(paths.memoryDir, (msg, data) => logger.warn(msg, data));
-  const memoryService = new MemoryService({ memory, git: memoryGit, version, logger });
+  const memoryService = new MemoryService({
+    memory,
+    git: memoryGit,
+    version,
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+  });
   memoryService.ensure();
   logger.info('工作区记忆已就绪', { dir: paths.memoryDir, files: memoryService.status().fileCount });
 
@@ -188,10 +199,6 @@ async function main(): Promise<void> {
 
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
-  // 先发到进程内总线；网关起来后改为经 Gateway.publish 广播给 WS 客户端
-  let publishEvent: (event: string, data?: unknown) => void = (event, data) => {
-    bus.emit(event, data);
-  };
   const chat = new ChatService({
     store,
     llm,

@@ -4,6 +4,7 @@
  * 这一层不懂 WebSocket：方法层（gateway/methods/memory.ts）只做参数校验与转发。
  * 每次写成功都提交一次，提交信息形如「petd wrote partner/作息.md」，与 Cormini 的形状一致。
  */
+import { createHash } from 'node:crypto';
 import { PetdError } from '@petd/protocol';
 import { AUTHOR_PETD, type CommitInfo, type GitStatus, WorkspaceGit } from './git.js';
 import { assertNonEmptyPath, isResident, SEED_DIRS, SEED_FILES } from './prefix.js';
@@ -20,13 +21,37 @@ export interface MemoryServiceOptions {
   /** petd 版本号，用于启动快照 tag（start-<version>）。 */
   version: string;
   logger?: MemoryLogger;
+  /** 写成功后的广播出口（WebSocket 事件：memory.changed） */
+  publish?: (event: string, data: Record<string, unknown>) => void;
+}
+
+/** 文件内容的乐观并发版本号：sha256(utf8 内容) 的十六进制前 32 位 */
+export function contentRevision(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 32);
+}
+
+export interface MemoryReadResult {
+  path: string;
+  content: string;
+  /** 当前内容的版本号，UI 保存时作为 baseRevision 传回来做冲突检测 */
+  revision: string;
 }
 
 export interface MemoryWriteResult {
   path: string;
   bytes: number;
+  /** 写完后内容的版本号 */
+  revision: string;
   /** 本次生成的提交 hash；null = 没有改动或 Git 不可用。 */
   commit: string | null;
+}
+
+export interface MemoryWriteOptions {
+  /**
+   * 乐观并发：客户端读到的版本号。传了且与当前内容不一致 → E_CONFLICT。
+   * 文件不存在时传空字符串表示「新建」；不传则不做检查（整份覆盖）。
+   */
+  baseRevision?: string;
 }
 
 export interface MemoryGrepHit {
@@ -46,6 +71,7 @@ export class MemoryService {
   private readonly git: WorkspaceGit;
   private readonly version: string;
   private readonly logger?: MemoryLogger;
+  private readonly publish?: (event: string, data: Record<string, unknown>) => void;
   /** 同一仓上的提交必须串行（Git index 只允许一个写者）。 */
   private commitQueue: Promise<string | null> = Promise.resolve(null);
 
@@ -54,6 +80,7 @@ export class MemoryService {
     this.git = opts.git;
     this.version = opts.version;
     this.logger = opts.logger;
+    this.publish = opts.publish;
   }
 
   /** 建目录骨架、播种文件、建仓、打启动快照 tag。可重复调用。 */
@@ -88,25 +115,50 @@ export class MemoryService {
     return this.memory.listDir(dir);
   }
 
-  read(relPath: string): { path: string; content: string } {
+  read(relPath: string): MemoryReadResult {
     const p = assertNonEmptyPath(relPath);
-    return { path: this.memory.normalize(p), content: this.memory.readFile(p) };
+    const normalized = this.memory.normalize(p);
+    const content = this.memory.readFile(p);
+    return { path: normalized, content, revision: contentRevision(content) };
   }
 
-  async write(relPath: string, content: string): Promise<MemoryWriteResult> {
+  /** 读当前版本号（文件不存在返回 null），用于写前乐观并发检查 */
+  revisionOf(relPath: string): string | null {
     const p = assertNonEmptyPath(relPath);
+    if (!this.memory.exists(p)) return null;
+    return contentRevision(this.memory.readFile(p));
+  }
+
+  private checkBaseRevision(relPath: string, baseRevision: string | undefined): void {
+    if (baseRevision === undefined) return;
+    const current = this.revisionOf(relPath);
+    if (current === baseRevision) return;
+    throw new PetdError('E_CONFLICT', `${this.memory.normalize(relPath)} 已被别处改动，请刷新后再保存`, {
+      currentRevision: current,
+      baseRevision,
+    });
+  }
+
+  async write(relPath: string, content: string, opts: MemoryWriteOptions = {}): Promise<MemoryWriteResult> {
+    const p = assertNonEmptyPath(relPath);
+    this.checkBaseRevision(p, opts.baseRevision);
     this.memory.writeFileAtomic(p, content);
-    return { path: this.memory.normalize(p), bytes: Buffer.byteLength(content, 'utf8'), commit: await this.commit(`petd wrote ${this.memory.normalize(p)}`) };
+    const normalized = this.memory.normalize(p);
+    const revision = contentRevision(content);
+    const commit = await this.commit(`petd wrote ${normalized}`);
+    this.publish?.('memory.changed', { path: normalized, kind: 'write', revision });
+    return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), revision, commit };
   }
 
-  async append(relPath: string, content: string): Promise<MemoryWriteResult> {
+  async append(relPath: string, content: string, opts: MemoryWriteOptions = {}): Promise<MemoryWriteResult> {
     const p = assertNonEmptyPath(relPath);
+    this.checkBaseRevision(p, opts.baseRevision);
     this.memory.appendFile(p, content);
-    return {
-      path: this.memory.normalize(p),
-      bytes: Buffer.byteLength(content, 'utf8'),
-      commit: await this.commit(`petd appended to ${this.memory.normalize(p)}`),
-    };
+    const normalized = this.memory.normalize(p);
+    const revision = contentRevision(this.memory.readFile(p));
+    const commit = await this.commit(`petd appended to ${normalized}`);
+    this.publish?.('memory.changed', { path: normalized, kind: 'append', revision });
+    return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), revision, commit };
   }
 
   async remove(relPath: string): Promise<{ path: string; commit: string | null }> {
@@ -114,7 +166,9 @@ export class MemoryService {
     this.guardResident(p, '删除');
     this.memory.deleteFile(p);
     this.memory.pruneEmptyDirs(p);
-    return { path: this.memory.normalize(p), commit: await this.commit(`petd deleted ${this.memory.normalize(p)}`) };
+    const path = this.memory.normalize(p);
+    this.publish?.('memory.changed', { path, kind: 'delete' });
+    return { path, commit: await this.commit(`petd deleted ${path}`) };
   }
 
   async move(fromRel: string, toRel: string): Promise<{ from: string; to: string; commit: string | null }> {
@@ -124,6 +178,11 @@ export class MemoryService {
     this.memory.renameFile(from, to);
     this.memory.pruneEmptyDirs(from);
     const commit = await this.commit(`petd moved ${this.memory.normalize(from)} → ${this.memory.normalize(to)}`);
+    this.publish?.(`memory.changed`, {
+      path: this.memory.normalize(to),
+      from: this.memory.normalize(from),
+      kind: 'move',
+    });
     return { from: this.memory.normalize(from), to: this.memory.normalize(to), commit };
   }
 

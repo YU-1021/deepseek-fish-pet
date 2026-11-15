@@ -13,15 +13,21 @@ import { WorkspaceGit } from '../../memory/git.js';
 import { MemoryService } from '../../memory/service.js';
 import { registerMemoryMethods } from './memory.js';
 
-function setup(): { reg: MethodRegistry; service: MemoryService; dir: string } {
+function setup(): { reg: MethodRegistry; service: MemoryService; dir: string; events: Array<{ event: string; data: Record<string, unknown> }> } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-mem-methods-'));
   const memory = new WorkspaceMemory({ dir });
   const git = new WorkspaceGit(dir);
-  const service = new MemoryService({ memory, git, version: '0.0.0-test' });
+  const events: Array<{ event: string; data: Record<string, unknown> }> = [];
+  const service = new MemoryService({
+    memory,
+    git,
+    version: '0.0.0-test',
+    publish: (event, data) => events.push({ event, data }),
+  });
   service.ensure();
   const reg = new MethodRegistry();
   registerMemoryMethods(reg, { memory: service });
-  return { reg, service, dir };
+  return { reg, service, dir, events };
 }
 
 const ctx = {
@@ -115,4 +121,57 @@ test('move/delete 与常驻文件守卫', async () => {
     () => call(reg, 'memory.move', { from: 'PARTNER.md', to: 'archive/PARTNER.md' }),
     (e: unknown) => e instanceof PetdError && e.code === 'E_FORBIDDEN'
   );
+});
+
+test('乐观并发：read 带 revision，write/append 带 baseRevision 冲突检测', async () => {
+  const { reg, events } = setup();
+  const wrote = (await call(reg, 'memory.write', { path: 'notes/并发.md', content: '第一版' })) as { revision: string };
+  assert.equal(typeof wrote.revision, 'string');
+  assert.equal(wrote.revision.length, 32);
+
+  const read = (await call(reg, 'memory.read', { path: 'notes/并发.md' })) as { revision: string; content: string };
+  assert.equal(read.content, '第一版');
+  assert.equal(read.revision, wrote.revision);
+
+  // 正确的 baseRevision → 允许覆盖
+  const updated = (await call(reg, 'memory.write', {
+    path: 'notes/并发.md',
+    content: '第二版',
+    baseRevision: read.revision,
+  })) as { revision: string };
+  assert.notEqual(updated.revision, read.revision);
+
+  // 过期的 baseRevision → E_CONFLICT，且带上当前 revision 供 UI 提示
+  await assert.rejects(
+    () =>
+      call(reg, 'memory.write', {
+        path: 'notes/并发.md',
+        content: '第三版',
+        baseRevision: read.revision,
+      }),
+    (e: unknown) => {
+      assert.ok(e instanceof PetdError);
+      assert.equal(e.code, 'E_CONFLICT');
+      assert.equal((e.details as { currentRevision?: string }).currentRevision, updated.revision);
+      return true;
+    }
+  );
+
+  // 追加同样支持 baseRevision
+  await assert.rejects(
+    () => call(reg, 'memory.append', { path: 'notes/并发.md', content: '追加', baseRevision: read.revision }),
+    (e: unknown) => e instanceof PetdError && e.code === 'E_CONFLICT'
+  );
+  const appended = (await call(reg, 'memory.append', {
+    path: 'notes/并发.md',
+    content: '追加',
+    baseRevision: updated.revision,
+  })) as { revision: string };
+  assert.ok(appended.revision);
+
+  // 写/追加/删/移都会广播 memory.changed，UI 可以实时刷新面板
+  const changed = events.filter((e) => e.event === 'memory.changed');
+  assert.ok(changed.length >= 3);
+  assert.ok(changed.some((e) => e.data.kind === 'write' && e.data.path === 'notes/并发.md'));
+  assert.ok(changed.some((e) => e.data.kind === 'append' && e.data.path === 'notes/并发.md'));
 });

@@ -28,8 +28,12 @@ const Commit = Type.Object({
 const WriteResult = Type.Object({
   path: Type.String(),
   bytes: Type.Integer(),
+  /** 写完后内容的版本号（下次保存时作为 baseRevision 传回） */
+  revision: Type.String(),
   commit: Type.Union([Type.String(), Type.Null()]),
 });
+
+const BaseRevision = Type.Optional(Type.String({ maxLength: 100 }));
 
 export interface MemoryMethodDeps {
   memory: MemoryService;
@@ -90,9 +94,9 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     {
       name: 'memory.read',
       scope: 'read',
-      description: '读工作区里的一个文本文件（相对路径）',
+      description: '读工作区里的一个文本文件（相对路径），返回内容与 revision 版本号',
       params: Type.Object({ path: Type.String({ minLength: 1, maxLength: 400 }) }),
-      result: Type.Object({ path: Type.String(), content: Type.String() }),
+      result: Type.Object({ path: Type.String(), content: Type.String(), revision: Type.String() }),
     },
     (params) => {
       const p = params as { path: string };
@@ -104,14 +108,18 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     {
       name: 'memory.write',
       scope: 'write',
-      description: '写工作区文件（整份覆盖，自动建目录并提交一次 Git）',
-      params: Type.Object({ path: Type.String({ minLength: 1, maxLength: 400 }), content: Type.String({ maxLength: 200_000 }) }),
+      description: '写工作区文件（整份覆盖，自动建目录并提交一次 Git）；带 baseRevision 时做乐观并发冲突检测',
+      params: Type.Object({
+        path: Type.String({ minLength: 1, maxLength: 400 }),
+        content: Type.String({ maxLength: 200_000 }),
+        baseRevision: BaseRevision,
+      }),
       result: WriteResult,
       idempotent: false,
     },
     (params) => {
-      const p = params as { path: string; content: string };
-      return deps.memory.write(p.path, p.content);
+      const p = params as { path: string; content: string; baseRevision?: string };
+      return deps.memory.write(p.path, p.content, p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision });
     }
   );
 
@@ -119,14 +127,18 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     {
       name: 'memory.append',
       scope: 'write',
-      description: '追加到工作区文件末尾（文件不存在则创建；自动提交一次 Git）',
-      params: Type.Object({ path: Type.String({ minLength: 1, maxLength: 400 }), content: Type.String({ maxLength: 200_000 }) }),
+      description: '追加到工作区文件末尾（文件不存在则创建；自动提交一次 Git）；带 baseRevision 时做乐观并发冲突检测',
+      params: Type.Object({
+        path: Type.String({ minLength: 1, maxLength: 400 }),
+        content: Type.String({ maxLength: 200_000 }),
+        baseRevision: BaseRevision,
+      }),
       result: WriteResult,
       idempotent: false,
     },
     (params) => {
-      const p = params as { path: string; content: string };
-      return deps.memory.append(p.path, p.content);
+      const p = params as { path: string; content: string; baseRevision?: string };
+      return deps.memory.append(p.path, p.content, p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision });
     }
   );
 
