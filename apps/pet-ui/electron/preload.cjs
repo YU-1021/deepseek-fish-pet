@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
   startDrag: (initialDelta) => ipcRenderer.invoke('pet:drag-start', initialDelta),
   endDrag: () => ipcRenderer.invoke('pet:drag-end'),
   resizePet: (height) => ipcRenderer.invoke('pet:resize', height),
+  updatePetHitRegions: (regions) => ipcRenderer.send('pet:hit-regions', regions),
 });

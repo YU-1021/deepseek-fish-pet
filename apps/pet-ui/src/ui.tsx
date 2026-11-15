@@ -145,14 +145,67 @@ function PetOverlay() {
   const reactionTimer = useRef<number | undefined>(undefined);
   const petFloat = useRef<HTMLDivElement | null>(null);
   const clickAudio = useRef<HTMLAudioElement | null>(null);
+  const petVideo = useRef<HTMLVideoElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerMoved = useRef(false);
   const dragStarted = useRef(false);
   const [reaction, setReaction] = useState<{ en: string; zh: string } | null>(null);
+  function syncPetHitRegions() {
+    const overlay = document.querySelector('.pet-overlay');
+    const video = petVideo.current;
+    if (!overlay || !video) return;
+    const overlayRect = overlay.getBoundingClientRect();
+    const videoRect = video.getBoundingClientRect();
+    let artRegion: { x: number; y: number; width: number; height: number };
+    try {
+      if (!video.videoWidth || !video.videoHeight) throw new Error('video frame not ready');
+      const sampleScale = Math.min(1, 128 / Math.max(video.videoWidth, video.videoHeight));
+      const sampleWidth = Math.max(1, Math.round(video.videoWidth * sampleScale));
+      const sampleHeight = Math.max(1, Math.round(video.videoHeight * sampleScale));
+      const canvas = document.createElement('canvas');
+      canvas.width = sampleWidth;
+      canvas.height = sampleHeight;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('canvas unavailable');
+      context.drawImage(video, 0, 0, sampleWidth, sampleHeight);
+      const { data } = context.getImageData(0, 0, sampleWidth, sampleHeight);
+      let left = sampleWidth, top = sampleHeight, right = -1, bottom = -1;
+      for (let y = 0; y < sampleHeight; y++) for (let x = 0; x < sampleWidth; x++) {
+        if (data[(y * sampleWidth + x) * 4 + 3] <= 16) continue;
+        left = Math.min(left, x); top = Math.min(top, y);
+        right = Math.max(right, x); bottom = Math.max(bottom, y);
+      }
+      if (right < left || bottom < top) throw new Error('empty alpha bounds');
+      const fitScale = Math.min(videoRect.width / video.videoWidth, videoRect.height / video.videoHeight);
+      const drawWidth = video.videoWidth * fitScale;
+      const drawHeight = video.videoHeight * fitScale;
+      const scaleX = drawWidth / sampleWidth;
+      const scaleY = drawHeight / sampleHeight;
+      const pad = 14;
+      artRegion = {
+        x: videoRect.left - overlayRect.left + (videoRect.width - drawWidth) / 2 + left * scaleX - pad,
+        y: videoRect.top - overlayRect.top + (videoRect.height - drawHeight) / 2 + top * scaleY - pad,
+        width: (right - left + 1) * scaleX + pad * 2,
+        height: (bottom - top + 1) * scaleY + pad * 2,
+      };
+    } catch {
+      artRegion = { x: overlayRect.width / 2 - 70, y: 20, width: 140, height: 140 };
+    }
+    const regions = [artRegion];
+    const bubble = overlay.querySelector('.pet-reply-bubble');
+    if (bubble) {
+      const rect = bubble.getBoundingClientRect();
+      regions.push({ x: rect.left - overlayRect.left, y: rect.top - overlayRect.top, width: rect.width, height: rect.height });
+    }
+    window.petdBootstrap?.updatePetHitRegions(regions);
+  }
   useEffect(() => {
     const overlay = document.querySelector('.pet-overlay');
     if (!overlay) return;
-    const resize = () => { void window.petdBootstrap?.resizePet?.(Math.ceil(overlay.getBoundingClientRect().height)); };
+    const resize = () => {
+      void window.petdBootstrap?.resizePet?.(Math.ceil(overlay.getBoundingClientRect().height));
+      syncPetHitRegions();
+    };
     resize();
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(resize);
     observer?.observe(overlay);
@@ -161,8 +214,13 @@ function PetOverlay() {
       if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
       if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
       void window.petdBootstrap?.resizePet?.(190);
+      window.petdBootstrap?.updatePetHitRegions([]);
     };
   }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(syncPetHitRegions, 0);
+    return () => window.clearTimeout(timer);
+  }, [reaction]);
   async function poke() {
     if (enabled !== true) return;
     try {
@@ -241,7 +299,7 @@ function PetOverlay() {
   return <div className="pet-overlay" onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下戳戳 · 拖动移动 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
     <div className="pet-art-target" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
-      <div ref={petFloat} className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+      <div ref={petFloat} className="pet-float"><video ref={petVideo} onLoadedData={syncPetHitRegions} src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
     </div>
     {reaction && <div className="pet-reply-bubble" role="status" aria-live="polite"><div className="en">{reaction.en}</div><div className="zh">{reaction.zh}</div></div>}
   </div>;
