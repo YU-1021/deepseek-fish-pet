@@ -98,7 +98,9 @@ ipcMain.handle('pet:resize', (event, requestedHeight) => {
   if (event.sender !== petWindow?.webContents || !petWindow || petWindow.isDestroyed()) return 190;
   const height = Math.ceil(Math.min(420, Math.max(190, Number(requestedHeight) || 190)));
   const bounds = petWindow.getBounds();
-  if (bounds.height !== height) petWindow.setBounds({ ...bounds, height });
+  // Change only size here. Refeeding rounded x/y during a transparent-window
+  // resize can shift its physical origin on scaled Windows displays.
+  if (bounds.height !== height) petWindow.setSize(bounds.width, height);
   if (petDrag) petDrag.bounds = { ...petDrag.bounds, height };
   return height;
 });
