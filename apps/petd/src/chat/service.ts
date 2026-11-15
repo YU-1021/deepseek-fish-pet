@@ -38,6 +38,10 @@ export interface ChatServiceOptions {
   publish: (event: string, data?: unknown) => void;
   /** 每次调用时读当前 SOUL.md（用户手改了也能立刻生效，不重启） */
   systemPrompt: () => string;
+  /** 每轮拼接的情绪状态文本（返回空串 = 不注入） */
+  moodPrompt?: () => string;
+  /** 一轮聊天成功后的钩子（例如按互动微调情绪）；失败只记日志，不影响回复 */
+  onTurnComplete?: (info: { sessionId: string; userText: string; assistantText: string }) => void | Promise<void>;
   /** 记忆工具工厂（每轮新建，写次数配额按轮重置）；不传 = 不启用工具 */
   toolbox?: () => MemoryToolbox;
   /** 交接笔记读写；不传 = 不做上下文交接 */
@@ -114,6 +118,8 @@ export class ChatService {
   private readonly chat: PetdConfig['chat'];
   private readonly publish: (event: string, data?: unknown) => void;
   private readonly systemPrompt: () => string;
+  private readonly moodPrompt?: () => string;
+  private readonly onTurnComplete?: ChatServiceOptions['onTurnComplete'];
   private readonly toolbox?: () => MemoryToolbox;
   private readonly handoffIo?: HandoffIo;
   private readonly blobs?: BlobStore;
@@ -128,6 +134,8 @@ export class ChatService {
     this.chat = opts.chat;
     this.publish = opts.publish;
     this.systemPrompt = opts.systemPrompt;
+    this.moodPrompt = opts.moodPrompt;
+    this.onTurnComplete = opts.onTurnComplete;
     this.toolbox = opts.toolbox;
     this.handoffIo = opts.handoffIo;
     this.blobs = opts.blobs;
@@ -188,7 +196,7 @@ export class ChatService {
     this.publish('chat.user_message', { sessionId: meta.id, message: userMessage, attachments });
 
     const promptText = text + attachmentBlock;
-    const systemPrompt = this.systemPrompt();
+    const systemPrompt = this.composeSystemPrompt();
     let handoff: HandoffActivity | null = null;
     let note = '';
     try {
@@ -293,6 +301,15 @@ export class ChatService {
       updatedAt: finalMeta.updatedAt,
     });
 
+    // 一轮完成后的钩子（按互动微调情绪）；失败只记日志，不影响本轮回复
+    if (this.onTurnComplete) {
+      try {
+        await this.onTurnComplete({ sessionId: meta.id, userText: text, assistantText: assistantMessage.content });
+      } catch (e) {
+        this.logger?.warn('聊天完成钩子失败（不影响本轮回复）', { sessionId: meta.id, error: (e as Error).message });
+      }
+    }
+
     // 朗读：默认取 config.voice.autoSpeak；合成失败只记日志，不影响这轮聊天
     let speech: SpeechResult | null = null;
     const shouldSpeak = input.speak ?? this.autoSpeak;
@@ -313,6 +330,18 @@ export class ChatService {
       speech: speech === null ? 'none' : speech.engine,
     });
     return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, attachments, handoff, speech };
+  }
+
+  /** 系统提示词 = 人格 + 记忆前缀（调用方拼好） + 当前情绪行为指导 */
+  private composeSystemPrompt(): string {
+    const base = this.systemPrompt();
+    let mood = '';
+    try {
+      mood = this.moodPrompt?.() ?? '';
+    } catch {
+      mood = '';
+    }
+    return mood ? `${base}\n\n${mood}` : base;
   }
 
   /** 校验附件引用并取元数据：不存在的直接报错，不让模型瞎猜 */
@@ -344,7 +373,7 @@ export class ChatService {
     if (active.length < 3) throw new PetdError('E_BAD_PARAMS', '消息太少，不需要交接');
     const keep = Math.max(1, Math.min(2, active.length - 1));
     const olderCount = active.length - keep;
-    const result = await this.performHandoff(session, active, olderCount, '', this.systemPrompt(), true);
+    const result = await this.performHandoff(session, active, olderCount, '', this.composeSystemPrompt(), true);
     if (!result) throw new PetdError('E_INTERNAL', '交接失败');
     return result.activity;
   }

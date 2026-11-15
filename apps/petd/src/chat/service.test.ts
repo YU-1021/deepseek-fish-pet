@@ -10,7 +10,7 @@ import { EventBus } from '../kernel/events.js';
 import { DEFAULT_CONFIG } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
 import { ChatStore } from './store.js';
-import { ChatService } from './service.js';
+import { ChatService, type ChatServiceOptions } from './service.js';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'petd-chat-'));
@@ -35,7 +35,7 @@ interface Harness {
   service: ChatService;
 }
 
-function makeHarness(chatOverrides: Partial<typeof DEFAULT_CONFIG.chat> = {}): Harness {
+function makeHarness(chatOverrides: Partial<typeof DEFAULT_CONFIG.chat> = {}, extra: Partial<ChatServiceOptions> = {}): Harness {
   const dir = tmpDir();
   const store = new ChatStore({ dir });
   const llm = new FakeLlm();
@@ -49,6 +49,7 @@ function makeHarness(chatOverrides: Partial<typeof DEFAULT_CONFIG.chat> = {}): H
     },
     systemPrompt: () => '你是大肥鱼',
     now: () => '2026-01-01T00:00:00.000Z',
+    ...extra,
   });
   return { dir, store, llm, bus, service };
 }
@@ -130,4 +131,31 @@ test('会话不存在时 get/rename/delete 都报 E_NOT_FOUND', () => {
   assert.throws(() => h.service.getSession('s-nope-000000'), { code: 'E_NOT_FOUND' } as unknown as Error);
   assert.throws(() => h.service.renameSession('s-nope-000000', 'x'), { code: 'E_NOT_FOUND' } as unknown as Error);
   assert.throws(() => h.service.deleteSession('s-nope-000000'), { code: 'E_NOT_FOUND' } as unknown as Error);
+});
+
+test('系统提示词拼接情绪段，一轮成功后触发 onTurnComplete', async () => {
+  const turns: Array<{ sessionId: string; userText: string; assistantText: string }> = [];
+  const h = makeHarness({}, {
+    moodPrompt: () => '## 你现在的状态（心情不错）',
+    onTurnComplete: (info) => {
+      turns.push(info);
+    },
+  });
+  const res = await h.service.send({ text: '今天好累' });
+  const system = h.llm.calls[0]?.[0]?.content ?? '';
+  assert.ok(system.includes('你是大肥鱼'));
+  assert.ok(system.includes('## 你现在的状态'));
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0]?.assistantText, res.assistantMessage.content);
+});
+
+test('onTurnComplete 抛错不影响回复，照常落库', async () => {
+  const h = makeHarness({}, {
+    onTurnComplete: () => {
+      throw new Error('钩子坏了');
+    },
+  });
+  const res = await h.service.send({ text: '你好呀' });
+  assert.equal(res.assistantMessage.content, '收到啦');
+  assert.equal(res.session.messageCount, 2);
 });

@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 44 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 49 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,8 +121,8 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`。
-后续 Lead 会加 `persona.*`、`config.changed` 等；UI 对未知事件忽略即可。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`。
+对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
 
@@ -244,6 +244,22 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 9. **性能**：识别是本地 CPU 推理（base 模型约 0.5–2s/句），UI 不要每片都等返回——用事件驱动；feed 请求可以并发少量（≤2）以免积压。
 
 **验收**：点「开始听」→ 说话 → 字幕出现句子；说「你好大肥鱼」→ 唤醒提示；停止后麦克风指示灯熄灭（系统麦克风占用消失）；模型页能看到 ready/下载进度；ASR 关闭时给出清晰错误提示。截图贴 README。
+
+## 8.8 M7：情绪/状态 UI 规格（petd 后端已就绪）
+
+petd 已有 3 个可见数值（0–100）：心情 `mood`、好感 `affection`、精力 `energy`，以及被戳次数 `pokes`；另有档位名（如 心情不错 / 比较亲近 / 很正常）。对应方法与事件：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`，事件 `mood.changed`。
+
+1. **展示位置**：托盘菜单或设置页的「状态」面板；宠物窗可加一个小指示（表情/立绘表情切换 + 三枚小圆环）。默认**不显示精确数字**（体验更自然），设置里提供「显示数值」开关给调试用。
+2. **档位映射**：心情 5 档 → 表情/立绘/气泡底色或语气小图标；好感 4 档 → 称呼文案（还生疏→很黏你）；精力 4 档 → 活跃度（很累时打盹动画/降低动作频率）。档位名直接用 `mood.status.state.tiers` 里的中文，不要自己再翻译。
+3. **戳一戳**：宠物窗的 `pointerdown`/双击/摸摸动作 → 调 `mood.poke`（后端 心情+1、好感+0.5、pokes+1），拿到返回快照后播一个 200–400ms 的小反馈（跳一下/冒爱心），不要每次戳都弹窗。
+4. **实时刷新**：订阅 `mood.changed`（`data.state` 是完整快照 + `applied[]` 是具体变化），事件驱动更新；断线重连后重拉一次 `mood.status`，不要定时轮询。
+5. **评估按钮（可选）**：「让它想想刚才聊得怎么样」→ `mood.evaluate {sessionId?}`（后端真调一次模型，timeout 90s），按钮要显示「正在想…」并禁用重复点击；返回的 `applied` 可以逐条做小提示（如「心情 +1」「好感 +2」）。
+6. **聊天联动**：`config.mood.chatNudge=true` 时聊天后后端自动微调，UI **不要自己再算**；只在收到 `mood.changed(source=chat)` 时做一个轻微的表情变化，别打断聊天。
+7. **设置页**：`mood.enabled` / `chatInjection` / `chatNudge` 只读展示（改配置目前由后端文件控制，UI 不做写入），`config.get` 里有这些字段。
+8. **氛围**：数值低时不要做惩罚性 UI（例如灰掉/警告）；只体现「有点累、想安静」这类文案与动作变化；数值只是表现层，不承诺游戏性。
+9. **错误**：`E_INTERNAL`（评估模型失败/输出不可解析）→ 提示「这次没想明白，等会儿再试」；`mood.enabled=false` 时隐藏入口或置灰。
+
+**验收**：戳一下 → 数值/表情有反馈；聊 2–3 句 → 心情上升、好感上升、精力略降的小动画；切换页签/重启后回显一致；关闭 `mood.enabled` 后入口消失；评估按钮有 loading 与结果提示。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

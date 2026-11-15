@@ -111,6 +111,17 @@ export interface PetdConfig {
     /** 单段最长时长（毫秒），超了强制切段 */
     maxSegmentMs: number;
   };
+  mood: {
+    /** 情绪系统总开关：关闭后不注入提示词、不随聊天变化（mood.* 仍可读写） */
+    enabled: boolean;
+    /** 是否把当前情绪翻译成一段行为指导追加进聊天系统提示词 */
+    chatInjection: boolean;
+    /** 每轮聊天结束后是否自动微调情绪（心情 +1、精力 -1 这种小步） */
+    chatNudge: boolean;
+    /** 离线衰减/恢复：每小时心情回落多少、精力恢复多少 */
+    moodDecayPerHour: number;
+    energyRecoverPerHour: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -167,6 +178,13 @@ export const DEFAULT_CONFIG: PetdConfig = {
     minSpeechMs: 300,
     silenceMs: 600,
     maxSegmentMs: 15_000,
+  },
+  mood: {
+    enabled: true,
+    chatInjection: true,
+    chatNudge: true,
+    moodDecayPerHour: 2,
+    energyRecoverPerHour: 8,
   },
 };
 
@@ -354,6 +372,26 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const mx = asr['maxSegmentMs'];
     if (typeof mx === 'number' && Number.isInteger(mx) && mx >= 1000 && mx <= 60_000) out.asr.maxSegmentMs = mx;
     else if (mx !== undefined) warnings.push('asr.maxSegmentMs 非法，回默认 15000');
+  }
+  const moodRaw = raw['mood'];
+  if (moodRaw !== undefined) {
+    if (isObject(moodRaw)) {
+      const me = moodRaw['enabled'];
+      if (typeof me === 'boolean') out.mood.enabled = me;
+      else if (me !== undefined) warnings.push('mood.enabled 非法，回默认 true');
+      const ci = moodRaw['chatInjection'];
+      if (typeof ci === 'boolean') out.mood.chatInjection = ci;
+      else if (ci !== undefined) warnings.push('mood.chatInjection 非法，回默认 true');
+      const cn = moodRaw['chatNudge'];
+      if (typeof cn === 'boolean') out.mood.chatNudge = cn;
+      else if (cn !== undefined) warnings.push('mood.chatNudge 非法，回默认 true');
+      const md = moodRaw['moodDecayPerHour'];
+      if (typeof md === 'number' && Number.isFinite(md) && md >= 0 && md <= 20) out.mood.moodDecayPerHour = md;
+      else if (md !== undefined) warnings.push('mood.moodDecayPerHour 非法，回默认 2');
+      const er = moodRaw['energyRecoverPerHour'];
+      if (typeof er === 'number' && Number.isFinite(er) && er >= 0 && er <= 50) out.mood.energyRecoverPerHour = er;
+      else if (er !== undefined) warnings.push('mood.energyRecoverPerHour 非法，回默认 8');
+    } else warnings.push('mood 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

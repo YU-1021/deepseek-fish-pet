@@ -130,6 +130,13 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           autoChat: Type.Boolean(),
           sampleRate: Type.Integer(),
         }),
+        mood: Type.Object({
+          enabled: Type.Boolean(),
+          chatInjection: Type.Boolean(),
+          chatNudge: Type.Boolean(),
+          moodDecayPerHour: Type.Number(),
+          energyRecoverPerHour: Type.Number(),
+        }),
       }),
     },
     () => {
@@ -152,6 +159,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           autoChat: cfg.asr.autoChat,
           sampleRate: cfg.asr.sampleRate,
         },
+        mood: { ...cfg.mood },
       };
     }
   );

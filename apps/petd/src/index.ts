@@ -45,6 +45,8 @@ import { AsrService } from './asr/service.js';
 import { registerAsrMethods } from './gateway/methods/asr.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
+import { MoodStore } from './state/mood.js';
+import { registerMoodMethods } from './gateway/methods/mood.js';
 
 interface CliArgs {
   home?: string;
@@ -202,6 +204,22 @@ async function main(): Promise<void> {
   logger.info('附件存储已就绪', { dir: path.join(paths.memoryDir, 'blobs'), files: blobs.list().length });
 
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
+
+  // ── 情绪与状态：心情/好感/精力；启动时按离线时长回落，聊天后小步变化 ──
+  const mood = new MoodStore({
+    file: path.join(paths.home, 'state', 'mood.json'),
+    log: logger,
+    moodDecayPerHour: config.mood.moodDecayPerHour,
+    energyRecoverPerHour: config.mood.energyRecoverPerHour,
+  });
+  mood.ensure();
+  logger.info('情绪状态已就绪', {
+    ...mood.current(),
+    enabled: config.mood.enabled,
+    chatInjection: config.mood.chatInjection,
+    chatNudge: config.mood.chatNudge,
+  });
+
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
   const voice = new VoiceService({
@@ -217,6 +235,22 @@ async function main(): Promise<void> {
     chat: config.chat,
     publish: (event, data) => publishEvent(event, data),
     systemPrompt: () => buildChatSystemPrompt(memory, personaStore.read().content),
+    // 情绪只给「行为指导」，不把数字写进提示词；关闭注入时返回空串
+    moodPrompt: () => (config.mood.enabled && config.mood.chatInjection ? mood.prompt() : ''),
+    // 聊天后的小步互动：开心一点、更亲近一点、稍微耗点精力（都是很小的量，靠模型评估可另外跑 mood.evaluate）
+    onTurnComplete: config.mood.enabled && config.mood.chatNudge
+      ? () => {
+          const { applied } = mood.adjust({ mood: 0.6, affection: 0.4, energy: -0.2 }, { reason: '聊了一轮天', source: 'chat' });
+          if (applied.length > 0) {
+            publishEvent('mood.changed', {
+              state: mood.current(),
+              applied,
+              source: 'chat',
+              reason: '聊了一轮天',
+            });
+          }
+        }
+      : undefined,
     toolbox: () =>
       new MemoryToolbox({
         service: memoryService,
@@ -291,6 +325,13 @@ async function main(): Promise<void> {
   registerBlobMethods(registry, { blobs });
   registerVoiceMethods(registry, { voice });
   registerAsrMethods(registry, { asr });
+  registerMoodMethods(registry, {
+    store: mood,
+    llm,
+    chats: store,
+    publish: (event, data) => publishEvent(event, data),
+    enabled: () => config.mood.enabled,
+  });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用），以及**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估）。
 
 ## 现在有什么
 
@@ -18,7 +18,8 @@
     - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
     - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
     - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 情绪与状态：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`（心情/好感/精力 0–100，离线回落，聊天时给行为指导、聊完小步变化，可让模型评估一段对话）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
@@ -28,7 +29,8 @@
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
 5. ASR：找 `whisper-cli`（环境变量 `PETD_WHISPER_DIR` → `asr.binaryDir` → `apps/petd/vendor/whisper` → 仓库 `app/vendor/whisper`）和模型（`asr.modelDir` → `home/asr` → 旧版 `%APPDATA%/dayu-pet/asr`）；缺模型时 `asr.download` 会从 hf-mirror 拉（模型很大，建议提前下）
-6. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+6. 情绪状态：`home/state/mood.json` 不存在时播种默认值（心情 70 / 好感 30 / 精力 80）
+7. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -77,6 +79,13 @@
     "minSpeechMs": 300,
     "silenceMs": 600,
     "maxSegmentMs": 15000
+  },
+  "mood": {
+    "enabled": true,
+    "chatInjection": true,
+    "chatNudge": true,
+    "moodDecayPerHour": 2,
+    "energyRecoverPerHour": 8
   }
 }
 ```
@@ -108,6 +117,11 @@
 - `asr.wakeEnabled` / `asr.wakeWords`：唤醒词开关与列表（含近似匹配，容忍一两个字听错）。
 - `asr.autoChat`：唤醒词命中后是否自动把整句发进聊天（`chat.send`）；默认 false，只广播 `asr.wake`。
 - `asr.sampleRate` / `energyThreshold` / `minSpeechMs` / `silenceMs` / `maxSegmentMs`：流式监听的采样率与能量 VAD 参数（喂 PCM 用）。
+- `mood.enabled`：情绪系统总开关（关掉后不回落、不注入、不微调，`mood.*` 仍可读但 `enabled=false`）。
+- `mood.chatInjection`：是否把当前情绪的行为指导拼进聊天 system 提示词（只给档位描述，不把数值告诉模型）。
+- `mood.chatNudge`：一轮聊天成功后是否自动小幅调整（心情 +0.6 / 好感 +0.4 / 精力 -0.2，并广播 `mood.changed`）。
+- `mood.moodDecayPerHour`：离线时心情每小时自然回落多少（默认 2，单次最多回落 30）。
+- `mood.energyRecoverPerHour`：离线时精力每小时恢复多少（默认 8，恢复不超过 100）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -199,6 +213,19 @@
 - **隐私**：音频不落盘（只在 `asr/tmp/` 短暂写 WAV，识别完删除）、不上传；识别文本才进事件与会话。
 - **确认方式**：`node apps/petd/scripts/asr-smoke.mjs` 会本机合成一段中文语音、真跑 whisper 识别与流式监听，43 项断言全绿。
 
+## 情绪与状态（mood）
+
+桌宠有 3 个可见数值（0–100，一位小数）：**心情 mood**、**对主人的好感 affection**、**精力 energy**，外加被戳次数。它们会影响聊天时的人格表现，但**不把数字直接告诉模型**——提示词里只有按档位写的行为指导。
+
+- **档位**：心情 很低落 / 有点闷 / 平静 / 心情不错 / 很开心；好感 还生疏 / 逐渐熟悉 / 比较亲近 / 很黏你；精力 很累 / 有点乏 / 正常 / 很有精神。
+- **离线回落**：启动时按离线时长回落心情（`moodDecayPerHour`，单次最多 -30）、恢复精力（`energyRecoverPerHour`）；每次读取都会先应用一次，变化记进历史（`source=system`）。
+- **聊天注入**：`config.mood.chatInjection=true` 时，`chat.send` 的 system 提示词末尾会多一段「你现在的状态」（语气/主动性的行为指导，不报数值）。
+- **聊天微调**：`config.mood.chatNudge=true` 时，一轮聊天成功后小步调整（心情 +0.6、好感 +0.4、精力 -0.2），并广播 `mood.changed`。
+- **方法**：`mood.status`（快照 + 档位）、`mood.history`（变化历史，最近的在前）、`mood.adjust`（手动增减，带 reason）、`mood.poke`（被戳：心情 +1、好感 +0.5）、`mood.evaluate`（让模型看最近 12 条对话，输出 -2~+2 的评估并应用；真调一次模型）。
+- **事件**：任何变化都广播 `mood.changed {state, applied, source, reason}`，UI 可以据此刷新心情指示/表情/桌面立绘。
+- **落盘**：`home/state/mood.json`（当前值 + 最近 100 条变化历史），坏档或老格式会自动兜底。
+- **确认方式**：`node apps/petd/scripts/mood-smoke.mjs`（真 LLM 两次：一轮聊天 + 一次情绪评估；31 项断言）。
+
 ## 跑起来
 
 ```bat
@@ -234,6 +261,9 @@ node apps/petd/scripts/voice-smoke.mjs
 
 :: 冒烟：语音识别/唤醒词（本机 SAPI 合成 16k 语音 + whisper.cpp 真识别，不花 token）
 node apps/petd/scripts/asr-smoke.mjs
+
+:: 冒烟：情绪与状态（真调两次模型：一轮聊天 + 一次情绪评估）
+node apps/petd/scripts/mood-smoke.mjs
 ```
 
 READY 行示例：
@@ -262,7 +292,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 152/152（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 168/168（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -272,6 +302,7 @@ cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到�
 cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
 cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到端（本机 SAPI 离线；真 LLM 一次；合成/缓存/事件/聊天朗读）
 cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端（本机 SAPI 合成 16k WAV + whisper.cpp 真识别；43 项；不花 token）
+cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到端（真 LLM 两次：一轮聊天 + 一次评估；status/adjust/poke/history/聊天微调/重启保留；31 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -289,6 +320,8 @@ cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端�
 语音冒烟覆盖（26 项，本机 SAPI 离线 + 真 LLM 一次）：`voice.status` 开关/引擎/音色/缓存统计、`voice.voices` 含本机 SAPI 音色、`voice.speak` 出 WAV/字节数合理/时长>0/base64 是 RIFF、缓存命中且 id 一致、`voice.speech` 事件广播、`chat.send {speak:true}` 返回 `speech` 且会话里只有文字、JSONL 不存音频、优雅退出。
 
 ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 token）：`asr.status`（引擎/binary/模型就绪）、`asr.models` 三档、SAPI 合成 16k 中文 WAV、`asr.transcribe` 识别出「你好大肥鱼,今天天气不错,陪我聊两句吧。」（自动转简体）且唤醒词命中、`asr.listen.start`→16 片 300ms PCM feed + 静音→能量 VAD 切 1 句、`asr.segment` 事件、`asr.listen.stop`、流式识别文本一致、优雅退出。
+
+情绪冒烟覆盖（31 项，真 LLM 两次）：默认值 70/30/80 与档位、`config.get` 的 mood 段、`mood.adjust`（记历史 + `mood.changed`）、`mood.poke`（pokes+1、心情 +1、好感 +0.5）、`mood.history`、一轮聊天后的微调（心情升/好感升/精力降 + `mood.changed(source=chat)`）、`mood.evaluate` 真模型评估（`source=llm` 事件）、`state/mood.json` 落盘、重启后数值与被戳次数保留、两次优雅退出。
 
 ## 刻意没做（等需求逐个说）
 
