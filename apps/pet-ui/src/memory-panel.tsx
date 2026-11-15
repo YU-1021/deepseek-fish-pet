@@ -139,11 +139,13 @@ export function MemoryPanel({ connected, onUseAttachment, onRemoveAttachment }: 
   }, []);
 
   const loadHistory = useCallback(async (filePath: string) => {
-    if (!filePath) { setCommits([]); return; }
+    if (!filePath) { setCommits([]); return []; }
     try {
       const result = await request('memory.history', { path: filePath, limit: 40 });
-      setCommits(result.commits as MemoryCommit[]);
-    } catch (cause) { setError(errorText(cause)); }
+      const nextCommits = result.commits as MemoryCommit[];
+      setCommits(nextCommits);
+      return nextCommits;
+    } catch (cause) { setError(errorText(cause)); return []; }
   }, []);
 
   const refresh = useCallback(async () => {
@@ -180,6 +182,7 @@ export function MemoryPanel({ connected, onUseAttachment, onRemoveAttachment }: 
     const unsubscribe = subscribeEvents((frame) => {
       if (frame.event !== 'memory.changed') return;
       const data = (frame.data ?? {}) as { path?: string; from?: string; to?: string };
+      void request('memory.status', {}).then((status) => setFileCount(Number(status.fileCount ?? 0))).catch(() => {});
       const changedPaths = [data.path, data.from, data.to].filter((item): item is string => Boolean(item));
       const directories = new Set<string>();
       for (const changedPath of changedPaths) directories.add(changedPath.includes('/') ? changedPath.slice(0, changedPath.lastIndexOf('/')) : '');
@@ -295,7 +298,19 @@ export function MemoryPanel({ connected, onUseAttachment, onRemoveAttachment }: 
     if (!selectedCommit || !selectedPath || !hasMethod('memory.restore')) return;
     if (!window.confirm('恢复会把这个版本的文件内容写回当前工作区，并新增一条提交，不会改写历史。继续吗？')) return;
     setError('');
-    try { await request('memory.restore', { path: selectedPath, hash: selectedCommit, expectedContentHash: baseHash }); await loadFile(selectedPath); await loadHistory(selectedPath); setRightTab('history'); }
+    try {
+      const restored = await request('memory.restore', { path: selectedPath, hash: selectedCommit, expectedContentHash: baseHash });
+      await loadFile(selectedPath);
+      const nextCommits = await loadHistory(selectedPath);
+      const restoredHash = String(restored.commit ?? '').toLowerCase();
+      const newCommit = restoredHash ? nextCommits.find((commit) => commit.hash.toLowerCase() === restoredHash || commit.fullHash.toLowerCase() === restoredHash || commit.fullHash.toLowerCase().startsWith(restoredHash)) : undefined;
+      setSelectedCommit(newCommit?.hash ?? '');
+      if (newCommit) {
+        const latestDiff = await request('memory.diff', { hash: newCommit.hash, path: selectedPath });
+        setDiff(String(latestDiff.diff ?? ''));
+      }
+      setRightTab('history');
+    }
     catch (cause) { setError(errorText(cause)); }
   }
 
