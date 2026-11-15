@@ -33,7 +33,17 @@ function gb(n) { return Math.round(Number(n) / 1024 / 1024 / 1024 * 10) / 10; }
 /* what: 空=全查；battery/disk/net/mem 只查那一项 ——
    ★第一版写成"先 collect() 全部再过滤"，于是单项还是要 2 秒 ✗
      而工具描述里我又承诺了"单项几百毫秒" —— 那是假话，必须让实现追上描述 ✓ */
+let _lastCollect = null;
 function collect(what) {
+  /* ★ 2026-10-31：全量 collect 实测 3.7s（3 次 PowerShell CIM），几十秒内反复调用结果一样；
+     加 5s 结果缓存（同样 what 才命中），并把 3 次 CIM 合并成 1 次（见 cimAll）★ */
+  const _key = String(what || '');
+  if (_lastCollect && _lastCollect.key === _key && Date.now() - _lastCollect.at < 5000) return _lastCollect.r;
+  const _r = collectRaw(what);
+  _lastCollect = { key: _key, at: Date.now(), r: _r };
+  return _r;
+}
+function collectRaw(what) {
   const k = String(what || '').toLowerCase();
   const want = (name) => !k || k === 'all' || k === name
     || (name === 'battery' && (k === '电池' || k === '电量'))
@@ -42,6 +52,15 @@ function collect(what) {
     || (name === 'mem' && (k === 'memory' || k === '内存'))
     || (name === 'mem' && k === 'cpu');
   const r = { ok: true, parts: [], warn: [] };
+  /* 3 项 CIM 合成一次 PowerShell 调用（原来 3 次 spawn，各 ~1s+） */
+  let _cim = null;
+  const cimAll = () => {
+    if (_cim) return _cim;
+    /* 注意：psJson 会把 script 包进 `( script | ConvertTo-Json )` —— () 里不能放多条语句，
+       所以这里用子表达式 $() 包住多条语句，最后一条是返回的哈希表 */
+    _cim = psJson('$($b=Get-CimInstance Win32_Battery|Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus,Name;$d=Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3"|Select-Object DeviceID,Size,FreeSpace,VolumeName;$n=Get-NetAdapter|Where-Object {$_.Status -eq "Up"}|Select-Object Name,LinkSpeed,InterfaceDescription;@{battery=$b;disk=$d;net=$n})', 20000) || {};
+    return _cim;
+  };
 
   /* ── 内存 / CPU / 开机时长（Node 直接拿） ── */
   if (want('mem')) try {
@@ -65,7 +84,7 @@ function collect(what) {
 
   /* ── 电池（台式机没有就跳过） ── */
   if (want('battery')) try {
-    const b = psJson('Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,BatteryStatus,Name');
+    const b = (cimAll() || {}).battery;
     const list = arr(b).filter((x) => x && x.EstimatedChargeRemaining != null);
     if (list.length) {
       r.battery = list.map((x) => ({
@@ -80,7 +99,7 @@ function collect(what) {
 
   /* ── 磁盘（只看固定盘） ── */
   if (want('disk')) try {
-    const d = psJson('Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,Size,FreeSpace,VolumeName');
+    const d = (cimAll() || {}).disk;
     const list = arr(d).filter((x) => x && x.Size);
     if (list.length) {
       r.disks = list.map((x) => ({
@@ -95,7 +114,7 @@ function collect(what) {
 
   /* ── 网络（有连着且不是回环/虚拟的就报） ── */
   if (want('net')) try {
-    const n = psJson('Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object Name,LinkSpeed,InterfaceDescription');
+    const n = (cimAll() || {}).net;
     const list = arr(n).filter((x) => x && x.Name);
     if (list.length) {
       r.net = list.map((x) => ({ name: String(x.Name).slice(0, 30), speed: String(x.LinkSpeed || '') }));

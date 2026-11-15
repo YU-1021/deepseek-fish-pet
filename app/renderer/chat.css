@@ -260,3 +260,19 @@ header .tools { margin-left: auto; display: flex; gap: 8px; }
 .moremenu .mi.danger { color: #cf4d3f; }
 .moremenu .mi.danger:hover { background: #fdf0ee; }
 .moremenu .msep { height: 1px; background: #eef1f7; margin: 4px 6px; }
+
+/* ---------- ★停止按钮（2026-10-10，主人："给个停止的选项"）★ ----------
+   红底描边 = "停"的语义 ✓；不用全红填充（那是危险操作按钮的样式 ✗，
+   而这个按钮**随时可以按**、按错了也只是停下来 ✓）；跑任务时她还在动的话
+   JS 会给它加 .pulse（见 chat.js 末尾 ✓）—— 一眼能看出"这个键是能救命的" ✓。 */
+button.stopbtn {
+  background: #fff; border: 1px solid #f0b6ae; color: #cf4d3f;
+  padding: 10px 12px; font-size: 13px; white-space: nowrap;
+}
+button.stopbtn:hover { background: #fdf0ee; }
+button.stopbtn:active { background: #f8ded9; }
+button.stopbtn.pulse { animation: stopPulse 1.2s ease-in-out infinite; }
+@keyframes stopPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(207, 77, 63, .0); }
+  50% { box-shadow: 0 0 0 4px rgba(207, 77, 63, .18); }
+}

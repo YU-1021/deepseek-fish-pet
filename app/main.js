@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, screen, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, screen, session, shell, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 /* clock 必须最先加载：它会劫持 Date.now()，后面的模块读到的才是平移过的时间 */
@@ -39,9 +39,161 @@ const dbg = (msg) => {
   } catch {}
 };
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * ★★★ 任务期状态 + 判定（**模块级** —— ★谁再把它们放回 handler 里，她就会"听不见主人"✗★）★★★
+ *
+ * 【为什么必须模块级 ✗→✓】（这是我 2026-10-10 自己造的一个真机 bug ✓）
+ *   这些 `let` / `function` 原来写在 `assistant:run` 的 handler **里面** ✗
+ *   （旧代码的 `chatTaskHidden` 也是 ✓）→ ★每次调用都是新的一份状态 ✗★；
+ *   而 `requestStop` / `stats:task` / `chat:send`（全是**模块级**的）又要用它们 ✓
+ *   → ★`ReferenceError: endTaskPeriodNow is not defined` ✗★。
+ *   ★真机铁证（debug.log 15:57）★：
+ *     `[stop] 主人新指令 → 解除停止状态（gen=2）` 打了 ✓（说明 chat:send 进来了 ✓），
+ *     紧跟着 `[chat] send from=chat len=` **再也没出现** ✗
+ *     → ★她从此听不见主人说话（每句都在这儿抛异常、模型根本没被叫）✗★，
+ *       表现就是"她不动了" ✗（比惰性超时严重得多 ✓ —— 也说明"提交前先在真机上发一句话"是必须的 ✓）。
+ *   顺带把旧代码那个"状态每次调用重置"的隐患也修掉了 ✓（任务期状态本来就该跨调用 ✓）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+let chatTaskHidden = false;      // 镜像（真判定在 src/taskperiod.js ✓）
+let chatTaskActive = false;      // ★循环还没给出停止原因 = 任务还在推进★（stats:task 是"结束"的信号 ✓）
+let chatToolInFlight = 0;        // ★有工具正在执行★（这时候绝不能认为"空闲"✗）
+let chatLastActivityAt = 0;
+let chatLastActivityWhy = '';
+function chatIdleMs() {
+  const v = Number((config.load().memory || {}).chatRestoreIdleMs);
+  return v > 3000 ? v : 60000;   // ★15s → 60s★（配得比 3s 还小就按 60s 兜住 ✓）
+}
+function chatStuckMs() {
+  const v = Number((config.load().memory || {}).chatTaskStuckMs);
+  return v > 30000 ? v : 300000;
+}
+/* ★判定的"脑子"在 src/taskperiod.js（纯逻辑 ✓ 可注入时钟 ✓ 可单测 ✓）★
+   这里只做两件"有副作用"的事：① 真的把对话窗 show 回来 ✓ ② 把 idle-restore 落盘 ✓
+   （★主进程的逻辑没法在探针里跑（single-instance 锁 + 不许弹窗 ✗）→
+     所以判定逻辑**必须**是可单测的纯模块 ✓，否则这条 bug 只能靠"真机上跑一遍看看"来验 ✗） */
+const TASKPERIOD = require('./src/taskperiod').create({
+  idleMs: () => chatIdleMs(),
+  stuckMs: () => chatStuckMs(),
+  now: () => Date.now(),
+  setTimeout, clearTimeout,
+  onRestore: (info) => {
+    try { if (chatWin && !chatWin.isDestroyed()) { chatWin.showInactive(); chatWin.setAlwaysOnTop(false); } } catch (e) {}
+    chatTaskHidden = false;
+    dbg('[pet] 任务期结束（' + info.tag + '）→ 恢复对话窗');
+    /* ★★ 结束时要留原因 ✗→✓ ★★
+       这条以前**根本没有记录**✗（真机查过 session.json 里没有对应事件 ✓）→
+       "任务期为什么结束了"事后查不到 ✓。只有**真的空闲**那条才记 idle-restore ✓；
+       "循环结束"那条不记 —— 循环自己的停止原因已经由 stats:task 记过了 ✓（同一件事不记两遍 ✓）。 */
+    if (info.reason === 'idle-restore') {
+      try { require('./src/stoplog').noteStop({ stopReason: 'idle-restore', via: '任务期结束(空闲)', ok: true }); } catch (e) {}
+    }
+  },
+  onStuck: (st) => {
+    dbg('[pet] 任务期还在推进（' + Math.round((st.stuckMs || 300000) / 1000) + 's 没有任何活动，但循环还没给停止原因）'
+      + ' → ★先不恢复对话窗，继续等她★ ✓（上一次就是在这儿被误判成"任务结束"的 ✗）');
+  },
+});
+function taskPeriodStats() {
+  const st = TASKPERIOD.stats();
+  return {
+    hidden: st.hidden, active: chatTaskActive, inFlight: chatToolInFlight,
+    lastAt: chatLastActivityAt, lastWhy: chatLastActivityWhy,
+    idleMs: chatIdleMs(), stuckMs: chatStuckMs(), timerArmed: st.timerArmed, stuckTicks: st.stuckTicks,
+    engine: st,
+  };
+}
+/* ★"在推进"的唯一打点处★（所有会重置计时的地方都走它 ✓ —— 计时逻辑只有一个地方 ✓） */
+function markChatActivity(why) {
+  chatLastActivityAt = Date.now();
+  chatLastActivityWhy = String(why || '');
+  TASKPERIOD.mark(chatLastActivityWhy);
+}
+/* ★"循环还在跑吗"★（chatTaskActive 是给 taskPeriodStats 看的镜像 ✓，判定在 TASKPERIOD 里 ✓） */
+function markChatActive(v) {
+  chatTaskActive = !!v;
+  TASKPERIOD.setActive(chatTaskActive);
+}
+/* 工具开始/结束：★两个方向都算"在推进"✓，而"有工具在跑"这件事本身挡住空闲判定 ✓★ */
+function markToolStart(name) {
+  chatToolInFlight++;
+  markChatActivity('工具开始(' + String(name || '') + ')');
+  TASKPERIOD.toolStart(String(name || ''));
+}
+function markToolEnd(name) {
+  chatToolInFlight = Math.max(0, chatToolInFlight - 1);
+  markChatActivity('工具结束(' + String(name || '') + ')');
+  TASKPERIOD.toolEnd(String(name || ''));
+}
+/* ★循环已经结束 / 被停止 → 立刻把对话窗还回来★（主人要马上看到结果 ✓；showInactive 不抢焦点 ✓） */
+function endTaskPeriodNow(why) {
+  markChatActive(false);
+  TASKPERIOD.endNow(why);
+}
+
 let petWin = null;
 let chatWin = null;
 let didSummarize = false;
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * ★★★ 【停止】—— 一个真正能停的停止选项（2026-10-10，主人的原话："给个停止的选项"）★★★
+ *
+ * 【以前为什么停不住 ✗】
+ *   唯一的停止开关是聊天框里的 STOP_RE：★整条消息必须恰好是一个"停"字✗★，
+ *   而且它靠**聊天消息**触发 ✓ —— 焦点不在聊天框时（她在跑任务、主人在看游戏 ✓）
+ *   按什么键都没用 ✗。主人今天的原话就是"按停没反应" ✓。
+ *
+ * 【现在两条路，共用一个"代际"闸门 ✓】
+ *   ① 界面上一个可见的「⏹ 停止」按钮（renderer/chat.js ✓，复用已有的 `taskGen` 代际号 ✓）；
+ *   ② ★全局快捷键★（Electron `globalShortcut` ✓，**任何窗口焦点下都能停** ✓）。
+ *   两条路都走 main 这边的 `requestStop()` ✓：它做四件事（顺序有意义 ✗→✓）：
+ *     ① `stopGen++` = ★停止代数★ —— 相当于 DSH 的 abortSignal ✓；
+ *     ② `stopped = true` → ★`assistant:run` 直接拒掉★ ✓ ——
+ *        就算 renderer 那一代漏判了，**主进程也不会再执行任何动作** ✓（双保险 ✓）；
+ *     ③ 把 `task:stop` 发给两个窗口 → renderer 端 `taskGen++` + `LOOP.finish('interrupted')` ✓；
+ *     ④ ★落盘★：往会话日志写一条 `interrupted` ✓（照 DSH 把停止原因写进 turn/end ✓），
+ *        带上"是谁停的"（via ✓）—— 事后 grep 才分得清按钮/快捷键/聊天喊停 ✓。
+ *
+ * 【`stopped` 什么时候解除 ✗→✓】
+ *   ★下一次**主人主动说话**（chat:send）时解除 ✓★ ——
+ *   这与 DSH"每轮从 abortSignal 重新出发"是同一个意思 ✓；
+ *   而聊天里那句"停"本身**不解除**（它要先停住 ✓，见 chat:send 里的判定 ✓）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+let stopGen = 0;
+const stopState = { stopped: false, at: 0, via: '', count: 0, hotkey: '' };
+
+/* ★这是"停"的唯一入口★（按钮 / 快捷键 / 聊天里的"停"都调它 ✓） */
+function requestStop(via) {
+  stopGen++;
+  stopState.stopped = true;
+  stopState.at = Date.now();
+  stopState.via = String(via || '停止选项').slice(0, 24);
+  stopState.count++;
+  try { dbg('[stop] #' + stopState.count + ' 停止请求：' + stopState.via + '（gen=' + stopGen + '）'); } catch (e) {}
+  /* ① 落盘：会话日志里一条 interrupted（不带 steps/lookStreak —— renderer 那边会另外记一条带步数的 ✓） */
+  try { require('./src/stoplog').noteStop({ stopReason: 'interrupted', via: stopState.via, ok: false }); } catch (e) {}
+  /* ② 通知两个窗口（谁在跑都得停 ✓） */
+  for (const w of [chatWin, petWin]) {
+    try { if (w && !w.isDestroyed()) w.webContents.send('task:stop', { via: stopState.via, gen: stopGen, at: stopState.at }); } catch (e) {}
+  }
+  /* ③ 立即可见的反馈：她要是在跑任务，聊天框多半是**最小化**的（见 assistant:run 的"任务期隐藏"✓），
+        所以再给桌宠发一个气泡 ✓ —— 不然主人按了停、屏幕上什么都没发生 ✓（那正是他今天最火的地方 ✗）。 */
+  try {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send('pet:say', {
+        en: 'Stopped. I will not do anything else.',
+        zh: '⏹ 已停止（' + stopState.via + '）—— 接下来一个动作都不会再执行 ✓',
+        silent: true,
+      });
+    }
+  } catch (e) {}
+  /* ★2026-10-10：被停止 = 循环不会再推进 ✓ → 任务期立刻收尾、把对话窗还回来 ✓
+     （主人按了停，就该看见窗口和状态 ✓ —— 这也让"停止"这条路的闭环更完整 ✓） */
+  endTaskPeriodNow('已停止(' + stopState.via + ')');
+  return stopSnapshot();
+}
+function stopSnapshot() {
+  return { stopped: stopState.stopped, gen: stopGen, at: stopState.at, via: stopState.via, count: stopState.count, hotkey: stopState.hotkey };
+}
 
 /* ---------------- 自动埋点（测试用，见 src/testlog.js） ----------------
  * 给每个模块的导出函数套一层，自动记录 模块/函数/耗时/参数摘要/结果摘要/错误。
@@ -95,8 +247,15 @@ const loadPosition = () => {
   if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
   try {
     const wa = screen.getPrimaryDisplay().workAreaSize;   // 不含任务栏
-    const x = Math.max(0, Math.min(wa.width - 80, Math.round(p.x)));
-    const y = Math.max(0, Math.min(wa.height - 60, Math.round(p.y)));
+    /* ★★★ 2026-10-10 修一个真 bug ✗→✓（★lead 的修复，必须保留 ✗★）★★★
+       原来：`min(wa.width - 80, x)` / `min(wa.height - 60, y)` ✗ ——
+       ★只保证**左上角**在屏幕内 ✗，**没把窗口自身尺寸算进去** ✓。
+       后果（实测 ✓）：屏幕宽 1536 ✓ → 夹取上限 1456 ✓ → 而立绘宽 475 ✓ →
+       ★1456 + 475 = 1931 > 1536 ✗ → 窗口有约 400px 在屏幕右边之外 ✗ → 用户**完全看不到她** ✓✓。
+       修法：夹取时把窗口尺寸一起减掉 ✓（此时尺寸还不知道 → 用保守最大 500x300 ✓）。 */
+    const PET_MAX_W = 500, PET_MAX_H = 300, MARGIN = 20;
+    const x = Math.max(0, Math.min(Math.max(0, wa.width - PET_MAX_W - MARGIN), Math.round(p.x)));
+    const y = Math.max(0, Math.min(Math.max(0, wa.height - PET_MAX_H - MARGIN), Math.round(p.y)));
     if (x !== Math.round(p.x) || y !== Math.round(p.y)) {
       try { fs.writeFileSync(posFile(), JSON.stringify({ x, y })); } catch {}
       return { x, y, clampedFrom: { x: Math.round(p.x), y: Math.round(p.y) } };
@@ -362,8 +521,16 @@ function createPet() {
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   };
   if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-    opts.x = Math.min(Math.max(saved.x, -140), wa.width - 140);
-    opts.y = Math.min(Math.max(saved.y, 0), wa.height - 140);
+    /* ★★★ 2026-10-10 修第二个真 bug ✗→✓（★lead 的修复，必须保留 ✗★）★★★
+       原来：`max(saved.x,-140)` / `min(..., wa.width-140)` / `wa.height-140` ✗ ——
+       ★那三个 140 是**猜的边距** ✗，而窗口实际是 **380x460** ✗ → 数字对不上 ✓。
+       实测后果：屏幕 1536x864 → x 上限 1396 → 1396+380 = 1776 > 1536 ✗；
+                 y 上限 724 → 724+460 = 1184 > 864 ✗ → 右边藏 ~240px、下面藏 ~320px ✗
+       → ★用户完全看不到她★ ✓（表现为"点了桌宠没反应/打不开" ✓）。
+       修法：用**窗口自身的宽高**算边界 ✓，左右各留 20px 余量 ✓。 */
+    const W = opts.width, H = opts.height, M = 20;
+    opts.x = Math.max(-M, Math.min(saved.x, wa.width - W - M));
+    opts.y = Math.max(0, Math.min(saved.y, wa.height - H - M));
   }
   petWin = new BrowserWindow(opts);
   petWin.setAlwaysOnTop(true, 'screen-saver');
@@ -421,6 +588,10 @@ function logTurn(text, reply) {
 
 /* 把桌宠这边主动说的话同步到对话窗（不发声，只显示，保持记录完整） */
 function relayToChat(msg) {
+  /* ★2026-10-10：这条也算"她在推进"★ ✗→✓ —— 真机证据（debug.log 15:33）：她在
+     「立绘弹气泡 + 写总结」的 17 秒里被"15s 没有屏幕动作"掐断 ✗ —— 而她的气泡/步骤流水
+     **全都经过这里** ✓，所以这里打点是性价比最高的一处 ✓（不用改她的对话逻辑 ✓）。 */
+  markChatActivity('relay:' + String((msg && msg.who) || ''));
   if (!chatWin || chatWin.isDestroyed()) return;
   try { chatWin.webContents.send('chat:log', msg); } catch {}
 }
@@ -569,6 +740,15 @@ ipcMain.on('quit', () => app.quit());
 ipcMain.on('log:error', (_e, m) => dbg('[r] ' + String(m).slice(0, 500)));
 ipcMain.on('chat:open', () => createChat());
 ipcMain.on('chat:close', () => closeChatForReal());
+
+/* ★★★ 停止选项（2026-10-10）★：
+   renderer（界面上的「⏹ 停止」按钮）与"她在聊天里被喊停"两条路都发到这里 ✓；
+   全局快捷键在 main 里直接调 requestStop ✓（那条路**跨窗口**有效 ✓ —— 主人今天的痛点 ✓）。 */
+ipcMain.on('task:stop', (_e, payload) => {
+  const via = (payload && payload.via) || '停止按钮';
+  requestStop(via);
+});
+ipcMain.handle('task:stopState', () => stopSnapshot());
 
 /* ---------------- 本地语音识别（whisper.cpp，离线） ---------------- */
 ipcMain.handle('asr:status', () => asr.status(config.load().asrModel));
@@ -835,6 +1015,23 @@ ipcMain.handle('chat:send', async (e, payload) => {
   const cfg = config.load();
   const text = String(payload?.text || '').trim();
   if (!text) return { en: '', zh: '', words: [], choices: [] };
+  /* ★★ 停止状态的进出（2026-10-10）★★
+     · 聊天里那句「停」→ ★先真的停★（requestStop ✓，与界面按钮同一条路 ✓），
+       而且**不解除**停止状态 ✓（主人要的就是"停下" ✓，下一句才解除 ✓）；
+     · 其它任何主人消息 → 解除停止状态 ✓（= 新一轮开始，照 DSH"每轮从 abortSignal 重新出发"✓）。
+     ⚠️ 这里的停止词表与 renderer/chat.js 的 STOP_RE **必须一致** ✗→✓
+       （两处各判一次：renderer 判是为了"断掉在跑的任务链 ✓"，
+         main 判是为了"把主进程的闸门也关上 ✓" —— ★只改一处会出现"聊天里喊停停不住"✗★）。 */
+  const STOP_RE_MAIN = /^\s*(停|停下|停下来|停止|停手|住手|收手|打住|别做|别点了|别弄了|别动了|别搞了|取消|算了|不做了|stop|halt|ting|tíng)\s*[!！。.~、]*\s*$/i;
+  if (STOP_RE_MAIN.test(text)) {
+    requestStop('聊天里喊停');
+  } else if (stopState.stopped) {
+    stopState.stopped = false;
+    try { dbg('[stop] 主人新指令 → 解除停止状态（gen=' + stopGen + '）'); } catch (err) {}
+  }
+  /* ★2026-10-10：主人说话 = 任务在推进 ✓（这条也是"她不会因为想事情/被打断而被误判结束"的一部分 ✓） */
+  markChatActive(true);
+  markChatActivity('主人消息');
   /* 真用户消息到达 → 重置「重复调用」计数（照 DSH dsh-repeat-tool-reminder 的做法：
      主人插话代表环境变了，之前的重复计数不该继续累加）。 */
   try { require('./src/assistant').__repeatReset(); } catch {}
@@ -880,6 +1077,14 @@ ipcMain.handle('chat:send', async (e, payload) => {
     relayToChat({ who: 'me', text });
     if (reply.en) relayToChat({ who: 'pet', en: reply.en, zh: reply.zh, words: reply.words, choices: reply.choices });
   }
+  /* ★★★ 2026-10-10：★"循环还在跑吗"的准确信号★ ✗→✓
+     有 ACTION → 接下来是多步任务（循环在跑 ✓，任务期不能判结束 ✓）；
+     没有 ACTION → 这一轮到此为止（循环结束 ✓）→ 允许"任务期结束"把对话窗还回来 ✓。
+     ★为什么用这个信号✗★：主进程看不到 renderer 里的 loop；而"有没有下一步动作"正是那个 loop
+     唯一的续跑条件 ✓（chat.js 里 `if (next.action)` ✓）→ 它等价于"循环没结束" ✓。 */
+  chatTaskActive = !!(reply && reply.action);   // 镜像（下面 markChatActive 会同步给 TASKPERIOD ✓）
+  markChatActive(!!(reply && reply.action));
+  markChatActivity(chatTaskActive ? '回复(有下一步动作)' : '回复(收尾)');
   return reply;
 });
 
@@ -1089,6 +1294,10 @@ ipcMain.handle('tts:voices', () => ({
 ipcMain.handle('tts:speak', async (e, payload) => {
   const cfg = config.load();
   const p = payload || {};
+  /* ★2026-10-10：★她开口朗读 = 任务在推进★ ✗→✓ ——
+     真机 bug 的现场正是"她在说话（气泡 + tts）的 17 秒里被判定任务结束"✗；
+     所以朗读这条也必须算"在推进" ✓（日志里那行 `[tts] speak` 就是证据 ✓）。 */
+  markChatActivity('她开口朗读');
   if (cfg.ttsEnabled === false && !p.force) return { ok: false, error: '朗读已关闭' };
   // 回声排查：同一句话如果两个窗口都来要语音，日志里会看到两条 from= 不同的记录
   try { dbg('[tts] speak from=' + (isFromChat(e) ? 'chat' : 'pet') + ' len=' + String(p.text || '').length); } catch {}
@@ -1424,8 +1633,17 @@ ipcMain.handle('stats:task', (_e, o) => {
   const reason = String((o && o.stopReason) || '');
   /* ⚠️ testlog.log 的签名是**三个位置参数** log(mod, ev, data) ——
      第一版我写成了 log({mod,ev,...})（一个对象），落盘成了 {"mod":"[object Object]","ev":"undefined"} 的垃圾条目，
-     是去读日志文件才发现的（§C 那条 "看不到" 就是它）。 */
-  if (reason) { try { testlog.log('loop', 'stop', { reason, ok }); } catch {} }
+     是去读日志文件才发现的（§C 那条 "看不到" 就是它）。
+     ★2026-10-10：写盘这件事收进 src/stoplog.js★ —— 除了 testlog，还写进**会话日志**
+     （memory/session.json 的只追加事件流，照 DSH 的 turn/end），这样 grep 会话日志就能查到
+     "每一轮是怎么停的"；顺带把 steps/lookStreak 一起记下来，方便回头验 A/B/C 三条修好没有。 */
+  if (reason) { try { require('./src/stoplog').noteStop(Object.assign({}, o, { ok, stopReason: reason })); } catch {} }
+  /* ★★★ 2026-10-10：★循环结束了 → 任务期立刻收尾、把对话窗还回来★ ✗→✓
+     为什么这里是最好的收尾点✗：renderer 的 reportTask() 是**循环真正结束**的唯一出口 ✓
+     （无论 completed / step-budget / look-streak / interrupted ✓ 都会走到这里 ✓），
+     主进程在这里能拿到**显式的停止原因** ✓ → 恢复窗口这件事就有了确定的依据 ✓
+     （而不是靠"15 秒没动静"去猜 ✗ —— 那正是把她掐断的那个 bug ✓）。 */
+  if (reason) endTaskPeriodNow('循环结束(' + reason + ')');
   const out = [];
   if (ok) {
     out.push(stats.nudge('iq', 0.3, 'task-ok', '独立办成了一件事'));
@@ -1514,6 +1732,19 @@ ipcMain.handle('art:reset', () => {
 ipcMain.handle('assistant:run', async (_e, a) => {
   const tier = config.load().assistant || 'off';
   if (!assistant.allowed(tier, a && a.tool)) throw new Error('当前 AI 助手权限不允许该操作');
+  /* ★★★ 停止闸门（2026-10-10）：主人按了停 → ★一个动作都不许执行★ ✓★★★
+     为什么要在主进程再拦一道 ✗：renderer 那边靠 `taskGen` 代际号拦 ✓（正常路径够用 ✓），
+     但那是**同一个进程里的约定** ✗ —— 万一某一代漏判（异步回来晚了 / 事件没到 ✓），
+     点击就已经发出去了 ✗。主进程这一道是**最后一道门** ✓：
+     停止之后，`assistant:run` 只回一句话，绝不调 assistant.run ✓。 */
+  if (stopState.stopped) {
+    try { dbg('[stop] 拦下一个动作：' + (a && a.tool) + '（主人已按停止 ✓）'); } catch (e) {}
+    return {
+      ok: false, stopped: true,
+      result: '⏹ 主人已经按了停止 —— 这个动作我没有执行 ✓，后面的动作也一律不执行 ✓。'
+        + '★现在什么都不用做★：等他再说一句话（那会自动解除停止 ✓）。',
+    };
+  }
   /* 点/拖/滚之前：如果目标点正被**我们自己的窗口**盖着，先把它让开一会儿。
      为什么必需 —— 用户报"她点不了开始游戏的按钮"：桌宠窗是 alwaysOnTop，
      而 mouse_event 的点击只会落到**最上面那个窗口**，于是她怎么点都点在桌宠窗上。
@@ -1526,9 +1757,38 @@ ipcMain.handle('assistant:run', async (_e, a) => {
   const LOOK_TOOLS = ['screen_look', 'screen_shot', 'watch_screen'];   // watch_screen 也要让开：实测它拍到的全是盖在游戏上的聊天窗
   let petHiddenForLook = false;
 /* ★ 任务期隐藏对话窗的状态（用户要求"做任务时全程最小化"）★
-   见下面 runTool 里 SCREEN_TOOLS 那段的注释。 */
-let chatTaskHidden = false;
-let chatTaskHideTimer = null;
+   见下面 runTool 里 SCREEN_TOOLS 那段的注释。
+
+   ★★ 2026-10-10 真机 bug 修复：★"任务期结束"判早了★ ✗→✓
+   现场（debug.log 原文，15:33 那次"依次点职业列 9 格"）：
+     15:33:12 左右最后一次工具结束 → 她开始**思考 + 说话**（立绘气泡 15:33:13~26 共 8 条）
+     → 15:33:27.016 `任务期结束（15s 没有屏幕动作）→ 恢复对话窗` ✗ → ★剩下 5 格再没点★ ✓
+   ★根因（读代码得到的，不是猜）★：
+     ① 计时的重置点只有**工具结束**（下面 finally 里那段 ✓）——
+        ★她"想 + 说话"的时间不算动作★ ✗ → 思考越久越容易被掐 ✓；
+     ② 计时器是**上一次工具结束时**装的 ✓ —— 如果下一次工具跑得比剩余时间久，
+        它会在**动作进行中**到点 ✗（真机这次也是这个形状 ✓）；
+     ③ 这条"任务期结束"**不写会话日志** ✗ → 事后查不到"任务期为什么结束了" ✓。
+   ★修法（四条一起上，缺一条都还会漏）★：
+     ① ★"在推进"的证据变宽★：任何工具调用（不只屏幕工具 ✓）、她刚发过言（tts / 气泡 / 聊天消息 ✓）、
+        以及 ★循环还没给出停止原因（chatTaskActive ✓）★ 都算 ✓ → 一律重置计时 ✓；
+     ② ★默认窗口 15s → 60s★（可配 chatRestoreIdleMs ✓）；
+     ③ ★工具正在执行时绝不判"空闲"★（chatToolInFlight ✓）—— 到点时**再按当下的事实判一次** ✓；
+     ④ ★兜底不误伤★：任务在跑但整整 chatTaskStuckMs（默认 300s）毫无活动 → 只**记一条日志**✓，
+        ★仍然不恢复对话窗✗★（宁可多等她，也不要在她干活时把窗弹出来 ✓）；只有循环已结束/被停止才真的恢复 ✓；
+     ⑤ ★结束时留原因✗→✓★：真空闲恢复时写一条 stoplog（reason `idle-restore` ✓，
+        同时登记进 loop.REASONS 与 stoplog.KNOWN ✓）—— 以前这条**没有**任何 stop 事件 ✗。 */
+  /* ★★★ 这里的"任务期状态 + 判定"**已经搬走了**✗→✓ ★★★
+     它们现在在**模块顶部**（搜 `任务期状态 + 判定（模块级）`）✓ —— 为什么必须搬 ✗：
+       · 这些 `let`/`function` 原来（包括旧代码的 `chatTaskHidden`）写在这个 handler **里面** ✗
+         → ★每次调用都是新的一份状态 ✗★，而 `requestStop` / `stats:task` / `chat:send`
+         （都是**模块级**的）又必须用它们 ✓ → ★`ReferenceError: endTaskPeriodNow is not defined` ✗★。
+       · ★真机铁证（这一条是我自己引入的 bug，2026-10-10 15:57）★：
+         `[stop] 主人新指令 → 解除停止状态（gen=2）` 打了 ✓（说明 chat:send 进来了 ✓），
+         紧跟着那行 `[chat] send from=chat len=` **再也没出现过** ✗ ——
+         ★她从此"听不见主人说话"✗（每句话都在这里抛异常，模型根本没被叫）★，
+         表现就是"她不动了" ✓（比惰性超时严重得多 ✗）。
+     这里只剩**使用**（下面几处 `chatTaskHidden = true;` / `markToolStart(...)` 等 ✓）。 */
   if (LOOK_TOOLS.includes(String(a && a.tool)) && petWin && !petWin.isDestroyed() && petWin.isVisible()) {
     try { petWin.hide(); petHiddenForLook = true; markPetHidden('look'); await new Promise((r2) => setTimeout(r2, 350)); } catch {}
   }
@@ -1568,8 +1828,13 @@ let chatTaskHideTimer = null;
      这样她做整个任务的过程中，屏幕上都不会出现她自己的对话窗。
      她想跟主人说话时本来就会走"立绘弹气泡"那条路（见 [pet] 对话窗不可见 → 立绘弹气泡）。 */
   if (chatWasVisible) {
-    chatTaskHidden = true;
-    if (chatTaskHideTimer) { clearTimeout(chatTaskHideTimer); chatTaskHideTimer = null; }
+    chatTaskHidden = true;   // 镜像（真判定在 TASKPERIOD 里 ✓；onRestore 会把它置回 false ✓）
+    /* ★进入任务期 + 立刻装表★（不是"等工具结束时"才第一次装 ✗）——
+       原来第一次装表是在下面 finally 里 ✓（那之后每次也都是"结束时装" ✗）→
+       下一次工具跑得比剩余时间久，就会在**动作进行中**被判"空闲"✗（真机这次就是）→
+       现在：进入就打点/装表 ✓，"有工具在跑"这件事由 TASKPERIOD 的 inFlight 挡住 ✓。 */
+    TASKPERIOD.enter('屏幕工具(' + String(a && a.tool || '') + ')');
+    markChatActivity('屏幕工具开始(' + String(a && a.tool || '') + ')');
   }
   let r;
   /* ★★ 步骤流水（用户要求：任务显示像 DSH 那样）★★
@@ -1593,13 +1858,28 @@ let chatTaskHideTimer = null;
     chatlog.add(sessionId(), { who: 'step', id: stepId, status: 'running', tool: stepTool, arg: stepArg, at: Date.now() });
   }
   try {
+    /* ★★★ 2026-10-10：★"有工具正在跑"要挡住"空闲判定"★ ✗→✓ ★★★
+       真机 bug 的形状：计时器是上一次工具结束时装的 ✓ → 下一次工具（click 要等光标到达+settle、
+       screen_diff 要抓两帧 ✓）跑得比剩余时间久 → 在**动作进行中**被判"任务期结束"✗。
+       所以：进来 ++、出去 -- ✓，并且**进出都算一次"在推进"** ✓（markChatActivity ✓）。 */
+    markToolStart(stepTool);   // ★计数 + 打点都在这里（别再手动 ++ ✗ —— 那会数两遍 ✓）★
     r = await assistant.run(a.tool, a.arg);
   } finally {
+    markToolEnd(stepTool);
     /* ★ 步骤流水的收尾（和上面的 wantStep/stepId 对应）★ */
     if (wantStep) {
       const ms = Date.now() - stepT0;
       const txt = (typeof r === 'string') ? r : (r && (r.text || ''));
-      const failed = /^(❌|⚠️|✗)/.test(String(txt).trim()) || /失败|错误|reason=|FAIL|被拦/.test(String(txt).slice(0, 120));
+      /* ★ 判"这一步失败了没有"—— 只看**开头**的失败标记 ✗→✓（2026-10-10 实测的误判）★
+         旧判据是：开头是 ❌/⚠️/✗ **或者** 前 120 字里出现「失败/错误/reason=/FAIL/被拦」✓
+         ★★ 后果：**把成功的视觉回答误判成失败**✗✓ ——
+           实测样本原话：`👁 视觉模型： …没有回到基建总览，也没有错误弹窗` ✓
+           ★ 它只是**内容里提到「错误」两个字**，而这一步是成功的 ✓ → 被记成 fail ✗
+           （统计里 16 条失败里有 4 条是这种误判 ✓，而且她那边会看到一个假 ⚠️ ）
+         ★ 新判据：★ 只认**开头**的标记 ✓ —— 这个项目里所有失败消息都是这么开头的 ✓
+           （❌ / ⚠️ / ✗ / ERR / Error ✓），内容里出现"错误"二字不再算失败 ✓ */
+      const _head = String(txt).trim();
+      const failed = /^(❌|⚠️|✗)/.test(_head) || /^(ERR|Error)\b/i.test(_head);
       let note = '';
       if (failed) note = String(txt).replace(/\s+/g, ' ').slice(0, 90);
       /* 结果里常带"已把窗口置到前台并通过回读校验"这种话，取第一句当备注更清楚 */
@@ -1608,19 +1888,11 @@ let chatTaskHideTimer = null;
       relayToChat({ who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note });
       chatlog.add(sessionId(), { who: 'step', id: stepId, status: failed ? 'fail' : 'ok', tool: stepTool, arg: stepArg, ms, note, at: Date.now() });
     }
-    /* ★ 不再"调用完就恢复" ★ —— 只重置空闲计时器；真的空闲下来了才恢复对话窗。 */
-    if (chatTaskHidden) {
-      if (chatTaskHideTimer) clearTimeout(chatTaskHideTimer);
-      const idleMs = Number((config.load().memory || {}).chatRestoreIdleMs) || 15000;
-      chatTaskHideTimer = setTimeout(() => {
-        chatTaskHidden = false;
-        chatTaskHideTimer = null;
-        try {
-          if (chatWin && !chatWin.isDestroyed()) { chatWin.showInactive(); chatWin.setAlwaysOnTop(false); }
-          dbg('[pet] 任务期结束（' + Math.round(idleMs / 1000) + 's 没有屏幕动作）→ 恢复对话窗');
-        } catch {}
-      }, idleMs);
-    }
+    /* ★ 不再"调用完就恢复" ★ —— 工具结束只是"又推进了一次" ✓（markToolEnd 上面已经打了 ✓）；
+       真的空闲下来了才恢复对话窗 ✓，而"空闲"的判定在 src/taskperiod.js ✓：
+         ① 任务还在跑（循环没给停止原因 ✓）→ 永不恢复 ✓；
+         ② 还有工具在跑 → 永不恢复 ✓；
+         ③ 连续 chatRestoreIdleMs（默认 60s）没有任何推进（发言/朗读/工具/主人说话 ✓）→ 才恢复 ✓。 */
     if (yielded && yielded.length) setTimeout(() => restoreOwnWindows(yielded), 350);
     if (petHiddenForLook) setTimeout(() => { try { if (petWin && !petWin.isDestroyed()) petWin.show(); } catch {} }, 500);
   }
@@ -1730,6 +2002,12 @@ Add "ACTION: <tool>|<argument>" as the LAST line only if you still need to do so
 /* 多步任务：执行完一步后，把结果喂回模型，让它决定下一步或收尾 */
 ipcMain.handle('chat:continue', async (e, _payload) => {
   const cfg = config.load();
+  /* ★停止闸门（2026-10-10）：已经停了就**不再花 token 问下一步** ✓
+     回一句"已停止"就够（她会看到这句话但**没有 ACTION** ✓ → 循环收尾 ✓，
+     而停止原因早被 renderer 冻结成 interrupted ✓，不会被改写成 completed ✗）。 */
+  if (stopState.stopped) {
+    return { en: 'Stopped.', zh: '⏹ 已停止 ✓', words: [], choices: [], stopped: true, action: null };
+  }
   const messages = [
     { role: 'system', content: buildContinuePrompt(cfg) },
     ...memory.pickHistory(),
@@ -1757,6 +2035,12 @@ ipcMain.handle('chat:continue', async (e, _payload) => {
   /* 但对话窗**最小化/隐藏**时，用户屏幕上什么都看不到（只能听到声音）。
      这时把同一条回复用气泡推到立绘上 —— 这就是"做任务时立绘也要弹气泡"。 */
   bubbleOnPetIfChatHidden(reply);
+  /* ★★★ 2026-10-10：续跑这条就是"循环还在跑"的证据本身 ★★★
+     走到这里说明 loop 又问了下一步 ✓ → ★任务在推进 ✓，绝不能因为"没屏幕动作"判结束 ✗★；
+     而有没有 ACTION 决定循环是否继续 ✓（与 chat:send 同一套信号 ✓）。 */
+  chatTaskActive = !!(reply && reply.action);   // 镜像（markChatActive 会同步给 TASKPERIOD ✓）
+  markChatActive(!!(reply && reply.action));
+  markChatActivity(chatTaskActive ? '续跑(有下一步动作)' : '续跑(收尾)');
   return reply;
 });
 
@@ -1807,12 +2091,31 @@ ipcMain.on('pet:action', (_e, action) => {
 });
 
 /* ---------------- 生命周期 ---------------- */
-const gotLock = app.requestSingleInstanceLock();
+/* ★★ 2026-10-10：单实例锁的"开发期跳过开关"（为"她起不起得来"留一个可验证的口子 ✓）★★
+   为什么要它：Electron 的单实例锁是**按 app 走的** ✓ —— 主人正跑着另一份（备份那份 ✓）时，
+   从仓库再启动一个**会被踢掉** ✓：gotLock=false → app.quit() ✓ → ★连 debug.log 都不会有 ✗★
+   （dbg 只在 whenReady 里跑 ✓）→ "她起不来"和"被锁踢掉"长得一模一样 ✗。
+   设 `PET_SKIP_LOCK=1` 就跳过锁、单纯验证这份代码能不能启动 ✓（★只给开发/验证用 ✓★）。
+   ★注意：这不是恢复热重载 ✗ —— 下面两行 fs.watch 仍然保持关闭 ✓★。 */
+const gotLock = (process.env.PET_SKIP_LOCK === '1') ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  /* ★★★ 2026-10-11 修第三个真 bug ✗→✓（主人复现："又打开不了了"）★★★
+     ★ 原来只做 `petWin.show(); petWin.focus();` ✗ —— 而**立绘窗一旦被销毁**（主人关掉立绘 ✓），
+       这两句**全都不执行** ✓ → ★双击快捷方式**什么都不发生** ✗✓。
+     ★ 更糟的是 ✗：隐藏的**截图窗**（`src/screenstream.js` 里那个 640x360 的 capture 窗 ✓）
+       **一直活着** ✓ → 上面那句 `app.on('window-all-closed', () => app.quit())` ★永不触发**✗✓
+       → ★进程**永不退出**✗ → ★**单实例锁被永久占着**✗ → 主人**再也开不了她** ✓✓
+       （★ 2026-10-11 实测复现 ✓：pid 29104 活着、只有隐藏窗口、`second-instance` 空转 ✓）
+     ★★ 修法 ✓：第二个实例发现"立绘窗没了"就**把她重新建出来** ✓ ——
+       ★ 这样**双击快捷方式永远等于"叫她回来"** ✓，而不是静默退出 ✓✓
+     ★ 注 ✓：`createPet()` 本来就是启动路径里的同一函数 ✓，重复调用是安全的 ✓
+       （★ 它内部会重新 `loadPosition()` 并夹进屏幕 ✓，所以重建后**一定落在屏幕内** ✓）。 */
   app.on('second-instance', () => {
-    if (petWin && !petWin.isDestroyed()) { petWin.show(); petWin.focus(); }
+    if (petWin && !petWin.isDestroyed()) { petWin.show(); petWin.focus(); return; }
+    try { createPet(); } catch (e) { dbg('[second-instance] 重建立绘窗失败: ' + (e && e.message)); }
+    try { if (typeof createChat === 'function' && (!chatWin || chatWin.isDestroyed())) createChat(); } catch {}
   });
 
   app.whenReady().then(() => {
@@ -1821,6 +2124,47 @@ if (!gotLock) {
       cb(permission === 'media');
     });
     mood.startupDecay();
+    /* ★★★ 全局快捷键：任何窗口焦点下都能停（2026-10-10）★★★
+       主人的原话是"给个停止的选项" ✗ → 而今天"按停没反应"的真正原因是
+       ★焦点不在聊天框★ ✓（她跑任务时聊天框还被**全程最小化**着 ✓，见 assistant:run ✓）
+       → 所以必须有一个**跨窗口**的开关 ✓。Ctrl+Alt+S ✓：
+         · 不占常用键（Ctrl+S 是保存 ✗、Alt+Tab 是切窗 ✗、Windows 键是系统 ✗）；
+         · 与"停"字那句聊天指令同一条路（都进 requestStop ✓）。
+       ⚠️ 注册可能失败（被别的软件抢先 ✓）—— ★真机实测就是这样✗★：
+          本机 `Control+Alt+S` **注册不上**（被别的程序占着 ✓，单独开一个干净 Electron 进程试也失败 ✓），
+          而 `Control+Alt+X` 能注册 ✓ → ★所以这里按候选表**依次试**，并且把**真正注册上的那个**记到
+          `stopState.hotkey` ✓（界面会照它显示 ✓ —— 绝不显示一个按了没反应的键 ✗）。
+          全都注册不上时：hotkey 留空 ✓，如实记日志 ✓，界面按钮仍然可用 ✓（按钮那条路不依赖它 ✓）。 */
+    try {
+      const conf = config.load() || {};
+      /* ★★★ 真机 bug（2026-10-10）：★"生效的键每次启动都可能不一样"✗★
+         现场：15:26:52 那次进程注册的是 `Control+Alt+Shift+S` ✓；15:27:36 换成 `Control+Alt+X` ✓ ——
+         ★主人两次按键都按的是 Ctrl+Alt+X ✗ → 落在前一个窗口期里 → 按了没反应 ✓★。
+         ★而"到底哪个键是活的"他只可能在界面上看到（悬浮提示 ✓）——这不该靠猜 ✗。
+         修法：★把注册成功的键**记进 config** ✓，下次启动**先试它** ✓ →
+         只要那台占用者没变，键就一直不变 ✓（稳定 = 可预期 = 按得中 ✓）。
+         ⚠️ 也如实说明一条 ✗：真机实验证明"注入的按键**触发不了** Electron globalShortcut"✓
+         （三种注入方式都试过 ✓，见 app/scripts/probe-hotkey.js 的输出 ✓）→
+         ★"这个键真的能停"只能用**真人按一次**来验 ✓，本代码不做假声明 ✓★。 */
+      const defs = ['Control+Alt+S', 'Control+Alt+X', 'Control+Alt+Shift+S', 'Control+Alt+Shift+X'];
+      const saved = String(conf.stopHotkey || '').trim();
+      const cands = saved && defs.indexOf(saved) < 0 ? [saved].concat(defs) : (saved ? [saved].concat(defs.filter((k) => k !== saved)) : defs);
+      stopState.hotkey = '';
+      for (const hk of cands) {
+        let reg = false;
+        try { reg = globalShortcut.register(hk, () => { requestStop('快捷键 ' + hk); }); } catch (e) { reg = false; }
+        if (reg) {
+          stopState.hotkey = hk;
+          const isReg = globalShortcut.isRegistered(hk);
+          dbg('[stop] 全局停止快捷键已注册：' + hk + '（isRegistered=' + isReg + '）'
+            + (saved === hk ? '（沿用上次记住的那个 ✓ 键不会变 ✓）' : '（并把生效的键记住 ✓）'));
+          if (saved !== hk) { try { config.save({ stopHotkey: hk }); } catch (e) {} }
+          break;
+        }
+        dbg('[stop] ⚠️ 这个键注册不上（多半被别的软件占用 ✓）：' + hk);
+      }
+      if (!stopState.hotkey) dbg('[stop] ⚠️ 全局停止快捷键一个都没注册上 ✗ —— 界面上的「⏹ 停止」按钮仍然可用 ✓');
+    } catch (e) { dbg('[stop] 全局快捷键注册异常：' + (e && e.message)); }
     /* 基线和"离线多久"都应该**立刻**算，不能放进下面那个 9 秒的 setTimeout：
        ensureBaseline 在首次运行（stats.json 还没有 inited）时会按人设**重置**成基线，
        如果拖到 9 秒后才跑，这 9 秒里已经累积的偏移会被一起抹掉
@@ -1914,6 +2258,10 @@ try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, db
       memory.judgeStatsNow().then((r) => { if (r) dbg('[stats] catch-up judged: ' + r.reason); }).catch(() => {});
     }, 9000);
     createPet();
+    /* ★ 预热常驻感知服务（2026-10-31 性能优化）★
+       OCR 从「每次 spawn PowerShell ~0.76s」改成「常驻 PaddleOCR 进程 ~0.3s」；
+       后台起服务（模型加载 ~3s），失败/没装都不影响启动，调用时还会自动兜底回旧路径。 */
+    setTimeout(() => { try { require('./src/perceptSvc').ensure().catch(() => {}); } catch (e) {} }, 2500);
     // 预热屏幕流：首帧更快。不想让系统一直显示"正在捕获"就把 memory.screenWarm 设 false
     if ((config.load().memory || {}).screenWarm !== false) screenstream.warm().catch(() => {});
     // 启动几秒后，默默把攒够权重的经验归档进技能文件夹（AI 自己整理）
@@ -1930,6 +2278,9 @@ try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, db
   });
 
   app.on('before-quit', (e) => {
+    /* ★先摘掉全局快捷键★（照 Electron 的要求：不用了要 unregister ✓，
+       不然热重载几次之后 Ctrl+Alt+S 会被"上一个自己"占着 ✗ —— 那会变成"按停没反应"✓） */
+    try { globalShortcut.unregisterAll(); } catch (err) {}
     /* 不管这次退出是不是要走"会话收尾"，都先把修饰键松开 ——
        她要是正按着 ctrl+c 的中途被退出，卡键会留给用户一整天。 */
     try { input.releaseAll(); } catch {}
@@ -1952,8 +2303,13 @@ try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, db
     const reloadAll = deb(() => { BrowserWindow.getAllWindows().forEach((w) => { try { w.webContents.reload(); } catch {} }); });
     const relaunch = deb(() => { try { app.relaunch(); } catch {} app.exit(0); });
     try { fs.watch(path.join(__dirname, 'renderer'), { recursive: true }, reloadAll); } catch {}
-    try { fs.watch(path.join(__dirname, 'src'), { recursive: true }, relaunch); } catch {}
-    try { fs.watch(__dirname, (_ev, f) => { if (f === 'main.js' || f === 'preload.js' || f === 'persona.json') relaunch(); }); } catch {}
+    // ★★★ 2026-10-10 ★**下面两行保持关闭 ✗ 不要恢复**★（lead 的诊断修复 ✓）★★★
+    // 它们会 app.relaunch() + app.exit(0)（绕过 before-quit）→ ★任何往 app/ 写文件的操作
+    // （打补丁 / npm install / git checkout）都会触发她自己重启 ✓ → 表现为
+    // 「启动后 0.2 秒静默退出、exit code = 0」✗（今晚主人被这个折磨过 ✓）。
+    // 开发期要生效：手动重启她即可 ✓（要恢复就把下面两行的注释去掉 ✓）。
+    // try { fs.watch(path.join(__dirname, 'src'), { recursive: true }, relaunch); } catch {}
+    // try { fs.watch(__dirname, (_ev, f) => { if (f === 'main.js' || f === 'preload.js' || f === 'persona.json') relaunch(); }); } catch {}
   }
 }
 
@@ -1963,6 +2319,9 @@ try { require('./src/intercom').install({ chatWin: () => chatWin, createChat, db
  * 正常运行时这些导出没有任何副作用。 */
 module.exports = {
   petWinForTest: () => petWin,
+  /* ★停止：给探针/测试用★（probe-stop.js 直接调真的 requestStop ✓，不走 IPC ✓） */
+  requestStopForTest: (via) => requestStop(via),
+  stopStateForTest: () => stopSnapshot(),
   markPetHiddenForTest: (w) => markPetHidden(w),
   setPetHideStickyForTest: (v) => { petHideSticky = !!v; },
   buildSystemPrompt, buildContinuePrompt, genReply, logTurn, createChat, createPet, bubbleOnPetIfChatHidden, yieldOwnWindowsAt, restoreOwnWindows, loadPosition, savePosition, posFile,

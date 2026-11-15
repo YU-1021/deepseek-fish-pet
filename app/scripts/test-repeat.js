@@ -101,6 +101,21 @@ console.log('=== repeat.js 单元测试（纯 Node）===');
   ok(last.count === 12 && last.block === false, '§8 blockAt:0 时永远不阻止（纯 DSH 语义）', JSON.stringify(last).slice(0, 60));
 }
 
+/* ★★ §9 2026-10-11 真机事故断言（lead 要求 ✓ 不许只拦不给路 ✓）★★
+   现场：同一点被拦 8 次、她只会继续点 → 原地打转 ✗。这两条断言把"拦了要给出路 + 连续被拒要停"钉死 ✓。 */
+{
+  const c = R.create({ blockAt: 3 });
+  let last = null;
+  for (let i = 0; i < 5; i++) last = c.note('click', { x: 1868, y: 203 }, { panel: 'face' });
+  ok(last.block === true, '§9 达到 blockAt 后会拦住 ✓', 'block=' + last.block);
+  ok(typeof last.suggestion === 'string' && last.suggestion.length > 40 && /下一步具体动作/.test(last.suggestion),
+    '§9 ★拒绝必须带可执行出路 suggestion（不是只说"换个办法"✗）★', 'suggestion=' + String(last.suggestion).slice(0, 30) + '…');
+  ok(/face/.test(last.suggestion), '§9 suggestion 要提到当前面板（本屏是 face ✓）', String(last.suggestion).slice(0, 24) + '…');
+  ok(last.stop === true && last.consecBlock >= 2,
+    '§9 ★连续被拒 2 次 → 必须 stop（由程序结束这一步并上报 ✓）★', 'stop=' + last.stop + ' consec=' + last.consecBlock);
+  ok(/上报/.test(last.advice), '§9 停止时要说清"如实上报卡在哪一屏 + 试过什么" ✓', String(last.advice).slice(-24));
+}
+
 console.log('');
 console.log('通过 ' + pass + ' / ' + (pass + fail));
 process.exit(fail ? 1 : 0);

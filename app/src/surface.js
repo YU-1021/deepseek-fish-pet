@@ -73,6 +73,11 @@ function create(opts) {
         continue;
       }
       if (e.kind === 'prune') continue;      // prune 事件本身不进投影（它是元数据）
+      /* ★其它**元数据事件**也不进投影★（stoplog 写的 kind:'stop' = "这一轮为什么停"）：
+         它是**给我们查的真相**，不是模型该看到的对话 —— 进了投影就会多出一条没有 role 的空消息 ✗。
+         ⚠️ 只跳过登记过的元数据 kind；不要写成 `kind !== 'msg'` 一刀切 ✗
+            （'tool' 事件是模型真的要看的工具结果 ✓，test-surface.js §2 就是靠它的）。 */
+      if (e.kind === 'stop' || e.kind === 'turn-end') continue;
       out.push({ role: e.role, content: e.content, seq: e.seq, tool: e.tool, sourceSeqs: [e.seq] });
     }
     return out;

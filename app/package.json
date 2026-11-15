@@ -13,6 +13,7 @@
     "jimp": "^1.6.1"
   },
   "dependencies": {
+    "@cool-mcp/desktop-automation": "^1.0.9",
     "playwright": "^1.63.0"
   },
   "build": {

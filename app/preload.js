@@ -104,6 +104,13 @@ contextBridge.exposeInMainWorld('petAPI', {
   styleEnsure: (force) => ipcRenderer.invoke('style:ensure', force),
   projWrite: (files) => ipcRenderer.invoke('proj:write', files),
   statsTask: (o) => ipcRenderer.invoke('stats:task', o),
+  /* ★★★ 停止选项（2026-10-10）★★★
+     · taskStop：界面上的「⏹ 停止」按钮 → 主进程（`requestStop` ✓ 与全局快捷键同一条路 ✓）；
+     · onTaskStop：主进程 → 渲染层（快捷键/聊天喊停时也要让**在跑的那一代**立刻失效 ✓）；
+     · taskStopState：查"现在是不是已经停了、快捷键是什么"（界面要如实显示 ✓）。 */
+  taskStop: (via) => ipcRenderer.send('task:stop', { via: via || '停止按钮' }),
+  onTaskStop: (cb) => ipcRenderer.on('task:stop', (_e, d) => cb(d)),
+  taskStopState: () => ipcRenderer.invoke('task:stopState'),
   statsGet: () => ipcRenderer.invoke('stats:get'),
   projOpen: (rel) => ipcRenderer.invoke('proj:open', rel),
   projOpenFolder: (rel) => ipcRenderer.invoke('proj:openFolder', rel),

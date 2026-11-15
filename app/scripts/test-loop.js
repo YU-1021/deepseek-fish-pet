@@ -15,9 +15,20 @@ console.log('=== loop.js 单元测试（纯 Node）===');
 
 /* §1 停止原因是显式的联合类型（不是"循环结束"这种糊话） */
 {
-  ok(Array.isArray(L.REASONS) && L.REASONS.length === 7, '§1 七个停止原因都登记在册', L.REASONS.join('/'));
+  /* ★ 2026-10-10：7 → 8★ —— 加了 `interrupted`（★外部强制中断：界面「停止」按钮 / 全局快捷键★）。
+     为什么不是并进 `aborted`✗：主人要的是"点一下就停"✓，那条路与"她在聊天里被喊停"（aborted ✓）
+     是**两条不同的路** ✓；DSH 的联合类型里这两个也确实是两个值 ✓
+     （`aborted` 带 abortSignal.reason ✓、`interrupted` 是外部中断 ✓）→ 分开记，事后 grep 分得清 ✓。
+     这条断言就是那个"冻结表"，改了它必须是有意的 ✓。 */
+  ok(Array.isArray(L.REASONS) && L.REASONS.length === 9, '§1 九个停止原因都登记在册', L.REASONS.join('/'));
   ok(L.REASONS.indexOf('completed') >= 0 && L.REASONS.indexOf('step-budget') >= 0 && L.REASONS.indexOf('look-streak') >= 0,
     '§1 含 completed / step-budget / look-streak');
+  ok(L.REASONS.indexOf('interrupted') >= 0 && L.REASONS.indexOf('aborted') >= 0,
+    '★§1 含 interrupted（外部停止）与 aborted（她自己/聊天喊停）—— 两者分家 ✓');
+  /* ★ 2026-10-10：8 → 9★ —— 加了 `idle-restore`（★任务**期**结束：真的空闲了才恢复对话窗★）。
+     真机 bug：她「想 + 说话」的 17 秒被"15s 没有屏幕动作"误判成任务结束 ✗ → 剩下 5 格没点 ✓；
+     而这条以前**根本不记**✗（session.json 查不到 ✓）→ 现在登记 + 落盘 ✓。 */
+  ok(L.REASONS.indexOf('idle-restore') >= 0, '★§1 含 idle-restore（任务期结束 —— 空闲恢复，不是循环结束 ✓）★');
 }
 
 /* §2 正常走若干步 + 正常收尾 */
@@ -137,6 +148,41 @@ console.log('=== loop.js 单元测试（纯 Node）===');
   c2.start();
   const r = c2.beforeStep({ tool: 'click' });
   ok(r.kind === 'continue', '§11 新任务用新预算（每次任务都重新 create/start）');
+}
+
+/* §12 ★外部停止（界面按钮 / 全局快捷键）的语义★
+   主人要的是"点一下就停" ✓，所以这里断言三件事：
+     ① `finish('interrupted')` 得到 interrupted ✓（不是 aborted ✗、不是 completed ✗）；
+     ② ★停止原因一旦确定就冻结★ ✓ —— 之后无论谁再 finish('completed')/finish('aborted')，
+        拿到的都还是 interrupted ✓（renderer 的停止处理器就是靠这条：先冻结，再让在跑的那一代回来 ✓）；
+     ③ 文案里必须明确"不会再执行任何动作" ✓（主人今天的火就是"按了停没反应"✗）。 */
+{
+  const c = L.create({ stepBudget: 9, lookStreakMax: 9, lookOnlyTools: LOOKS });
+  c.start();
+  const r = c.finish('interrupted', { via: '停止按钮' });
+  ok(r.kind === 'stop' && r.reason === 'interrupted', '★§12 finish(interrupted) → interrupted★', r.reason);
+  ok(r.message.indexOf('停止') >= 0 && r.message.indexOf('不会再执行') >= 0,
+    '★§12 文案说清了"不会再执行任何动作"★', r.message.slice(0, 60));
+  const after = c.finish('completed');
+  ok(after.reason === 'interrupted', '★★§12 停止原因**冻结**：之后 finish(completed) 也翻不回来★★', after.reason);
+  const after2 = c.abort('主人又说了句停');
+  ok(after2.reason === 'interrupted', '★§12 finish(aborted) 同样翻不回来 ✓', after2.reason);
+  const b = c.beforeStep({ tool: 'click' });
+  ok(b.kind === 'stop' && b.reason === 'interrupted' && b.alreadyStopped === true,
+    '★★§12 停止之后再问"能不能走一步" → 一律停（这就是"一个动作都不许执行"的程序保证）★★');
+}
+
+/* §13 ★任务期结束（idle-restore）★ —— 它**不是**循环的停止原因，但必须能给出人话 ✓
+   真机 bug 的教训：这条以前连记录都没有 ✗ → 事后只能靠"15s 没有屏幕动作"这句话猜 ✗。
+   现在：① 它登记在册 ✓ ② 文案必须点明"这不一定是任务做完了" ✓（同音歧义会害人 ✓）。 */
+{
+  const c = L.create({ stepBudget: 9, lookStreakMax: 9, lookOnlyTools: LOOKS });
+  c.start();
+  const m = c.messageFor('idle-restore', { via: '空闲 61s 没有任何推进' });
+  ok(typeof m === 'string' && m.length > 20, '★§13 idle-restore 有解释文案★', m.slice(0, 50));
+  ok(m.indexOf('任务期结束') >= 0 && m.indexOf('空闲') >= 0, '§13 文案说清了"任务期结束 + 空闲"');
+  ok(m.indexOf('还没做完') >= 0 || m.indexOf('上一条真正的停止原因') >= 0,
+    '★§13 文案明确提醒"被空闲掐掉 ≠ 任务做完了"（防误读 ✓）★');
 }
 
 console.log('');

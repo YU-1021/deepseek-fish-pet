@@ -1,0 +1,17 @@
+{
+  "name": "dayu-pet-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "大肥鱼桌宠 · petd 架构重构（阶段1 骨架）。旧 Electron 应用仍在 app/，双跑中。",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "petd": "pnpm --filter petd start",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.1"
+  }
+}

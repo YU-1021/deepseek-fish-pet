@@ -151,12 +151,47 @@ function run(action, args) {
  *   注：动作失败时这条预期落点会失效，但检测里有 3 秒窗口 + 40px 半径，不会长期误判。 */
 function mark(x, y) { try { userinput.notePetMoveModel(x, y); } catch {} }
 
-function click(x, y) { const p = norm(x, y); mark(x, y); return run('click', p); }
-function rclick(x, y) { const p = norm(x, y); mark(x, y); return run('rclick', p); }
-function dclick(x, y) { const p = norm(x, y); mark(x, y); return run('dclick', p); }
-function move(x, y) { const p = norm(x, y); mark(x, y); return run('move', p); }
-function drag(x1, y1, x2, y2) { const p = norm(x1, y1).concat(norm(x2, y2)); mark(x2, y2); return run('drag', p); }
-function scroll(x, y, delta) { const p = norm(x, y); mark(x, y); return run('scroll', p.concat([String(delta == null ? 120 : delta)])); }
+/* ★★ 坐标来源证明闸门（2026-10-11 主人要求：默认必须有定位来源）★★
+ *
+ * 为什么放在**这一层** ✗→✓：这里是**所有**键鼠动作的唯一出口 ——
+ *   click/rclick/dclick/move 走 safedrive ✓，而 drag/scroll（以及 assistant 里
+ *   find_template_scroll 的内部滚动）是**直接调本模块**的 ✓；
+ *   只在一处把关，就不会出现"某条路没人管"✗（这正是"坐标很多都是错的"的另一半来源：
+ *   模型直接写 click|x,y / drag|x,y|x,y / scroll|x,y ✓）。
+ *
+ * 规则：坐标必须来自**本次会话已登记的定位 offer**
+ *   （uia_find / find_text / find_template / find_owned / click_checked / grid_count / icon_lib / locate ✓，
+ *   且只认**已换算成她坐标空间**的那一种 —— 图片像素不算 ✓）。
+ * 没有登记 → 抛 ❌（reason='no-provenance'）✓ —— 上层那条链会把它记成失败 ✓。
+ *
+ * ★逃生门★：`{ requireOffer:false, why:'<用途>' }` —— `why` 必填、放行会**记日志**
+ *   （谁/什么时候/用途 ✓）；只给探针/开发/诊断用，**不写进她读得到的工具表** ✗
+ *   （否则模型会学会绕 ✓）。
+ */
+let _lastBypass = null;
+function assertProvenance(action, x, y, opt) {
+  const o = opt || {};
+  let g;
+  try {
+    g = require('./prov').instance.gate(action, x, y, { requireOffer: o.requireOffer, why: o.why });
+  } catch (e) {
+    return;                       // 账本本身出问题 → 不拦（绝不让记账影响键鼠 ✓）
+  }
+  if (!g || g.ok) { if (g && g.bypass) _lastBypass = { action: action, x: x, y: y, why: g.bypass, at: Date.now() }; return; }
+  const err = new Error('❌ ' + g.reason + '\n' + (g.hint || '') + ' [' + (g.code || 'no-provenance') + ']');
+  err.blocked = true; err.reason = g.code || 'no-provenance'; err.hint = g.hint || ''; err.detail = g;
+  throw err;
+}
+/* 最近一次"逃生门放行"记录（回执里要写出来 ✓；读一次就清空，避免张冠李戴 ✓） */
+function takeBypass() { const b = _lastBypass; _lastBypass = null; return b; }
+
+/* 动作函数：最后一个参数是**可选**的 {requireOffer, why} ✓（不传就是默认严格 ✓） */
+function click(x, y, opt) { assertProvenance('click', x, y, opt); const p = norm(x, y); mark(x, y); return run('click', p); }
+function rclick(x, y, opt) { assertProvenance('rclick', x, y, opt); const p = norm(x, y); mark(x, y); return run('rclick', p); }
+function dclick(x, y, opt) { assertProvenance('dclick', x, y, opt); const p = norm(x, y); mark(x, y); return run('dclick', p); }
+function move(x, y, opt) { assertProvenance('move', x, y, opt); const p = norm(x, y); mark(x, y); return run('move', p); }
+function drag(x1, y1, x2, y2, opt) { assertProvenance('drag', x1, y1, opt); const p = norm(x1, y1).concat(norm(x2, y2)); mark(x2, y2); return run('drag', p); }
+function scroll(x, y, delta, opt) { assertProvenance('scroll', x, y, opt); const p = norm(x, y); mark(x, y); return run('scroll', p.concat([String(delta == null ? 120 : delta)])); }
 function type(text) { return run('type', [String(text)]); }
 
 /* 键名白名单（和 vendor/input/Input.cs 的 Vk() 保持一致）。
@@ -235,4 +270,4 @@ function releaseAll() {
   try { return run('releaseall', []); } catch { return false; }
 }
 
-module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, procStatus, procErrors, KEY_NAMES, space };
+module.exports = { click, rclick, dclick, move, drag, scroll, type, key, W, H, exePath, norm, releaseAll, validateKey, procStatus, procErrors, KEY_NAMES, space, assertProvenance, takeBypass };

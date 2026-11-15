@@ -274,6 +274,22 @@ function pickShown(cands) {
 
 /* 列窗口。坐标已是物理像素（PS 声明了 DPI 感知）；同时把 DPI 报出来便于核对。 */
 async function listWindows() {
+  /* ★ 2026-10-31：优先走常驻原生 winserve.exe（实测 666ms → ~5ms）★ */
+  try {
+    const WS = require('./winserve');
+    const r = await WS.list();
+    if (r && r.ok && Array.isArray(r.windows)) {
+      const fg = r.fg || {};
+      return {
+        windows: r.windows,
+        foregroundTitle: fg.title || '',
+        foregroundHwnd: Number(fg.hwnd) || 0,
+        dpi: r.dpi || 0,
+        dpiOk: r.dpiOk !== false,
+        source: 'winserve',
+      };
+    }
+  } catch (e) {}
   const { out, err } = await runPs('', 'list');
   const rows = [];
   let dpi = 0, dpiOk = null;
@@ -320,6 +336,11 @@ async function listWindows() {
 
 /* 当前前台窗口 */
 async function foreground() {
+  try {
+    const WS = require('./winserve');
+    const r = await WS.list();
+    if (r && r.ok && r.fg) return { title: r.fg.title || '', hwnd: Number(r.fg.hwnd) || 0, source: 'winserve' };
+  } catch (e) {}
   const { out } = await runPs('', 'fg');
   const m = out.match(/^FG (.*?)\s*hwnd=(-?\d+)/);
   return m ? { title: m[1], hwnd: Number(m[2]) } : { title: out.trim(), hwnd: 0 };
@@ -370,6 +391,11 @@ async function focusWindowEx(title) {
 
 /* 光标真值（物理像素，PS 已声明 DPI 感知）—— 动作的效果断言要用它回读 */
 async function cursorPos() {
+  try {
+    const WS = require('./winserve');
+    const r = await WS.cursor();
+    if (r && r.ok) return { x: Number(r.x) || 0, y: Number(r.y) || 0, source: 'winserve' };
+  } catch (e) {}
   const { out } = await runPs('', 'cursor');
   const m = out.match(/^CURSOR\s+(-?\d+)\s*,\s*(-?\d+)/m);
   return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
@@ -379,6 +405,12 @@ async function cursorPos() {
 async function windowRect(title) {
   const want = String(title || '').trim();
   if (!want) return null;
+  try {
+    const lw = await listWindows();
+    const lwant = want.toLowerCase();
+    const hit = (lw.windows || []).find((w) => String(w.title || '').toLowerCase().indexOf(lwant) >= 0);
+    if (hit) return Object.assign({}, hit, { isForeground: lw.foregroundHwnd === hit.hwnd, source: lw.source || 'winserve' });
+  } catch (e) {}
   const { out } = await runPs(want, 'rect');
   const m = out.match(/^HIT (.*?)\s*hwnd=(\d+)\s*iconic=(\w+)\s*fg=(\w+)/);
   if (!m) return null;

@@ -1,0 +1,31 @@
+{
+  "name": "petd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "桌宠常驻网关（阶段 1 骨架）：WS 协议 + 方法注册 + 健康检查",
+  "main": "dist/index.js",
+  "bin": {
+    "petd": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "node --test \"dist/**/*.test.js\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@petd/protocol": "workspace:*",
+    "@sinclair/typebox": "^0.34.41",
+    "jpeg-js": "^0.4.4",
+    "koffi": "^3.3.8",
+    "opencc-js": "^1.4.2",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}
