@@ -20,19 +20,19 @@ const MEMORY_DEFAULTS = {
   skillAutoArchive: true,// 启动时自动把攒够权重的经验归档进技能
   projRunTimeout: 60000,  // 执行脚本的超时（毫秒），到点强制结束
   screenWarm: true,      // 启动时预热屏幕流（首帧更快；不想让系统一直显示"正在捕获"就设 false）
-  historyTokens: 3000,   // 历史按 token 预算保留（省 token：老回合本来就会压缩成 EN: 一行，砍短体感无损）
-  fullTurns: 3,          // 最近几轮助手回复保留完整格式（格式锚）
-  toolResultChars: 250,  // AI 助手执行结果入库时的截断长度（太长会把真实对话挤出历史）
+  historyTokens: 12000,   // 历史按 token 预算保留（省 token：老回合本来就会压缩成 EN: 一行，砍短体感无损）
+  fullTurns: 8,          // 最近几轮助手回复保留完整格式（格式锚）
+  toolResultChars: 600,  // AI 助手执行结果入库时的截断长度（太长会把真实对话挤出历史）
   inject: {              // 每轮注入上下文的数量/长度
     /* ⚠️ totalChars 是 context.build() 读的**总字符预算**（三块加起来的上限）。
        它以前没写在这里 —— 代码里 `Number(inj.totalChars) || 2400` 会一直落到 2400，
        等于这个旋钮是死的、agent.json 里配了也不生效。测试时发现的。 */
-    totalChars: 2400,
-    permanentFacts: 20,
-    longDays: 3,
-    mediumCount: 4,
-    longChars: 200,
-    mediumChars: 200,
+    totalChars: 7000,
+    permanentFacts: 40,
+    longDays: 7,
+    mediumCount: 8,
+    longChars: 320,
+    mediumChars: 320,
   },
 };
 
@@ -100,6 +100,11 @@ const DEFAULTS = {
   screenCaptureWidth: 1920,
   screenCaptureHeight: 1080,
   screenJpegQuality: 0.92,
+  /* ★ 整屏看图也走无损 PNG ✗→✓（2026-10-10）★
+     代价是每次抓帧 ~650ms（流抓帧只要 ~50ms）✓。
+     ★ 为什么值得★：整屏看到的字最需要清晰 ✓，而 JPEG 的噪点正好吃掉小字边缘 ✗。
+     设成 false 就换回快的 JPEG 流 ✓。 */
+  screenLosslessScreen: true,
   visionDetail: 'high',           // low | high —— high 才能看清小字和图标细节
   /* 多步任务的步数预算（由 IQ 在 base~max 之间插值，见 stats.stepBudget）。
      原来是写死的 3/4/6/8/10 档位，实测太低 —— IQ 54 只有 6 步，

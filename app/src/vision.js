@@ -65,7 +65,18 @@ async function describe(cfg, imageDataUrl, question, detail) {
     throw llm.net.wrapHttpErr(res.status, body);
   }
   const json = await res.json().catch((e) => { throw llm.net.wrapNetErr(e, ms, base); });
-  return json?.choices?.[0]?.message?.content || '';
+  /* ★ 所有视觉回答统一带来源标签 ✗→✓（2026-10-10 主人的要求）★
+     主人原话：「视觉模型太拉了，让她能知道是哪个视觉工具运作，更好知道是哪个工具错了」
+     ★ 为什么在**这一层**加✗★：`screen_look` / `tile_read` / `strip_read` /
+       `icon_pick` / `grid_scan` / `som_look` ★全都走这里** ✗ ——
+       一处加上 ✓，★ 任何一条回答就都能追到「这是视觉模型说的」 ✓
+       （而 OCR 会说「OCR 实际读到的文字」✓、模板会说「相似度」✓、
+        UIA 会说 uia-hwnd ✓ —— ★那几个本来就带来源 ✓★）
+     ★★ 注意 ✗：标签只说明来源 ✓，★**不**代表它可信 ✗★ ——
+       实测它给的位置会漂（同一处问四次给四种答案 ✓）。
+       ★ 所以拿去点东西前，必须用**另一个来源**复核 ✓★（见规程「铁律 4」✓）。 */
+  const _c = json?.choices?.[0]?.message?.content || '';
+  return _c ? ('[视觉模型·看图] ' + _c) : '';
 }
 
 module.exports = { describe };

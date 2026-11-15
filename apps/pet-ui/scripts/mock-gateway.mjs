@@ -1,0 +1,118 @@
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+
+const port = Number(process.argv[2] ?? 8765);
+const moodEnabled = process.env.MOCK_MOOD_ENABLED !== 'false';
+const clients = new Set();
+let sequence = 0;
+const mood = { mood: 70, affection: 30, energy: 80, pokes: 0, updatedAt: Date.now(), tiers: { mood: '心情不错', affection: '逐渐熟悉', energy: '正常' } };
+const moodHistory = [];
+
+function frame(payload, opcode = 1) {
+  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  let header;
+  if (body.length < 126) {
+    header = Buffer.from([0x80 | opcode, body.length]);
+  } else if (body.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode; header[1] = 126; header.writeUInt16BE(body.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode; header[1] = 127; header.writeBigUInt64BE(BigInt(body.length), 2);
+  }
+  return Buffer.concat([header, body]);
+}
+
+function consumeFrame(buffer) {
+  if (buffer.length < 2) return null;
+  const lengthCode = buffer[1] & 0x7f;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let headerLength = 2;
+  let length = lengthCode;
+  if (lengthCode === 126) {
+    if (buffer.length < 4) return null;
+    length = buffer.readUInt16BE(2); headerLength = 4;
+  } else if (lengthCode === 127) {
+    if (buffer.length < 10) return null;
+    const largeLength = buffer.readBigUInt64BE(2);
+    if (largeLength > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('mock WebSocket frame is too large');
+    length = Number(largeLength); headerLength = 10;
+  }
+  const maskLength = masked ? 4 : 0;
+  const end = headerLength + maskLength + length;
+  if (buffer.length < end) return null;
+  const payload = Buffer.from(buffer.subarray(headerLength + maskLength, end));
+  if (masked) {
+    const mask = buffer.subarray(headerLength, headerLength + 4);
+    for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+  }
+  return { opcode: buffer[0] & 0x0f, payload, remaining: buffer.subarray(end) };
+}
+
+function send(socket, value) {
+  if (!socket.destroyed) socket.write(frame(JSON.stringify(value)));
+}
+
+function publishMood(applied, source, reason) {
+  const event = { type: 'event', event: 'mood.changed', seq: ++sequence, ts: Date.now(), data: { state: { ...mood }, applied, source, reason } };
+  for (const socket of clients) send(socket, event);
+}
+
+function handleMessage(socket, message) {
+  const input = JSON.parse(message);
+  if (input.type === 'connect') {
+    send(socket, { type: 'hello', server: { name: 'petd', version: '0.1.0-mock', protocol: 1, pid: process.pid }, sessionId: 'mock-session' });
+    return;
+  }
+  if (input.type !== 'req') return;
+
+  let data = { pong: true };
+  if (input.method === 'health.status') {
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate'] };
+  } else if (input.method === 'config.get') {
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 } };
+  } else if (input.method === 'mood.status') {
+    data = { enabled: moodEnabled, state: { ...mood } };
+  } else if (input.method === 'mood.history') {
+    data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
+  } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {
+    const deltas = input.method === 'mood.poke' ? { mood: 1, affection: 0.5 } : input.method === 'mood.evaluate' ? { mood: 1, affection: 1 } : input.params ?? {};
+    const applied = [];
+    for (const key of ['mood', 'affection', 'energy']) {
+      if (typeof deltas[key] !== 'number' || deltas[key] === 0) continue;
+      const from = mood[key]; mood[key] = Math.max(0, Math.min(100, mood[key] + deltas[key]));
+      const entry = { ts: Date.now(), key, from, to: mood[key], delta: mood[key] - from, reason: input.params?.reason ?? 'mock interaction', source: input.method === 'mood.poke' ? 'poke' : input.method === 'mood.evaluate' ? 'llm' : 'user' };
+      applied.push(entry); moodHistory.unshift(entry);
+    }
+    if (input.method === 'mood.poke') mood.pokes += 1;
+    mood.updatedAt = Date.now();
+    const source = input.method === 'mood.poke' ? 'poke' : input.method === 'mood.evaluate' ? 'llm' : 'user';
+    publishMood(input.method === 'mood.poke' ? [] : applied, source, 'mock interaction');
+    data = input.method === 'mood.poke' ? { ...mood } : { state: { mood: mood.mood, affection: mood.affection, energy: mood.energy }, applied };
+  }
+  send(socket, { type: 'res', id: input.id, ok: true, data });
+}
+
+const server = createServer();
+server.on('upgrade', (request, socket) => {
+  const key = request.headers['sec-websocket-key'];
+  if (typeof key !== 'string') { socket.destroy(); return; }
+  const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  clients.add(socket);
+  let buffered = Buffer.alloc(0);
+  socket.on('data', (chunk) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    try {
+      let next;
+      while ((next = consumeFrame(buffered))) {
+        buffered = next.remaining;
+        if (next.opcode === 8) { socket.end(frame(Buffer.alloc(0), 8)); return; }
+        if (next.opcode === 9) { socket.write(frame(next.payload, 10)); continue; }
+        if (next.opcode === 1) handleMessage(socket, next.payload.toString('utf8'));
+      }
+    } catch { socket.destroy(); }
+  });
+  socket.on('close', () => clients.delete(socket));
+});
+server.listen(port, '127.0.0.1', () => console.log(`Mock gateway listening on ws://127.0.0.1:${port}`));

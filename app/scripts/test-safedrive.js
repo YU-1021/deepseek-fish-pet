@@ -67,6 +67,39 @@ console.log('=== safedrive.js 单元测试（纯逻辑）===');
   ok(typeof p === 'function', '§3 内部判据已导出（可被测试覆盖）');
 }
 
-console.log('');
-console.log('通过 ' + pass + ' / ' + (pass + fail));
-process.exit(fail ? 1 : 0);
+/* §5 ★★ 2026-10-10 新语义：坐标空间守卫 + 到达轮询 ★★
+ *   背景（真机实测 probe-clickverify）：
+ *     · clickSafe 原来**无条件 ok=true**，回读到差 960px 也照写"✅ 已点击" ✗（假成功）
+ *     · PS 读一次光标要 561/575ms，而命令 14~51ms 就到了 —— 单次回读两个方向都会错 ✗
+ *   这一节把新语义冻住：没采到"光标在目标上"就不许 ok=true ✓ */
+{
+  /* 坐标空间守卫：越界坐标会被 input.norm 静默夹到边缘（= 点到别处） */
+  ok(SD.outsideSpace(100, 200).ok === true, '§5 正常范围内的坐标 → 放行');
+  ok(SD.outsideSpace(5000, 3000).ok === false, '§5 ★越界坐标 → 拦住（以前会被夹到屏幕边缘点下去）★');
+  ok(SD.outsideSpace(-50, 100).ok === false, '§5 负坐标 → 拦住');
+  ok(SD.outsideSpace(1920, 1080).ok === true, '§5 右下角边界本身 → 放行（边界不算越界）');
+  ok(SD.outsideSpace(NaN, 10).ok === false, '§5 非数字 → 拦住（宁可不点）');
+
+  const d1 = SD.cursorDelta({ x: 100, y: 200 }, { x: 104, y: 190 });
+  ok(d1.dx === 4 && d1.dy === 10, '§5 cursorDelta 报得对', JSON.stringify(d1));
+  ok(SD.cursorDelta({ x: 1, y: 1 }, null) === null, '§5 读不到光标 → null（不许假装 0 偏差）');
+
+  /* 轮询：注入假光标序列，确定性地覆盖"采到过就算到 / 一次没采到就失败" */
+  (async () => {
+    const seq = [{ x: 10, y: 10, src: 'fake' }, { x: 990, y: 10, src: 'fake' }, { x: 1000, y: 200, src: 'fake' }];
+    let i = 0;
+    const r1 = await SD.pollCursorArrival({ x: 1000, y: 200 }, { cursorFn: () => seq[Math.min(i++, seq.length - 1)], intervalMs: 1, budgetMs: 200 });
+    ok(r1.ok === true && r1.tries === 3, '§5 ★第三次才到位 → 采到过就算到位（这就是治"570ms 后单次回读误报"）★', 'tries=' + r1.tries);
+
+    const r2 = await SD.pollCursorArrival({ x: 1000, y: 200 }, { cursorFn: () => ({ x: 1120, y: 288, src: 'fake' }), intervalMs: 1, budgetMs: 60 });
+    ok(r2.ok === false, '§5 ★一次都没采到 → 不许说成功★', 'tries=' + r2.tries);
+    ok(r2.best && r2.best.dx === 120 && r2.best.dy === 88, '§5 失败要如实报出偏差', JSON.stringify(r2.best));
+
+    const r3 = await SD.pollCursorArrival({ x: 1000, y: 200 }, { cursorFn: () => ({ x: 1000, y: 200, src: 'fake' }) });
+    ok(r3.ok === true && r3.tries === 1 && r3.waitedMs === 0, '§5 第一次就到位 → 立即成功、不空等');
+
+    console.log('');
+    console.log('通过 ' + pass + ' / ' + (pass + fail));
+    process.exit(fail ? 1 : 0);
+  })();
+}

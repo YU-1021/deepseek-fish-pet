@@ -104,6 +104,21 @@ function push(...msgs) {
   return state;
 }
 
+/* ★记一条**元数据事件**（不是对话、不进投影）★（2026-10-11 恢复）
+   用途见 src/stoplog.js：把"这一轮为什么停"写进**会话日志**（照 DSH 把停止原因写进 turn/end）。
+   ★真机 bug★：stoplog 一直在调 `session.mark(...)`，而本文件**没有 mark**✗ ——
+   于是那半个功能被 try/catch 静默吞掉（真机查过：session.json 里没有对应事件 ✓）。
+   现在补上：只追加、带 at 时间戳、scheduleSave 落盘；形状必须带 kind，
+   否则 surface 会把它当成一条普通消息投影给模型 ✗。 */
+function mark(ev) {
+  ensure();
+  const e = Object.assign({ at: Date.now() }, ev || {});
+  if (!e.kind) return null;
+  const seq = surface.append(e);
+  scheduleSave();
+  return seq;
+}
+
 /* 剪枝：把太长的历史条目折叠成摘要节点（**追加一条替代事件**，原文仍在日志里）
    —— 照 DSH dsh-compaction-tool-result-pruner。返回剪了几条。 */
 function pruneLong(extra) {
@@ -132,4 +147,4 @@ function info() {
   };
 }
 
-module.exports = { restore, push, all, clear, info, saveNow, pruneLong, stats, NS };
+module.exports = { restore, push, all, clear, info, saveNow, pruneLong, stats, mark, NS };

@@ -46,7 +46,9 @@ function check(file) {
 
   /* ── JS：node --check（只查语法，不执行） ── */
   if (ext === '.js' || ext === '.mjs' || ext === '.cjs') {
-    const r = spawnSync(process.execPath, ['--check', f], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    /* ★ 2026-10-31 修复：Electron 里 process.execPath 是 electron.exe，直接 --check 会被当成启动 App 挂住（实测 30s 超时）；
+       子进程加 ELECTRON_RUN_AS_NODE=1 后就是纯 Node，~100ms。 */
+    const r = spawnSync(process.execPath, ['--check', f], { encoding: 'utf8', windowsHide: true, timeout: 30000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
     const outText = String(r.stderr || r.stdout || '').trim();
     return {
       ok: r.status === 0, kind: 'node --check', ms: Date.now() - t0, exit: r.status,

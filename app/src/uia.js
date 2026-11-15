@@ -119,7 +119,26 @@ function parse(out) {
   return r;
 }
 
+/* ★ 2026-10-31：优先走常驻 winserve.exe（原生 UIA，无 PowerShell 启动/装配开销）；
+   连不上/报错才回退旧的 PowerShell 路径 ✓ */
 function run(mode, windowTitle, needle, timeoutMs, hwnd) {
+  let WS = null;
+  try { WS = require('./winserve'); } catch (e) { WS = null; }
+  if (!WS || WS.disabled()) return runLegacy(mode, windowTitle, needle, timeoutMs, hwnd);
+  const wantNeedle = mode === 'find' ? String(needle == null ? '' : needle) : '';
+  return WS.uia(Number(hwnd) || 0, String(windowTitle == null ? '' : windowTitle), wantNeedle)
+    .then((r) => {
+      if (r && r.ok && r.window) {
+        return { window: r.window, elements: Array.isArray(r.elements) ? r.elements : [], count: Number(r.count) || 0, via: 'winserve' };
+      }
+      if (r && r.ok === false && r.notFound) {
+        return { window: null, elements: [], count: 0, notFound: true, via: 'winserve' };
+      }
+      return runLegacy(mode, windowTitle, needle, timeoutMs, hwnd);
+    })
+    .catch(() => runLegacy(mode, windowTitle, needle, timeoutMs, hwnd));
+}
+function runLegacy(mode, windowTitle, needle, timeoutMs, hwnd) {
   const script = buildScript(mode, windowTitle, needle, hwnd);
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
@@ -146,6 +165,9 @@ async function locateByHwnd(hwnd, needle) {
   const exact = r.elements.find((e) => e.name === needle || e.automationId === needle);
   const hit = exact || r.elements[0];
   if (!hit) return { ok: false, reason: 'element-not-found', window: r.window, count: r.count };
+  /* ★把这次定位记进账本★（2026-10-11）：safedrive 的"不许复点"闸门要求
+     复点必须有一次**上一次点击之后**重新定位出来的坐标 —— uia_find 就是最可靠的来源之一 ✓ */
+  try { require('./prov').instance.offer(hit.cx, hit.cy, 'uia_find', String(hit.name || needle || '')); } catch (e) {}
   return {
     ok: true, x: hit.cx, y: hit.cy, confidence: exact ? 0.98 : 0.85,
     how: 'uia-hwnd' + (exact ? '-exact' : '-loose'),
@@ -162,6 +184,8 @@ async function locate(windowTitle, needle, hwnd) {
   const exact = r.elements.find((e) => e.name === needle || e.automationId === needle);
   const hit = exact || r.elements[0];
   if (!hit) return { ok: false, reason: 'element-not-found', window: r.window, count: r.count };
+  /* ★同上：记进账本（复点的"新证据"来源之一 ✓）★ */
+  try { require('./prov').instance.offer(hit.cx, hit.cy, 'uia_find', String(hit.name || needle || '')); } catch (e) {}
   return {
     ok: true, x: hit.cx, y: hit.cy, confidence: exact ? 0.98 : 0.85,
     how: 'uia' + (exact ? '-exact' : '-loose'),

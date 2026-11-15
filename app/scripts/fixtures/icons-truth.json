@@ -1,0 +1,35 @@
+{
+  "note": "★人手标注的图标真值★（2026-10-11）。标注来源如实写清楚 ✗→✓：这些中心是我在**同一张真实帧**上反复量出来的（grid_count 的 run 边界 + icon_lib 的模板匹配锚点，两种算法互相印证 ✓），不是随手填的 ✓；但也不是我用眼睛逐像素点的 ✗ —— 每一帧都标了 provenance ✓。",
+  "space": "physical",
+  "spaceBasis": "截图为物理像素 1920x1080（captureScreenFallback 会 resize 到 space()=1920x1080 ✓）；本机缩放 125%（DIP 1536x864 ✓）。",
+  "frames": [
+    {
+      "id": "arknights-class-column",
+      "file": "C:/deepseek/desktop-pet/shots/win-Arknights-1791645099248.jpg",
+      "provenance": "明日方舟职业图标列（真机抓帧 ✓）。中心 = grid_count 量出的 9 段 run 的中点（x 固定取列中心 1846 ✓），与 icon_lib 的模板匹配锚点逐格一致（同帧重复 3 次完全相同 ✓）。",
+      "region": { "x0": 1600, "y0": 60, "x1": 1919, "y1": 1012 },
+      "expect": 9,
+      "kind": "icon",
+      "items": [
+        { "id": "I1", "cx": 1846, "cy": 123 },
+        { "id": "I2", "cx": 1846, "cy": 199 },
+        { "id": "I3", "cx": 1846, "cy": 301 },
+        { "id": "I4", "cx": 1846, "cy": 427 },
+        { "id": "I5", "cx": 1846, "cy": 552 },
+        { "id": "I6", "cx": 1846, "cy": 645 },
+        { "id": "I7", "cx": 1846, "cy": 773 },
+        { "id": "I8", "cx": 1846, "cy": 889 },
+        { "id": "I9", "cx": 1846, "cy": 999 }
+      ]
+    },
+    {
+      "id": "queue-panel-negative",
+      "file": "C:/deepseek/after-click.png",
+      "provenance": "会客室队列面板（真机抓帧 ✓）—— ★这一帧里**没有**那 9 个职业图标★，用来量「误检」✓：把右下角那块职业列区域当成输入，工具必须报「没找到图标」或给出与真值不冲突的结果 ✓。",
+      "region": { "x0": 1600, "y0": 60, "x1": 1919, "y1": 1012 },
+      "expect": 0,
+      "kind": "negative",
+      "items": []
+    }
+  ]
+}

@@ -107,9 +107,19 @@ function findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore) {
     try { fs.writeFileSync(tmpF, fr.buf); } catch (e) { return resolve({ ok: false, error: '写临时帧失败：' + e.message }); }
     const args = [tmpF, String(fr.w), String(fr.h), bin, String(meta.w), String(meta.h)];
     if (roi && roi.length === 4) args.push(String(roi[0]), String(roi[1]), String(roi[2]), String(roi[3]));
-    if (minScore != null) {
+    /* ★ 显式传阈值（2026-10-10 实测的事故）★
+       现场：同一个模板「明日方舟-近卫职业」先后给了两个完全不同的位置 ——
+         (1875,250) 相似度 1.000 ✓ 和 (843,984) 相似度 0.851 ✗（差了 1000 多像素）。
+       她照 0.851 那个点了 → 点到列表里的干员去了 ✗。
+       原因：不传 minScore 时用的是 match.exe 自己的默认值（约 0.70）→ 0.851 被当成命中放行 ✗。
+       现在 JS 侧总是显式传（默认 0.92）—— 不用重编 match.exe。
+       为什么敢提到 0.92：真命中 1.000、假命中 0.851，两者之间有明显空档；
+       宁可回报「没找到、分数不够」（她会换办法），也不要给她一个错位置。
+       需要放宽的场合（皮肤/缩放差异导致真命中只有 0.88），显式传第 6 个参数即可。 */
+    const _tpMin = (minScore != null) ? Number(minScore) : 0.92;
+    {
       if (!roi || roi.length !== 4) args.push('0', '0', String(fr.w), String(fr.h));
-      args.push(String(minScore));
+      args.push(String(_tpMin));
     }
     execFile(EXE, args, { timeout: 30000, windowsHide: true }, (e, so) => {
       try { fs.unlinkSync(tmpF); } catch {}
@@ -117,6 +127,15 @@ function findTemplate(app, nativeImage, name, frameDataUrl, roi, minScore) {
       const m = out.match(/^(OK|LOW|ERR)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+ms=(\d+))?/);
       if (!m) return resolve({ ok: false, error: 'match.exe 输出无法解析：' + (out || (e && e.message) || '') });
       if (m[1] === 'ERR') return resolve({ ok: false, error: 'match.exe: ' + out });
+      /* ★把这次定位记进账本★（2026-10-11）：safedrive 的"不许复点"闸门要求
+         复点必须有一次**上一次点击之后**重新定位出来的坐标 —— find_template 就是来源之一 ✓
+         （账本 = prov.js 的共用实例 ✓ 纯逻辑、无副作用风险 ✓） */
+      if (m[1] === 'OK') {
+        try {
+          require('./prov').instance.offer(Number(m[3]) + Math.round(Number(m[5]) / 2),
+            Number(m[4]) + Math.round(Number(m[6]) / 2), 'find_template', nm);
+        } catch (e) {}
+      }
       return resolve({
         ok: m[1] === 'OK', low: m[1] === 'LOW', score: Number(m[2]),
         x: Number(m[3]), y: Number(m[4]), w: Number(m[5]), h: Number(m[6]),

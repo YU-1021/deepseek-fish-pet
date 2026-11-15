@@ -99,6 +99,60 @@ async function captureScreenFallback() {
   return { path: p, width: _s2.w, height: _s2.h, dataUrl: 'data:image/png;base64,' + png.toString('base64') };
 }
 
+/* ★ P3：同帧抓帧复用 —— 先用便宜帧（屏幕流 JPEG，~50ms）当指纹；
+   命中就复用上次的 PNG 文件，跳过 ~650ms 的无损抓图。开关：PA_FRAME_CACHE=0 ★ */
+async function grabFrameCached() {
+  let FC = null;
+  try { FC = require('./framecache'); } catch (e) { FC = null; }
+  if (!FC || FC.disabled()) return captureScreenFallback();
+  let cheap = null;
+  try { cheap = await captureScreen(false, true); } catch (e) { cheap = null; }
+  const k = cheap && cheap.dataUrl ? FC.keyOfDataUrl(cheap.dataUrl) : null;
+  if (k) {
+    const hit = FC.get(k);
+    if (hit) { try { dbg('[cache] 同帧复用（省一次 PNG 抓图）hits=' + hit.hits); } catch (e) {} return { path: hit.path, dataUrl: hit.dataUrl, width: 0, height: 0 }; }
+  }
+  const full = await captureScreenFallback();
+  if (k) { try { FC.put(k, full.path, full.dataUrl); } catch (e) {} }
+  return full;
+}
+
+/* ★ 2026-10-31 自适应等待 ★
+   动作后固定等 actionSettleMs 是"猜界面反应时间"；其实可以直接看画面变没变：
+   先用便宜帧（~60-80ms）拍一张当基线，动作后每 ~120ms 拍一张比 hash，
+   变了就提前返回（典型 200~300ms），没变才等满预算（慢界面不牺牲安全）。
+   开关：config.json 里 memory.adaptiveSettle=false 可关。 */
+async function cheapFrameHash() {
+  try {
+    const cap = await captureScreen(false, true);
+    if (!cap || !cap.dataUrl) return null;
+    return require('./framecache').keyOfDataUrl(cap.dataUrl);
+  } catch (e) { return null; }
+}
+async function settleAdaptive(budgetMs, baseline, opts) {
+  const o = opts || {};
+  const budget = Math.max(150, Number(budgetMs) || 900);
+  const hashFn = typeof o.hashFn === 'function' ? o.hashFn : cheapFrameHash;
+  let enabled = o.force === true;
+  if (!enabled) {
+    try { enabled = (config.load().memory || {}).adaptiveSettle !== false; } catch (e) { enabled = true; }
+  }
+  if (!baseline || !enabled) {
+    await new Promise((r) => setTimeout(r, budget));
+    return { waitedMs: budget, changed: null, early: false };
+  }
+  const t0 = Date.now();
+  const interval = 120;
+  while (true) {
+    const left = budget - (Date.now() - t0);
+    if (left <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(interval, left)));
+    const h = await hashFn();
+    if (h && h !== baseline) return { waitedMs: Date.now() - t0, changed: true, early: true };
+  }
+  return { waitedMs: Date.now() - t0, changed: false, early: false };
+}
+
 /* OCR 的 JSON 模式：除了文字，还要每个词的包围盒 —— 这是 find_text 定位的依据。
  * Windows OCR 的 $result.Text 有个坑：CJK 会被它当"词"，于是在每个汉字之间插空格，
  * 而且**完全丢掉了位置**。所以定位必须走 ocr.ps1 -Json（Lines/ Words/ BoundingRect）。
@@ -114,7 +168,35 @@ async function captureScreenFallback() {
    而且"宽度不变只加高度"地原地反复试 —— 提示词提醒不够，必须程序拦 ✓ */
 const ZOOM_GUARD = { streak: 0, last: null };
 let lastOcrError = '';
+/* ★ 性能（2026-10-31）：OCR 优先走常驻感知服务（PaddleOCR 常驻，单次 ~0.3s
+    vs 旧实现每次 spawn PowerShell 的 ~0.76s，实测 2.5x）★
+   服务没起来 / 超时 / 返回失败 → 回退旧的 ocrJsonFallback，语义完全不变。
+   关闭开关：环境变量 PA_PERCEPT_DISABLE=1。 */
+function _ocrCachePut(k, p) {
+  if (!k || !p || typeof p.then !== 'function') return p;
+  return p.then((r) => { try { require('./ocrcache').put(k, r); } catch (e) {} return r; });
+}
 function ocrJson(pngPath) {
+  /* ★ P3：同图 OCR 结果缓存（图内容相同 → OCR 结果相同），命中直接 0ms ★ */
+  let _oc = null, _ocKey = null;
+  try { _oc = require('./ocrcache'); if (!_oc.disabled()) _ocKey = _oc.keyOfFile(pngPath); } catch (e) { _oc = null; }
+  if (_ocKey) {
+    const _hit = _oc.get(_ocKey);
+    if (_hit) { try { dbg('[cache] OCR 命中（省一次识别）hits=' + _hit.__cacheHits); } catch (e) {} return Promise.resolve(_hit); }
+  }
+  let svc = null;
+  try { svc = require('./perceptSvc'); } catch (e) { svc = null; }
+  if (!svc || svc.isDisabled()) return _ocrCachePut(_ocKey, ocrJsonFallback(pngPath));
+  return _ocrCachePut(_ocKey, svc.ocr(pngPath).then((r) => {
+    if (r && r.ok === true && Array.isArray(r.lines)) { lastOcrError = ''; return r; }
+    lastOcrError = '感知服务 OCR 失败：' + String((r && r.error) || '未知');
+    return ocrJsonFallback(pngPath);
+  }).catch((e) => {
+    lastOcrError = '感知服务异常：' + (e && e.message);
+    return ocrJsonFallback(pngPath);
+  }));
+}
+function ocrJsonFallback(pngPath) {
   return new Promise((resolve) => {
     const script = path.join(__dirname, '..', 'scripts', 'ocr.ps1');
     let child, done = false, out = '', err = '';
@@ -344,6 +426,167 @@ async function runInner(tool, arg) {
 
   if (tool.startsWith('web_')) return web.run(tool, arg);
 
+  /* ★★★ 2026-10-10：按窗口截图 + 数格子（按 DSH 的架构约定补的两件）★★★
+     ★为什么单独一个模块（src/desktopwin.js）✗★：它要 MCP 客户端 + jimp 解码 + 纯像素算法 ✓，
+     塞进 runInner 这个已经 2000 行的 if 链里只会更难维护 ✓。
+     这里只注入**依赖**（她的坐标空间 / 显示器信息 / 落图目录 ✓）——
+     ★同一份 desktopwin.js 因此能在**纯 Node 探针**里跑真机验证 ✓★
+     （app/scripts/probe-desktopwin.js ✓，不用开 Electron 窗口 ✓）。 */
+  /* ★ 2026-10-10：icon_lib 也挂在这条路上 ✓ —— 它要的依赖和 win_shot/grid_count 完全一样
+     （图片路径 / 窗口截图 / 落盘目录 ✓），而且★认图标=几何(grid_count)+模板库(iconlib)★ ✓
+     → 位置和名字都不经过模型 ✗✓（模型只给"名字那一串"这个外部知识 ✓）。 */
+  if (tool === 'win_shot' || tool === 'grid_count' || tool === 'icon_lib') {
+    const dw = require('./desktopwin');
+    dw.install({
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) {
+          const s = require('./input').space();
+          return { w: s.w, h: s.h, scaleFactor: 1 };
+        }
+      },
+      shotDir: () => {
+        try {
+          const { app } = require('electron');
+          return require('path').join(app.getPath('userData'), 'shots');
+        } catch (e) { return null; }
+      },
+    });
+    return await dw.run(tool, arg);
+  }
+
+  /* ★★★ 2026-10-11：icon_scan —— ★把屏幕上每个图标切出来、给每格中心（+可选逐格放大 OCR）★★★
+     主人原话：「切割屏幕上每个图标，输出每一个图标中心的坐标，图标里有文字再让 OCR 识别，精度要求非常高」。
+     两模式：A 规则排列（格距+相位+质心细化 ✓）/ B 不规则摆放（连通域 ✓）；自动选并说明依据 ✓。
+     ★坐标只由几何/像素算出✗★；OCR 只用来读文字 ✓（认得就给文本，读不出就说没读出 ✓ 绝不瞎编 ✓）。 */
+  if (tool === 'icon_scan') {
+    const IC = require('./iconcut');
+    IC.install({
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) { const s = require('./input').space(); return { w: s.w, h: s.h, scaleFactor: 1 }; }
+      },
+    });
+    const a = String(arg || '').split('|').map((s) => s.trim());
+    const target = a[0];
+    if (!target) return '❌ 用法：icon_scan|<图或进程名>|<x,y,w,h 可省>|<模式 auto|A|B 可省>|<期望格数 可省>|<ocr=1 逐格放大 OCR 可省>';
+    let imgPath = target, shot = null;
+    if (!/\.(png|jpe?g|bmp)$/i.test(target)) {
+      const DW = require('./desktopwin');
+      shot = await DW.shotWindow(target, {}).catch(() => null);   // 按进程截一张 ✓（遮挡时它自己会说明 ✓）
+    }
+    if (shot) imgPath = shot.path;
+    const kv = {};
+    for (const part of a) { const m = /^([A-Za-z_][\w]*)=(.*)$/.exec(part); if (m) kv[m[1].toLowerCase()] = m[2]; }
+    const opt = { mode: (kv.mode || 'auto'), expect: Number(kv.expect) || 0, dir: 'v' };
+    if (kv.region) { const p = kv.region.split(',').map(Number); if (p.length === 4) opt.region = { x0: p[0], y0: p[1], x1: p[0] + p[2], y1: p[1] + p[3] }; }
+    else if (a[1] && /^\d+,\d+,\d+,\d+$/.test(a[1])) { const p = a[1].split(',').map(Number); opt.region = { x0: p[0], y0: p[1], x1: p[0] + p[2], y1: p[1] + p[3] }; }
+    if (/^[aAbB]$/.test(a[2] || '')) opt.mode = a[2].toLowerCase();
+    if (Number(a[3]) > 0) opt.expect = Number(a[3]);
+    const r = await IC.scan(imgPath, opt);
+    const lines = [];
+    lines.push('🧩 icon_scan：' + r.imageSize.w + 'x' + r.imageSize.h + '，★' + r.count + ' 个图标★，模式=' + r.mode
+      + '（' + r.modeWhy.join('；') + '）');
+    lines.push('  ★坐标系★：space=' + r.space + '　依据：' + r.spaceBasis);
+    if (r.spacing) lines.push('  几何：格距 ' + r.spacing.toFixed(1) + 'px，残差 ' + (r.residual * 100).toFixed(1) + '%（★只用来描述排列，不是"精度承诺"✗★）');
+    const maxN = Number(kv.max) > 0 ? Number(kv.max) : 20;
+    const wantOcr = kv.ocr === '1';
+    let withText = 0;
+    for (const it of r.items.slice(0, maxN)) {
+      let text = '', conf = 0;
+      if (wantOcr) {
+        try {
+          /* ★逐格裁剪 + 放大 3 倍再 OCR ✗→✓★（整屏 OCR 对小字更差 ✓）—— 纯 jimp ✓ 不依赖 Electron ✓ */
+          const Jimp = require('jimp').Jimp;
+          const fs2 = require('fs');
+          const im = await Jimp.fromBuffer(fs2.readFileSync(imgPath));
+          const bx = Math.max(0, it.box.x), by = Math.max(0, it.box.y);
+          const bw = Math.max(4, Math.min(it.box.w, im.width - bx)), bh = Math.max(4, Math.min(it.box.h, im.height - by));
+          const crop = im.clone().crop({ x: bx, y: by, w: bw, h: bh });
+          crop.resize({ w: bw * 3, h: bh * 3 });
+          const tmp = require('path').join(require('os').tmpdir(), 'iconcell-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) + '.png');
+          fs2.writeFileSync(tmp, await crop.getBuffer('image/png'));
+          const j = await ocrJson(tmp);
+          text = String((j && j.text) || '').replace(/\s+/g, '');
+          conf = text.length >= 2 ? 0.6 : 0;   // ★置信度是**近似值**✗：Windows OCR 不返回逐词概率 ✓ → 只按"读出了几个字"给一个保守值 ✓ 并如实标注 ✓
+        } catch (e) {}
+      }
+      if (text) withText++;
+      lines.push('  ' + it.id + '　中心 ' + it.cx + ',' + it.cy + '　' + it.w + 'x' + it.h + '　source=' + it.source
+        + (wantOcr ? ('　text=' + (text ? '「' + text.slice(0, 24) + '」conf=' + conf + '（近似 ✓）' : '★没读出文字✗★')) : ''));
+    }
+    if (r.items.length > maxN) lines.push('  …（还有 ' + (r.items.length - maxN) + ' 个没列）');
+    if (wantOcr) lines.push('  ★逐格文字★：' + withText + '/' + Math.min(maxN, r.items.length) + ' 格读到文字（★读不出就是读不出✗，绝不瞎编 ✓✗★）');
+    lines.push('  ⚠️ 清单可排序、可重复（同一帧两次结果一致 ✓）；★要点击请用 locate → act（本工具只给清单 ✓）★');
+    return lines.join('\n');
+  }
+
+  /* ★★★ 2026-10-11：★按契约重做的三个接口（locate / act / zoom）★★★
+     主人的原话：「不是模型差，是我们写的视觉工具差」✓ —— 缺陷清单见 src/percept.js 头部 ✓。
+     · locate：唯一框，否则 ambiguous + 候选清单（含归属证据 ✓）；内部复用 OCR/模板/几何/图标库 ✓
+     · act   ：★只接受 locate 给的编号✗，不接受裸坐标✗★；自动跑 stateBefore/stateAfter ✓；
+               用 prov 账本做"坐标来源证明 + 同一目标最多点 2 次" ✓
+     · zoom  ：裁剪 + 放大（+可选编号）→ 交给视觉模型**只问描述/编号** ✓（"让模型看得清"的正路 ✓） */
+  if (tool === 'locate' || tool === 'act' || tool === 'zoom') {
+    const pe = require('./percept');
+    pe.install({
+      capture: async () => await captureScreenFallback(),
+      ocrJson: (p) => ocrJson(p),
+      /* 动作仍走**原来那几条路** ✓（click/rclick/dclick/move ✓）—— 不另写鼠标注入 ✗ */
+      act: async (kind, x, y) => {
+        const t = kind === 'right' ? 'rclick' : (kind === 'double' ? 'dclick' : (kind === 'move' ? 'move' : 'click'));
+        return await run(t, x + ',' + y);
+      },
+      /* 只把放大图交给视觉模型问**描述** ✓（不问坐标 ✓） */
+      vision: async (pngPath, question) => {
+        const b = require('fs').readFileSync(pngPath);
+        const dataUrl = 'data:image/png;base64,' + b.toString('base64');
+        const cfg2 = config.load();
+        return await vision.describe(cfg2, dataUrl, question, cfg2.visionDetail || 'high');
+      },
+      space: () => require('./input').space(),
+      display: () => {
+        try {
+          const { screen } = require('electron');
+          const d = screen.getPrimaryDisplay();
+          return { w: d.size.width, h: d.size.height, scaleFactor: d.scaleFactor || 1 };
+        } catch (e) { const s = require('./input').space(); return { w: s.w, h: s.h, scaleFactor: 1 }; }
+      },
+      shotDir: () => {
+        try { const { app } = require('electron'); return require('path').join(app.getPath('userData'), 'shots'); } catch (e) { return null; }
+      },
+      dbg: (m) => dbg('[' + tool + '] ' + m),
+    });
+    return await pe.run(tool, arg);
+  }
+
+  /* ★★★ 2026-10-10：点击的两道保险（find_owned / click_checked）★★★
+     为什么需要 ✗→✓：主人亲眼看到她点「编辑队列」时点到了**制造站1**的按钮 ✓，
+     然后因为"屏幕变了"就以为成功了 ✓，接着在一个根本不存在的"确认"按钮上反复找 ✓。
+     两道保险：① 点前用**几何**确认候选归属（★模型不许给坐标✗，只在几何无解时回答候选编号 ✓★）；
+              ② 点后必须核对**调用方事先声明的判据**（★"屏幕有变化"永远不算成功✗★）。
+     ★判据由调用方给 ✓（本层不猜"成功长什么样" ✗）。 */
+  if (tool === 'find_owned' || tool === 'click_checked' || tool === 'panel_state') {
+    const oc = require('./ownclick');
+    oc.install({
+      capture: async () => await captureScreenFallback(),          // 无损 PNG ✓ 尺寸=space() ✓
+      ocrJson: (p) => ocrJson(p),
+      /* 真点的时候仍走**原来那条 click 路** ✓（不另写一套鼠标注入 ✗） */
+      click: async (x, y) => await run('click', x + ',' + y),
+      space: () => require('./input').space(),
+      dbg: (m) => dbg('[' + tool + '] ' + m),
+    });
+    return await oc.run(tool, arg);
+  }
+
   if (tool === 'screen_shot') {
     /* ⚠️ OCR 用图**不要画坐标网格**：那些刻度数字会被 OCR 当成屏幕上的文字读进去。
        网格只给视觉模型定位用（见下面的 screen_look）。 */
@@ -352,6 +595,122 @@ async function runInner(tool, arg) {
     const result = '🖥 已截取屏幕（' + cap.width + '×' + cap.height + '）\n'
       + (text ? '屏幕上识别到的文字：\n' + text : '（未识别到文字；截图已展示在对话里，你可以自己看）');
     return { text: result, image: cap.dataUrl, path: cap.path, ocr: text };
+  }
+
+/* ★ 视觉增强三件套（2026-10-10 职业列事故催生的）★
+   ① icon_pick  同一格问 N 次、取多数 —— 治「单次视觉判断会抖」（实测她四次拿到四种顺序 ✓）
+   ② grid_scan  程序切格、逐格问 —— 治「一次问一整列会自相矛盾」✓
+   ③ find_grid  从像素里测出真实位置和间距 —— 治「拿估的间距去裁会逐格漂移」✓
+   ★ 边界：它们只解决「问准、量准」 ✗ —— 「那个图案是哪个职业」是**外部知识** ✓
+     必须写在技能里（`use_skill|明日方舟-界面基础` ✓） */
+if (tool === 'icon_pick' || tool === 'grid_scan' || tool === 'find_grid' || tool === 'tile_read' || tool === 'strip_read') {
+  const v2 = require('./vision2');
+  v2.install({
+    capture: async () => await captureScreen(false),
+    vision, config,
+    space: require('./input').space,
+  });
+  return await v2.run(tool, arg);
+}
+/* ★ som_look（Set-of-Marks）：★让模型"选编号"，而不是"估坐标"★
+   为什么单独一个分支，不和上面那四个挤在一起✗：它要的依赖更多 ✓ ——
+   除了 capture/vision/config/space，还要 **OCR 行**（候选要有局部语义 ✓）
+   和 **前台窗口的 UIA 树**（候选要有元素身份 ✓）。上面那四个只需要前四个依赖 ✓。
+   ★为什么抓帧用 captureScreenFallback（无损 PNG，尺寸=space()）而不是流✓★：
+     som_look 必须让「送模型的那张图」和「候选框的坐标空间」**完全同一** ✓ ——
+       · OCR 的包围盒是在这张 PNG 的像素空间里量出来的 ✓
+       · UIA 自报的矩形是物理像素（=space()=1920x1080 ✓，实测计算器/UIA 与截图逐字一致 ✓）
+     流抓帧（JPEG）尺寸与 space() 不保证一致 ✗ → 框会画到图上的别处 ✗，
+     而且 JPEG 噪点会吃掉小字（这是 2026-10-10 已经踩过的坑 ✓）。
+   代价：PNG 抓帧约 650ms ✗→✓ 换来"候选和图像必定对齐"✓，这个交换是值的 ✓。 */
+if (tool === 'som_look') {
+  const v2 = require('./vision2');
+  v2.install({
+    capture: async () => await captureScreenFallback(),
+    vision, config,
+    space: require('./input').space,
+    /* OCR 的 JSON 模式（带每个词的包围盒 ✓）—— 复用 find_text 那条路 ✓，不另起一套 ✓ */
+    ocrJson: (p) => ocrJson(p),
+    lastOcrError: () => lastOcrError,
+    /* ★UIA 必须按【前台 hwnd】取树✗→✓★：实测 listElements('') 挑中的是桌宠自己那个
+       475x232 的小窗（只有 2 个 Pane）✗ —— 它的策略是"第一个扫出元素的顶层窗口" ✓，
+       那不是主人正在看的窗口 ✗。按 hwnd 取才准 ✓（实测前台浏览器：1133 个后代、66 个有名带矩形 ✓）。
+       ★★★ 但前台可能**就是桌宠自己** ✗ —— 这是真机跑出来才发现的 ★★★
+       实测（2026-10-10 第一次真机 som_look）：前台 = 「dayu-pet」→ UIA 只给 2 个 Pane ✓，
+       于是候选里混进一条「Chrome Legacy Window [Pane 531488]」✗ ——
+       而视觉模型问「屏幕上有什么」时**恰好选中了它** ✗（答 #31）。
+       根因不是模型 ✗：桌宠窗是**她自己**的置顶窗 ✓，本来就**不该是候选**（点它 = 点自己人 ✗），
+       而且它压住的那块屏幕下的真实内容根本没被看见 ✓。
+       修法：前台标题是桌宠自己的两个窗口之一时，改用 listWindows 里 **z 序最上面**的那个
+       非桌宠窗口 ✓（z 是 EnumWindows 的序号，0 = 最上面 ✓，见 focuswin.js ✓）。
+       标题用**锚定**匹配（^…$）而不是包含 ✗→✓：免得把主人某个标题里带「大肥鱼」的页面也误排除 ✓。 */
+    uiaList: async () => {
+      const fw = require('./focuswin');
+      const PET_TITLE = /^(dayu-pet|大肥鱼 · 对话)$/;
+      const fg = await fw.foreground();
+      let target = fg, swapped = '';
+      if (fg && fg.hwnd && PET_TITLE.test(String(fg.title || ''))) {
+        const lw = await fw.listWindows();
+        const cand = ((lw && lw.windows) || [])
+          .filter((w) => w && w.hwnd && w.visible !== false && !w.cloaked && !w.iconic
+            && !PET_TITLE.test(String(w.title || '')))
+          .sort((a, b) => a.z - b.z)[0];
+        if (cand) {
+          target = { title: cand.title, hwnd: cand.hwnd };
+          swapped = '★前台是桌宠自己（' + String(fg.title) + '）→ 已改用 z 序最上面的非桌宠窗口「'
+            + String(cand.title).slice(0, 40) + '」✓（点自己人没意义 ✗）★';
+        } else {
+          return { ok: false, elements: [], window: null, note: '★前台是桌宠自己，且没找到别的可见窗口 ✓' };
+        }
+      }
+      if (!target || !target.hwnd) return { ok: false, elements: [], window: null };
+      const r = await require('./uia').listElements('', target.hwnd);
+      const els = (r && r.elements) || [];
+      return { ok: els.length > 0, window: (r && r.window) || target, elements: els, note: swapped };
+    },
+  });
+  return await v2.run(tool, arg);
+}
+
+  /* ★★ MCP 工具（2026-10-10）★★
+     ★ 为什么要它：挂新 server **不用再改她的代码** ✓ —— 这一步是铺路 ✓。
+     ★ 环境现实（如实说 ✗）：本机 python 是商店占位符 ✓、没有 uvx/go ✓ ——
+       ★ 能用 MCP server 只剩 **Node 写的** ✗★；
+       ★★ 所以 MCP 对本机真正有用的场景是【网页】✓（@playwright/mcp ✓）+
+          【桌面窗口截图】✓（@cool-mcp/desktop-automation ✓，就是 win_shot 走的那条）★★；
+       桌面和游戏仍要用 uia_* / 模板 / OCR ✓。
+     实测：@playwright/mcp v1.64.0-alpha → ★25 个工具 ✓★，含 browser_find ✓
+       （★在可访问性快照里搜文字，点元素不需要坐标✓★）。
+     ⚠️ 默认**不启动** ✓ —— server 会拉起浏览器，不该每次开机都拉 ✓。
+     用法：mcp_list|<服务器名> ／ mcp_call|<服务器名>|<工具名>|<JSON参数> */
+  if (tool === 'mcp_list' || tool === 'mcp_call') {
+    const mcp = require('./mcp');
+    try { mcp.configure((config.load() || {}).mcpServers); } catch (e) {}
+    const seg = String(arg || '').split('|').map((x) => x.trim());
+    if (tool === 'mcp_list') {
+      const st = mcp.status();
+      const names = Object.keys(st);
+      if (!seg[0]) {
+        return '📡 配好的 MCP 服务器：' + names.map((k) => k + (st[k].enabled ? '（已开 ✓）' : '（默认关 ✗）')).join(' / ')
+          + '\n  ★ 查看某个服务器的工具：mcp_list|<名字> ★（会顺手把它启动起来 ✓）'
+          + '\n  ⚠️ 首次启动要下载包，可能要 1~3 分钟 ✓ —— 超时就再试一次 ✓'
+          + '\n  ★ 环境限制：本机只能跑 Node 写的 server ✗（python 是商店占位符 ✓，没有 uvx/go ✓）★';
+      }
+      const name = seg[0];
+      if (!st[name]) return '❌ 没有配置「' + name + '」这个服务器 ✓（可用：' + names.join(', ') + '）';
+      const tools = await mcp.listTools(name);
+      return '📡 ' + name + '：★' + tools.length + ' 个工具★'
+        + '\n' + tools.map((t2, i2) => '  ' + String(i2 + 1).padStart(2) + '. ' + t2.name + ' —— '
+          + String(t2.description || '').replace(/\s+/g, ' ').slice(0, 90)).join('\n')
+        + '\n  ★ 调用：mcp_call|' + name + '|<工具名>|{"参数":"值"} ★';
+    }
+    if (seg.length < 3 || !seg[0] || !seg[1]) return '用法：mcp_call|<服务器名>|<工具名>|<JSON参数，可空>';
+    let args2 = {};
+    if (seg[2]) { try { args2 = JSON.parse(seg.slice(2).join('|')); } catch (e) { return '❌ 参数不是合法 JSON ✓：' + seg.slice(2).join('|').slice(0, 120); } }
+    const res = await mcp.callTool(seg[0], seg[1], args2);
+    const parts = ((res && res.content) || []).map((c) => (c && c.type === 'text' ? c.text : JSON.stringify(c))).join('\n');
+    const txt2 = String(parts || JSON.stringify(res || {})).slice(0, 4000);
+    return '✅ ' + seg[0] + '.' + seg[1] + ' 返回：\n' + txt2;
   }
 
   if (tool === 'screen_look') {
@@ -372,15 +731,24 @@ async function runInner(tool, arg) {
     /* 放大看时**走无损的 PNG 路径**：帧流是 JPEG，把它的压缩噪点放大 3 倍只会更糊 ——
        实测她的原话："这几张放大图太糊，我定不准卡片坐标"。PNG 那条路径
        （desktopCapturer 原生图 → resize → PNG）是无损的，放大出来的字是锐利的。 */
-    /* ★ 不再画坐标网格（改成 false）★
-       为什么原来画：那时候是要模型给**像素坐标**，实测它"估位置"在贴边处能差近 300px
+    /* ★ 不画坐标网格（false）★ —— 2026-10-10 起这条的理由变了 ✗→✓
+       原来画：那时候是要模型给**像素坐标**，实测它"估位置"在贴边处能差近 300px
        （鹰角启动器右下角按钮真实 (1837,1025)，它给 (1500,807)），有刻度它就能"读"而不是"估"。
-       为什么现在不画：**协议已经改成归一化坐标 (0~1)**（见下面提示词的【怎么告诉我位置】）。
-       刻度上写的是**像素数字**，留着只会诱导它报像素值；而它也没法从一个像素网格里
-       量出 0~1 的归一化位置。实测换协议后同一个模型一次命中，光标精准落在目标名字上。
-       ⚠️ 要退回旧协议（要像素坐标）就得把这个改回 true —— 两件事必须一起改，别只改一边。
+       ★现在不画，是因为**连"要坐标"这件事都废除了**★：
+         `screen_look` 只让模型**描述**（见下面提示词的【你的职责：说出你看到了什么 —— 不要给位置】），
+         "在哪"只许来自确定性来源（uia_* / find_text / find_template / find_grid / grid_count / som_look ✓）。
+       刻度上写的是**像素数字**，留着只会诱导它报坐标 ✗（而它报的坐标实测不可靠：
+       同一处问两次能偏上千像素 ✗）。
        （放大看时本来就不画网格，见下面的注释。） */
-    const cap = zoomPre ? await captureScreenFallback() : await captureScreen(false);
+    /* ★★★ 整屏也用无损 PNG（2026-10-10，用户："她看得太模糊了"）★★★
+       原来的这一行是「放大走无损 PNG ✓，整屏走 JPEG 帧流 ✗」——
+       ★ 可"读屏幕上的小字"绝大多数是**整屏**在看 ✗ → 整屏全被 JPEG 压过一遍 ✓；
+       JPEG 的噪点在整屏里约占 1px ✗ —— 正好吃掉 12px 小字的边缘 ✓。
+       ★ 代价：PNG 抓帧 ~650ms vs 流抓帧 ~50ms ✓ —— 要"看得清"就值 ✓。
+         想换回快路径：config 里 screenLosslessScreen=false ✓ */
+    const _cfgCap = config.load();
+    const _lossless = _cfgCap.screenLosslessScreen !== false;
+    const cap = (zoomPre || _lossless) ? await grabFrameCached() : await captureScreen(false);
     if (!zoomPre) ZoomState = null;   // 普通看屏幕：清掉上一次的放大参数
     timing.captureMs = tick() - tCap;
     /* 【局部放大】用户点出的真问题："这不是游戏问题，而是你给她分辨率太低了"。
@@ -420,7 +788,8 @@ async function runInner(tool, arg) {
             + '放大等于主动把视野缩小：如果锚点猜错，目标就永远进不了你的图，而且**你看不出来** ✓\n'
             + '（实测：你 44 次看屏幕全是放大，视野右边界卡在 1103，而要找的东西在 1272+ —— 永远找不到 ✓）\n'
             + '★现在请先看一次整屏★：`screen_look|<问题>`（不要带 || 区域），\n'
-            + '问题这样问：「目标大概在屏幕的哪个位置？给我归一化坐标」。拿到位置后再放大那一块 ✓';
+            + '问题这样问：「屏幕上现在是什么界面？有哪些文字或按钮？」—— ★让它只描述 ✓，\n'
+            + '不要问它坐标/位置 ✗（实测同一处问两次能给两个答案 ✓）。要位置就用 find_text / find_template ✓';
         }
         if (_prev && Math.abs(rw - _prev.w) <= 8 && rh > _prev.h + 20) {
           ZOOM_GUARD.last = { x: rx, y: ry, w: rw, h: rh };
@@ -471,58 +840,71 @@ async function runInner(tool, arg) {
            + '**不要自己换算成整屏坐标，也不要用 1920x1080 这个数字** —— 换算由程序做。'
            + '（你要点击时请用 find_text|<文字> 或 find_template|<名字> 让程序去精确定位，别直接给像素坐标。）')
         : '';
-      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【怎么告诉我位置】用**归一化坐标**：左上角是 (0,0)，右下角是 (1,1)，正中央是 (0.5,0.5)。
-不要给像素值，也不要自己换算 —— 换算由程序做。
-（以前这里是让模型"顺着刻度网格读像素坐标"，实测那套又绕又偏：同一个卡片它会报高整整一行 ✗。
-  改成归一化坐标之后，实测同一个模型一次命中，光标精准落在目标名字上 ✓。）
+      /* ★★★ 2026-10-10 语义重做：视觉模型**只描述，不定位** ★★★
+         主人原话：「把现在所有视觉模型删去，重新做一份」——查清的事实是：
+           ★它"看得见"但"说不准"★（同一列职业图标，四次问得到四种顺序；
+             问"最右边那一列是什么"，它答的却是**干员名字** —— 认错目标 ✗；
+             让它报坐标 → 同一处问两次给两个答案，能偏几十到上千像素 ✗）。
+         → 所以这一层被彻底降级：★它再也不能给出"在哪/点哪"★。
+         ★"在哪"的出口只剩确定性来源★：uia_snapshot/uia_find（控件树，零识别）、
+           find_text（OCR+包围盒）、find_template（像素模板）、find_grid（像素量距）、
+           grid_count（数格子）、som_look（程序框候选 + 模型只选编号）。
+         ★依据★：OmniParser v2 / Set-of-Marks / Playwright MCP 的 ref / UIA 控件树 ——
+           共同思想都是「让模型**选元素**，不让它**估坐标**」；
+           GUI grounding 精度是 GUI agent 的主要瓶颈（ScreenSpot 直接要坐标只有 16.2% ✓）。 */
+      const q = (arg || '看看屏幕') + _zoomNote + `\n\n【你的职责：说出你看到了什么 —— 不要给位置】用一句中文说清屏幕上的情况
+（是什么界面 / 有哪些文字 / 大致在干什么 / 有什么不寻常的地方）。
+★不要输出任何坐标、不要估位置、不要写 move_norm★ —— 你这方面的读数实测不可靠
+（同一处问两次会给两个答案，能偏上千像素 ✗），所以"在哪"不归你管。
 
-【输出要求】先用一句中文说明你的判断（**说清你看到了什么、那个东西叫什么名字**）。
-然后，按需要单独输出一行：
-· 需要把**光标移到**某个东西上（只是悬停/指出位置，不点击）：
-    ACTION: move_norm|<nx>,<ny>        例如 ACTION: move_norm|0.334,0.424
-· 需要程序去**点击**某个能说出名字的东西时（更稳，因为程序会自己精确定位并复核）：
-    ACTION: find_text|<目标上的文字>     或     ACTION: find_template|<已存的模板名>
-⚠️ **绝对不要输出带像素坐标的点击**（如 click|960,540、clickz|400,200、move|x,y、drag|x,y|x,y）——
-实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
+【只有一件事你可以做】如果屏幕上有一个**你能说出名字**的东西、而且需要让程序去操作它，
+就单独输出一行（程序会自己精确定位并复核，不用你给坐标）：
+    ACTION: find_text|<它上面的文字>     或     ACTION: find_template|<已存的模板名>
+也可以：ACTION: focus_window|<窗口标题片段> / ACTION: windows_list / ACTION: key|<键名>
+⚠️ **绝对不要输出带坐标的东西**（click|x,y、clickz|x,y、move|x,y、drag|x,y|x,y、move_norm|nx,ny）
+—— 实测这么干会点错地方（在选人面板上点屏幕正中央 = 点到某张干员卡 = 把它选上/取消），
 把已经做好的选择毁掉。
-（move_norm 只**移动光标**、不按下任何键，所以安全；click 这类必须走 find_text/find_template。）
-说不出名字就**只描述、不要给 ACTION**，让主人/自己下一步再看一次。`;
+说不出名字、或只是想知道"那是什么"，就**只描述、不要给 ACTION**。`;
+      /* ★ P2（2026-10-31）：同一帧 + 同一问题的 screen_look 直接复用上次描述 ★
+         实测视觉调用 avg 2.1s，她一轮里经常对"没变过的画面"连看好几次。
+         开关：环境变量 PA_LOOK_CACHE=0 关闭。 */
+      let _lookKey = null;
+      let _lookHit = null;
+      try {
+        const LK = require('./lookcache');
+        if (!LK.disabled()) {
+          _lookKey = LK.key(Buffer.from(String(capDataUrl || '').split(',')[1] || '', 'base64'), q);
+          _lookHit = LK.get(_lookKey);
+        }
+      } catch (e) { _lookHit = null; }
       /* tV 必须声明在 try **外面**：catch 里也要用它算耗时，
          写在 try 内的话失败路径会 ReferenceError（实测被 §6 那条测试抓住）。 */
       let tV = tick();
-      try {
+      if (_lookHit) {
+        text = _lookHit.text;
+        usedVision = true;
+        timing.visionMs = 0;
+        timing.lookCacheHit = _lookHit.hits;
+        try { dbg('[look] 缓存命中（同画面已连看 ' + _lookHit.hits + ' 次，省一次视觉调用）'); } catch (e) {}
+        text += '\n\n（缓存命中：画面和问题与上次相同，这次没有重复调用视觉模型；'
+          + '要新的观察请换个问题，或先操作让画面变化 —— 同一画面已连看 ' + _lookHit.hits + ' 次）';
+      } else try {
         text = await vision.describe(cfg, capDataUrl, q, cfg.visionDetail || 'high');
         timing.visionMs = tick() - tV;
         usedVision = true;
+        if (_lookKey) { try { require('./lookcache').put(_lookKey, text); } catch (e) {} }
+
         const m = text.match(/ACTION\s*[:：]\s*([a-z_]+)\s*\|\s*(.+)/i);
         if (m && m[1].trim().toLowerCase() === 'move_norm') {
-          /* ★★ ACTION: move_norm|<nx>,<ny> —— 归一化坐标，只移动光标、不点击 ★★
-             为什么单独开这一条：今天实测（在公招计算器上找水月）——
-               让视觉模型给**归一化坐标**，它一次命中，光标精准落在目标名字上 ✓；
-               而让它"顺着刻度网格读像素坐标"，同一个卡片它报高了整整一行 ✗。
-             为什么只允许"移动"、不允许"点击"：见下面那段事故注释 ——
-               带像素坐标的点击曾经把已经选好的干员**取消掉**（屏幕正中央正好是一张卡）。
-               移动光标没有副作用，所以可以放心交给它。 */
+          /* ★★★ 2026-10-11：move_norm 的**执行体已删除✗**（主人的第 3 条缺陷：活雷 ✓）★★★
+             原来这里会照着模型给的归一化坐标**真的移动光标**✗ —— 只靠提示词禁止是"活雷" ✓
+             （提示词改一次、它照样能输出 ✓）。
+             现在：★一律不执行✗★，只记日志 + 在回执里明确写"这条通道已废除" ✓，
+             并把正确的出口指给它（locate → act ✓）。 */
           const nm = String(m[2]).match(/(-?\d*\.?\d+)\s*[,，]\s*(-?\d*\.?\d+)/);
-          if (nm) {
-            const nx = Number(nm[1]), ny = Number(nm[2]);
-            if (Number.isFinite(nx) && Number.isFinite(ny) && nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) {
-              const _s = require('./input').space();
-              const px = Math.round(nx * _s.w), py = Math.round(ny * _s.h);
-              try {
-                require('./input').move(px, py);
-                dbg('[look] move_norm ' + nx + ',' + ny + ' → 屏幕 (' + px + ',' + py + ')');
-                text += '\n\n【程序已执行】把光标移到了归一化坐标 (' + nx + ',' + ny + ') 对应的屏幕位置 ('
-                  + px + ',' + py + ') —— 只是悬停，没有点击。';
-              } catch (e) {
-                text += '\n\n【程序未能移动光标】' + ((e && e.message) || e);
-              }
-            } else {
-              text += '\n\n【move_norm 被忽略】归一化坐标必须都在 0~1 之间，收到的是 (' + nm[1] + ',' + nm[2] + ')。';
-            }
-          } else {
-            text += '\n\n【move_norm 被忽略】没解析出两个数字。';
-          }
+          dbg('[look] ★move_norm 通道已废除✗★（模型给了 ' + (nm ? nm[1] + ',' + nm[2] : String(m[2]).slice(0, 40)) + '，没有移动任何光标 ✓）');
+          text += '\n\n【move_norm 通道已废除 ✗】★我不会再照着模型给的坐标移动光标了★（主人第 3 条缺陷 ✓）。'
+            + '要"把光标移到某个东西上"请用：★locate|<描述>|<容器> → act|<编号>|move★ ✓（坐标只由工具算 ✓）。';
         } else if (m) {
           const t = m[1].trim().toLowerCase();
           /* ★★ 只接受"有可验证目标"的动作 —— **裸坐标的点击一律拒绝** ★★
@@ -687,7 +1069,7 @@ async function runInner(tool, arg) {
     /* ★★★ 轮询等条件 —— 治"固定睡 N 秒"这个顽疾 ★★★
        起因（实测）：她点"基建"之后**立刻** screen_look，而游戏切界面要 1~2 秒，
        她看到旧画面就以为没点进去，换坐标再点、再点，连点三次 ✗。
-       原来的权宜之计是动作后统一固定等 actionSettleMs（默认 1500ms）——
+       原来的权宜之计是动作后统一固定等 actionSettleMs（2026-10-31 默认从 1500ms 降到 900ms；winserve 让环境检查/前台核对从秒级降到毫秒级，固定等待成了大头）——
        等太短会看到旧画面，等太长就是白等 ✗。
        ★ 正确做法：把"猜时间"换成"等条件"★ —— 条件成立立刻走，超时就说清最后检查到什么。
        格式：wait_for|<类型>|<目标…>|<超时秒>   （★最后一段永远是超时秒数★）
@@ -1119,6 +1501,7 @@ async function runInner(tool, arg) {
        现在：move 若回读不一致就直接判失败并说清楚；click 也把回读值写进回执（供核对）。
        ⚠️ 另外：如果她之前 focus_window 过，键盘/鼠标的目标窗口应当是它 —— 这里顺带回读前台。*/
     let cursorNote = '';
+    const preHash = (tool === 'move') ? null : await cheapFrameHash();
     if (tool === 'move' || tool === 'click') {
       const SDx = require('./safedrive');
       const rx = (tool === 'move') ? await SDx.moveSafe(x, y, {}) : await SDx.clickSafe(x, y, {});
@@ -1142,9 +1525,10 @@ async function runInner(tool, arg) {
        点/按键/输入/拖拽这类**会改变界面**的动作，返回前统一等一小会儿，
        这样下一步截图看到的才是动作之后的状态。move 不改界面，不用等。 */
     if (tool !== 'move') {
-      const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-      await new Promise((r) => setTimeout(r, settle));
-      return `✅ 已${label}：(${x}, ${y})（已等 ${(settle / 1000).toFixed(1)}s 让界面反应）` + cursorNote;
+      const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+      const sw = await settleAdaptive(settle, preHash);
+      return `✅ 已${label}：(${x}, ${y})（界面反应等待 ${(sw.waitedMs / 1000).toFixed(1)}s`
+        + (sw.early ? '，已看到画面变化' : '') + '）' + cursorNote;
     }
     return `✅ 已${label}：(${x}, ${y})` + cursorNote;
   }
@@ -1153,10 +1537,12 @@ async function runInner(tool, arg) {
     const [zx, zy] = parseXY(arg);
     const [x, y] = [Math.round(ZoomState.x + zx / ZoomState.k), Math.round(ZoomState.y + zy / ZoomState.k)];
     const real = tool.replace(/z$/, '');
+    const preHashZ = await cheapFrameHash();
     input[real](x, y);
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
-    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')（已等 ' + (settle / 1000).toFixed(1) + 's）';
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swZ = await settleAdaptive(settle, preHashZ);
+    return '✅ 已点击（放大图坐标换算）：放大图(' + zx + ',' + zy + ') → 整屏(' + x + ',' + y + ')'
+      + '（界面反应等待 ' + (swZ.waitedMs / 1000).toFixed(1) + 's' + (swZ.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'drag') {
     /* 两种写法都收：
@@ -1326,6 +1712,12 @@ async function runInner(tool, arg) {
     const cxS = Math.round(rxS + rwS / 2), cyS = Math.round(ryS + rhS / 2);
     const { nativeImage } = require('electron');
     const MS = require('./matcher');
+    /* ★这一步的坐标是**确定性的**：它就是调用方声明的列表区域中心（不是模型猜的 ✓），
+       所以先记进账本再动光标 ✓ —— 2026-10-11 起"动鼠标必须有定位来源"是默认闸门，
+       不登记的话这里（以及下面滚回原位的两次）会被拦掉 ✗。 */
+    if (true) {
+      try { require('./prov').instance.offer(cxS, cyS, 'find_template_scroll(列表区域中心)', nmS); } catch (e) {}
+    }
     input.move(cxS, cyS);                       // 光标必须先落在列表上（滚轮作用于光标下的窗口）
     await new Promise((r) => setTimeout(r, 220));
     let scrolledS = 0;
@@ -1365,7 +1757,7 @@ async function runInner(tool, arg) {
     const sp0 = String(arg || '').split('|').map((s) => s.trim());
     const needle = sp0[0] || '';
     if (!needle) return '⚠️ 用法：find_text|要找的文字';
-    const cap4 = await captureScreenFallback();     // OCR 用无损 PNG（比 JPEG 帧更利于小字识别）
+    const cap4 = await grabFrameCached();           // P3：同帧复用（便宜帧命中就跳过 PNG 抓图）
     const j = await ocrJson(cap4.path);
     if (!j) return '⚠️ OCR 没有返回结果（可能没有中文识别包，或这一步超时了）。可以改用 find_template 找图标，或 screen_look 自己看。';
     let hit = findTextInOcr(j, needle);
@@ -1504,7 +1896,7 @@ async function runInner(tool, arg) {
       findTemplate: (name, dataUrl, roi) => require('./matcher').findTemplateScaled(app, nativeImage, name, dataUrl, roi),
       /* 文字定位复用 find_text 那条路（它会自己抓一张无损 PNG 给 OCR —— 所以这里忽略传进来的帧） */
       findText: async (text) => {
-        const capF = await captureScreenFallback();
+        const capF = await grabFrameCached();
         const j = await ocrJson(capF.path);
         if (!j) return { ok: false };
         const hit = findTextInOcr(j, text);
@@ -1677,6 +2069,7 @@ async function runInner(tool, arg) {
     const gate = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gate.ok) return gate.message;
     const text = String(arg);
+    const preHashT = await cheapFrameHash();
     const CHUNK = 16;
     let done = 0;
     try {
@@ -1691,15 +2084,16 @@ async function runInner(tool, arg) {
     } catch (e) {
       if (!done) { input.type(text); done = text.length; }
     }
-    /* 同上：输入会改变界面，等它反应完再让她看屏幕 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
+    /* 同上：输入会改变界面，等它反应完再让她看屏幕（自适应：画面变了就提前返回） */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swT = await settleAdaptive(settle, preHashT);
     if (done < text.length) {
       return `⚠️ 只输入了 ${done}/${text.length} 个字符：**主人开始操作了，我停下来了**。`
         + `已经打进去的是：「${text.slice(0, done)}」；还没打的是：「${text.slice(done, done + 30)}${text.length - done > 30 ? '…' : ''}」。`
         + `主人松手后可以让我接着输入剩下的部分。`;
     }
-    return `✅ 已输入文字：${text.slice(0, 50)}（已等 ${(settle / 1000).toFixed(1)}s）`;
+    return `✅ 已输入文字：${text.slice(0, 50)}（界面反应等待 ${(swT.waitedMs / 1000).toFixed(1)}s`
+      + (swT.early ? '，已看到画面变化' : '') + '）';
   }
   if (tool === 'key') {
     /* ★ 前台断言（2026-10-02 加）★：按键只会进【前台窗口】。
@@ -1707,11 +2101,13 @@ async function runInner(tool, arg) {
        现在若最近一次 focus_window 的目标已经不是前台，就拒绝执行并报明实情。 */
     const gateK = await require('./safedrive').assertForegroundOrReport(lastFocus);
     if (!gateK.ok) return gateK.message;
+    const preHashK = await cheapFrameHash();
     input.key(arg);
-    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等 */
-    const settle = Number((config.load().memory || {}).actionSettleMs) || 1500;
-    await new Promise((r) => setTimeout(r, settle));
-    return `✅ 已按键：${arg}（已等 ${(settle / 1000).toFixed(1)}s，发给了前台「${gateK.foreground}」）`
+    /* 按键（回车/ESC/方向键）常常触发界面跳转（比如登录、确认对话框），同样要等（自适应） */
+    const settle = Number((config.load().memory || {}).actionSettleMs) || 900;
+    const swK = await settleAdaptive(settle, preHashK);
+    return `✅ 已按键：${arg}（界面反应等待 ${(swK.waitedMs / 1000).toFixed(1)}s`
+      + (swK.early ? '，已看到画面变化' : '') + `，发给了前台「${gateK.foreground}」）`
       + (gateK.warn ? '\n' + gateK.warn : '');
   }
 }
@@ -1757,6 +2153,8 @@ module.exports = {
   run, allowed, TOOL_TIER, RANK,
   __captureForTest: (grid, noCursor) => captureScreen(grid, noCursor),
   __captureFallbackForTest: () => captureScreenFallback(),
+  __cheapFrameHashForTest: () => cheapFrameHash(),
+  __settleAdaptiveForTest: (b, base, o) => settleAdaptive(b, base, o),
   __findTextInOcr: (j, needle) => findTextInOcr(j, needle),
   __noProgressWarning: (t, a) => noProgressWarning(t, a),
   __noteAction: (t, a, r) => noteAction(t, a, r),

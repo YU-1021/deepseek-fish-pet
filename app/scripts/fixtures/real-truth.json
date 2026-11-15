@@ -1,0 +1,102 @@
+{
+  "note": "真实帧真值（可复现标注 ✓ 2026-10-11 重标）",
+  "space": "physical",
+  "frames": [
+    {
+      "id": "arknights-class-column",
+      "file": "C:/deepseek/desktop-pet/shots/win-Arknights-1791645099248.jpg",
+      "categories": [
+        "icon"
+      ],
+      "provenance": "★三法交集✓★：① grid_count 带内 run 中点 ② 该段 ±36px 局部能量重心 ③ 该段 blob 包围盒中心；三者两两 ≤4px 才写入 ✓（不一致 → certain:false 已排除 ✓）。帧：win_shot 原图 1920x1080 ✓。叠框图：overlay-class-column.png（绿=确定/红=不确定 ✓）",
+      "toleranceNote": "run 中点单独当中心会偏 0~21px ✗（已改三法交集 ✓）",
+      "items": [
+        {
+          "id": "C3",
+          "kind": "icon",
+          "x": 1810,
+          "y": 86,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 122,
+            "centroid": 121,
+            "blob": 123
+          }
+        },
+        {
+          "id": "C4",
+          "kind": "icon",
+          "x": 1810,
+          "y": 163,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 199,
+            "centroid": 201,
+            "blob": 198
+          }
+        },
+        {
+          "id": "C23",
+          "kind": "icon",
+          "x": 1810,
+          "y": 738,
+          "w": 72,
+          "h": 72,
+          "label": "",
+          "certain": true,
+          "methods": {
+            "seed": 774,
+            "centroid": 774,
+            "blob": 774
+          }
+        }
+      ]
+    },
+    {
+      "id": "queue-panel-text",
+      "file": "C:/deepseek/after-click.png",
+      "categories": [
+        "text"
+      ],
+      "provenance": "★OCR 词组框回填✓★（工具：app/scripts/ocr.ps1 → real-queue-panel-text.json，13 行/90 词，本会话第 1 次成功运行 ✓）。★限制：这样得来的 text 真值只能量\"locate 的框取与配对\"✓ 不能量 OCR 准确率 ✗（循环论证 ✓）★。叠框图：overlay-queue-panel.png ✓",
+      "items": [
+        {
+          "id": "Q1",
+          "kind": "text",
+          "x": 451,
+          "y": 129,
+          "w": 101,
+          "h": 33,
+          "label": "会客室",
+          "certain": true
+        },
+        {
+          "id": "Q2",
+          "kind": "text",
+          "x": 1394,
+          "y": 129,
+          "w": 66,
+          "h": 33,
+          "label": "房间",
+          "certain": true
+        },
+        {
+          "id": "Q3",
+          "kind": "text",
+          "x": 451,
+          "y": 227,
+          "w": 113,
+          "h": 27,
+          "label": "当前进驻",
+          "certain": true
+        }
+      ]
+    }
+  ]
+}

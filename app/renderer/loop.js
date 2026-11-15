@@ -9,8 +9,11 @@
  *
  * 【DSH 怎么做（dsh-agent-loop/lib/index.js）】
  *   · :951 `while (true)` 每步发 step/start … step/end；
- *   · :1151,:1017 停止原因是**联合类型** `completed | max-tokens | blocked | aborted | error`
- *     —— 不是"循环结束"这么一句糊话；
+ *   · :1027-1030 停止原因是**联合类型**（DSH 一共 ★7 个★：
+ *     `completed | max-tokens | blocked | aborted | error | interrupted | forked`
+ *     —— 写进 turn/end，见 typert.host.js:803，**落到会话日志**里，事后查得到 ✓）
+ *     ★不是"循环结束"这么一句糊话★；
+ *     （⚠️ 这段注释原来只抄了 5 个，把 `interrupted` / `forked` 漏了 —— 2026-10-10 补齐。）
  *   · :911 `agent/pre-step` waterfall 可以在**步进之前**否决（返回 reject）；
  *   · :711 "Every request is derived from the session log"（每步都从会话日志重新出发）。
  *
@@ -34,9 +37,22 @@
    *   look-streak  连续只在"看屏幕"、没有任何实际动作（自转）
    *   no-result    工具没有返回结果（链路出问题）
    *   no-next      模型没有给出后续（空回复）
-   *   aborted      被中止（用户喊停 / 换任务）
-   *   error        出错 */
-  const REASONS = ['completed', 'step-budget', 'look-streak', 'no-result', 'no-next', 'aborted', 'error'];
+   *   aborted      被中止（主人用**聊天消息**喊停 / 换任务）
+   *   error        出错
+   *   ★interrupted 被**外部强制中断**（界面上的「停止」按钮 / 全局快捷键 ✓）
+   *                —— 2026-10-10 新增。★为什么它与 aborted 分开✗★：
+   *                  DSH 的联合类型里这两个是**两个值**✓（`aborted` 带 abortSignal.reason ✓、
+   *                  `interrupted` 是"外部中断"✓）；桌宠这次的诉求正是"主人**点一下**就停"✓，
+   *                  与"她在聊天里说停"不是同一条路 ✓ —— 分开记，事后 grep 才分得清
+   *                  "是按钮停的"还是"她/模型自己收的" ✓，而不是混成一个模糊的 aborted ✗。
+   *   ★idle-restore 任务**期**结束（不是"循环结束" ✗）：连续一段时间没有任何推进
+   *                （没发言、没工具调用、循环也早已给出停止原因 ✓）→ 判定"任务期结束" → 恢复对话窗 ✓。
+   *                —— 2026-10-10 新增。★真机 bug★：她「想 + 说话」的 ~17 秒被"15s 没有屏幕动作"
+   *                误判成任务结束 ✗ → 剩下 5 格再没点 ✓（"任务越需要她思考，越容易被掐断"✗）。
+   *                ★为什么登记在这张表里✗★：本项目的"任务结束原因"只有这一张表 ✓，
+   *                而 stoplog.KNOWN 必须与它**逐字一致** ✓（probe-stoplog.js 会断言 ✓），
+   *                不然新原因会被标成 unknownReason ✗（等于没登记 ✓）。 */
+  const REASONS = ['completed', 'step-budget', 'look-streak', 'no-result', 'no-next', 'aborted', 'error', 'interrupted', 'idle-restore'];
 
   const MSG = {
     'step-budget': (s) => '⏸ 已达到本次任务的步数上限（' + s.stepBudget + '），先停下来。',
@@ -47,6 +63,14 @@
     'no-next': () => '⏸ 模型没有给出后续动作，先停下来。',
     'aborted': () => '⏸ 已中止当前任务。',
     'error': (s) => '⏸ 出错了先停下来：' + (s.error || '(未提供错误信息)'),
+    /* 外部停止：说人话 + 明确"不会再动了" ✓（主人今天就是因为"按了停没反应"才发火的 ✗） */
+    'interrupted': (s) => '⏹ 已停止（' + (s.via || '停止选项') + '触发）—— ★接下来一个动作都不会再执行★ ✓'
+      + '（已经把这一轮的任务链断掉了 ✓；想让我继续时，直接说要做什么就行 ✓）',
+    /* ★任务期结束（不是循环结束）★：这条**只**在"真的空闲"时才该出现 ✓ ——
+       它以前压根没有记录 ✗（真机查过 session.json 里没有对应事件 ✓），所以"任务期为什么结束"查不到 ✓。 */
+    'idle-restore': (s) => '⏹ 任务期结束（' + (s.via || '空闲') + '）—— 连续一段时间没有任何推进'
+      + '（她没说话、没调工具、循环也早已结束 ✓），所以把对话窗还回来 ✓。'
+      + '★注意✗★：如果这一步是被"空闲"掐掉的，说明任务还没做完 —— 需要看会话日志里上一条真正的停止原因 ✓。',
   };
 
   function create(opts) {

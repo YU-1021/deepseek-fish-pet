@@ -62,14 +62,19 @@ function create(opts) {
     return true;
   }
 
-  /* 记一次调用，返回 { count, advice, block } */
-  function note(tool, args) {
-    if (!isTracked(tool)) return { count: 0, advice: '', block: false, transparent: true };
+  /* ★★ 2026-10-11 真机事故修复（lead 现场证据）★★
+     现场：她反复点右上角「查看」(1868,203) 共 8 次，闸门**正确拦住** ✓ 但只说"换一种完全不同的办法"✗，
+     而**她没有别的办法** → 继续点同一个地方 → 原地打转（主人抱怨的第四条 ✓）。
+     → 拒绝时必须给**可执行出路**（suggestion ✓），并且**连续被拒 2 次就由程序结束这一步并上报**（stop ✓），
+       不让她在没有出路时继续试探 ✓。 */
+  let consecBlock = 0;
+  function note(tool, args, opts) {
+    const o = opts || {};
+    if (!isTracked(tool)) return { count: 0, advice: '', block: false, transparent: true, suggestion: '', stop: false };
     const key = makeKey(tool, args);
     const n = (counts.get(key) || 0) + 1;
     counts.set(key, n);
     if (counts.size > cfg.window) {
-      /* 简单的滑窗：超了就把最早的丢掉（Map 保持插入顺序） */
       const first = counts.keys().next();
       if (!first.done) counts.delete(first.value);
     }
@@ -82,11 +87,26 @@ function create(opts) {
         + '要么换个坐标/换种工具/退回上一层，要么如实上报卡在哪一步、需要主人做什么。）';
     }
     const block = cfg.blockAt > 0 && n >= cfg.blockAt;
+    let suggestion = '', stop = false;
     if (block) {
-      advice = '⚠️ **同一个动作已经重复 ' + n + ' 次，这次不再执行**（避免把预算烧在空转上）。'
-        + '请换一种完全不同的办法，或者如实上报卡在哪一步。';
-    }
-    return { count: n, advice, block, transparent: false };
+      consecBlock++;
+      /* ★可执行出路：面板已知就先退出当前视图 ✓；未知就给固定的"三查"阶梯 ✓（都是她真能做的动作 ✓） */
+      const panel = o.panel ? String(o.panel) : '';
+      const panelHint = panel
+        ? ('本屏是「' + panel + '」✓ → 要离开它：先按 act|<键>|key=ESC（或点「返回/关闭」），再 panel_state 确认到了哪一屏 ✓，然后重新 locate 目标 ✓。')
+        : '★先 panel_state 确认自己在哪一屏✗（拿到的单词/命中词就是线索 ✓）→ 再用 act 按 ESC 或点「返回/关闭」退出当前视图 ✓ → 再 panel_state 确认 ✓ → 然后重新 locate 目标 ✓。';
+      suggestion = '★下一步具体动作★：① ' + panelHint
+        + '② 若上一步无效：用 locate 找屏幕上**可读的大字标签**（标题/按钮名 ✓）当锚点 ✓，别再点同一个坐标 ✗。'
+        + '③ 若两步都无效：★停下来如实上报"卡在哪一屏 + 已经试过哪几个动作 + 需要主人做什么"✗✓★。';
+      advice = '⚠️ **同一个动作已经重复 ' + n + ' 次，这次不再执行**（避免把预算烧在空转上）。' + suggestion;
+      /* ★连续被拒 2 次 → 程序主动结束这一步（stop ✓）并给上报用的证据包 ✓ */
+      if (consecBlock >= 2) {
+        stop = true;
+        advice += '　★★连续 ' + consecBlock + ' 次被拒 → **本步由程序结束✗**：请如实上报：卡在「' + (panel || '未知屏')
+          + '」、已试动作=同一目标重复 ' + n + ' 次、需要主人指引 ✓★';
+      }
+    } else consecBlock = 0;
+    return { count: n, advice, block, transparent: false, suggestion, stop, consecBlock };
   }
 
   /* 真用户消息到达 → 全部重置（照 DSH :1592） */

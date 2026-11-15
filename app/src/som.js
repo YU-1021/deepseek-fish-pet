@@ -48,7 +48,27 @@ function overlapRatio(a, b) {
   return small > 0 ? inter / small : 0;
 }
 
-/* 去重：重叠超过阈值的只留一个 —— 优先级 uia > template > ocr > extra（同优先级比置信度） */
+/* 去重：重叠超过阈值的只留一个 —— 优先级 uia > template > ocr > extra（同优先级比置信度）
+ *
+ * ★★ 还必须"大小相近"✗→✓（2026-10-10 真机量出来的 bug）★★
+ *   根因：`overlapRatio` 用的是**交集 ÷ 较小者面积**（OmniParser 的口径 ✓）——
+ *     于是"小框完全落在大框里"**恒等于 1.0** ✗，dedupe 就把**包含关系**当成了**重复** ✓。
+ *   实测证据（真机，前台窗口的 UIA 树里从上到下全是 Pane/Document/Group/Button 这种**容器套元素**）：
+ *     117 个候选（OCR 行 51 + UIA 有名 66）→ 去重后**只剩 12 个** ✗ ——
+ *     ★其中 104 个是被"面积大得多的框"（面积比 < 0.5）吞掉的★ ✓，
+ *     它们本来是**父子**（窗口容器 1602x1021 vs 里面的按钮/文字行 ✓），不是同一元素的两个来源 ✗。
+ *   后果：候选清单被一个**占屏 79% 的 Pane**主导 ✗，细粒度的按钮/文字全消失 ✗ ——
+ *     工具"跑得通但没用" ✓，而那正是最该避免的 ✓。
+ *   修法（**只动 dedupe** ✓：overlapRatio 的口径、以及它的单测，一个字都不动 ✓）：
+ *     判"重复"要同时满足 ① 重叠 ≥ 阈值 ✓ ② **面积相近**（较小 ÷ 较大 ≥ 0.5 ✓）。
+ *     于是"同一元素被 OCR / 模板 / UIA 各报一次"（大小几乎一样 ✓）照样去重 ✓，
+ *     而"按钮装在窗口里"（面积差一个数量级 ✓）不再被误判成重复 ✓。
+ *   ⚠️ 阈值 0.5 的依据：真机上同一元素的多种来源，框的大小差一般在 20~30% 以内 ✓（面积比 ≈0.5~0.8 ✓）；
+ *     而父子容器相差 10 倍以上 ✓（面积比 <0.1 ✓）。选 0.5 是为了**宁可少去重、不要多去重**✓ ——
+ *     少去重的代价是多几个候选（人去挑 ✓），多去重的代价是**目标根本不在清单里**✗（无法挽回 ✓）。
+ */
+const DUP_SIZE_RATIO = 0.5;
+/* 同优先级比置信度；优先级 uia > template > ocr > extra */
 const KIND_RANK = { uia: 4, template: 3, ocr: 2, extra: 1 };
 function dedupe(cands, overlapThreshold) {
   const th = overlapThreshold == null ? 0.9 : overlapThreshold;
@@ -60,7 +80,11 @@ function dedupe(cands, overlapThreshold) {
   const kept = [];
   for (const c of sorted) {
     let dup = false;
-    for (const k of kept) { if (overlapRatio(c, k) >= th) { dup = true; break; } }
+    for (const k of kept) {
+      const a = c.w * c.h, b = k.w * k.h;
+      const sizeRatio = a > 0 && b > 0 ? Math.min(a, b) / Math.max(a, b) : 0;
+      if (sizeRatio >= DUP_SIZE_RATIO && overlapRatio(c, k) >= th) { dup = true; break; }
+    }
     if (!dup) kept.push(c);
   }
   /* 按阅读顺序编号（从上到下、从左到右）—— 编号顺序要稳定，模型才好对 */
@@ -86,12 +110,29 @@ function buildPrompt(cands, goal, opts) {
     + '**绝对不要输出坐标。**';
 }
 
-/* 解析模型回答（容忍外面包着解释文字或 ```json ```） */
+/* 解析模型回答（容忍外面包着解释文字或 ```json ```，也容忍★只回一个裸编号★） */
 function parseAnswer(text) {
   const t = String(text || '');
   const m = t.match(/\{\s*"id"\s*:\s*(-?\d+)\s*(?:,\s*"confidence"\s*:\s*([0-9.]+)\s*)?\}/)
     || t.match(/\{\s*'id'\s*:\s*(-?\d+)\s*(?:,\s*'confidence'\s*:\s*([0-9.]+)\s*)?\}/)
     || t.match(/id\s*[:=]\s*(-?\d+)/);
+  /* ★兜底：认「裸编号」（接工具时实测到的真 bug ✗→✓）★
+     根因：提示词要求"**只输出一行 JSON**"✓，可**真模型经常就只回一个字「2」**✗ ——
+     旧解析只认 {"id":2} / 'id':2 / id:2 三种 ✓，于是**它明明答对了却被判 no-id-in-answer** ✗ →
+     工具报"模型没给出可用编号"✗，看起来像**模型不行**✗，其实是我这层解析太窄 ✓。
+     （调研里的协议本来就是"★只回答编号★"✓ —— 那解析就必须认裸编号 ✓。）
+     ★但必须收窄✗→✓★：只在「回答很短 + 里面只有一个整数」时才认 ✓。
+       否则「第 1 个不对，是第 2 个」这种一取就取错 ✗ ——
+       那种情况宁可判失败、让她重问 ✓（错点一下的代价远大于多问一次 ✓）。
+     反例守护：'0.9' 是两个数字段 → 不认 ✓；'我找不到' 一个数字都没有 → 仍然 no-id-in-answer ✓。 */
+  if (!m) {
+    const s = t.replace(/```[a-z]*/gi, ' ').replace(/\s+/g, ' ').trim();
+    const nums = s.match(/\d+/g) || [];
+    if (nums.length === 1 && s.length <= 24 && /^\D*\d+\D*$/.test(s)) {
+      const id = Number(nums[0]);
+      if (id > 0) return { ok: true, id, confidence: 0.6, raw: t.slice(0, 120) };
+    }
+  }
   if (!m) return { ok: false, reason: 'no-id-in-answer', raw: t.slice(0, 120) };
   const id = Number(m[1]);
   const conf = m[2] != null ? Number(m[2]) : (id > 0 ? 0.6 : 0);

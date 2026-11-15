@@ -835,8 +835,18 @@ async function refreshBudget() {
 }
 function reportTask() {
   /* 把**显式的停止原因**一并上报（completed / step-budget / look-streak / no-result / no-next / aborted / error）。
-     以前只知道"任务结束了"，查不出为什么 —— 今天那次自转就是因此才要翻代码找根因。 */
-  try { window.petAPI.statsTask({ ok: !taskFailed, stopReason: taskStopReason }); } catch {}
+     以前只知道"任务结束了"，查不出为什么 —— 今天那次自转就是因此才要翻代码找根因。
+     ★2026-10-10：连 steps / lookStreak 一起带上★ —— 主进程会把它们写进**会话日志**
+     （照 DSH 的 turn/end）。这样"这一轮走了几步、因为什么停"都能 grep 到，
+     也能直接用来验证"点击前环境检查"那几条修好没有。 */
+  let st = null;
+  try { st = LOOP ? LOOP.stats() : null; } catch (e) {}
+  try {
+    window.petAPI.statsTask({
+      ok: !taskFailed, stopReason: taskStopReason,
+      steps: st ? st.steps : null, lookStreak: st ? st.lookStreak : null,
+    });
+  } catch {}
   refreshBudget();
 }
 
@@ -861,6 +871,16 @@ let taskStopReason = null;
    原来这里直接判 completed 收尾 → 任务静默死掉（实测 4 次，用户两次问"她怎么不动了"）。
    现在最多把循环续 2 次、催她要 ACTION。 */
 let promiseNudge = 0;
+/* ★★ 停止指令（2026-10-10 修：用户说「停」她不停 ✗）★★
+   实测：用户说「停」→ 它被当成**普通聊天消息** ✗ → 她只回一句话 ✓，
+   而**正在跑的 runTask 循环完全不知道** ✗ → 同一秒她还在继续点 ✓。
+   ★ 只认**整句就是停止词**✗→✓ —— 避免误伤「停下来看看这个」这种正常话 ✓ */
+const STOP_RE = /^\s*(停|停下|停下来|停止|停手|住手|收手|打住|别做|别点了|别弄了|别动了|别搞了|取消|算了|不做了|stop|halt|ting|tíng)\s*[!！。.~、]*\s*$/i;
+function isStopCmd(t) { return STOP_RE.test(String(t || "")); }
+/* ★ 代号：停止时 ++ ✗ —— runTask 入口记下自己的号，变了就整个链条退出 ✓★ */
+let taskGen = 0;
+function aborted(gen) { return gen !== taskGen; }
+
 /* ★ 收尾核对（铁律 3 的程序强制）★
    TASK_TARGET = 这一轮任务里"要找到的那个东西"（只认带引号的目标名 ✓）
    targetChecked = 是否已经催过她一次（★只催一次，绝不无限循环 ✗★） */
@@ -888,6 +908,16 @@ function newLoop() {
   return window.PetLoop.create({ lookOnlyTools: LOOK_ONLY_TOOLS, lookStreakMax: LOOK_STREAK_MAX, stepBudget: stepBudget });
 }
 async function runTask(msgEl, action, depth) {
+  /* ★★ 中止检查（说停就停）★★ —— 记下我这一代的号 ✓ */
+  const myGen = taskGen;
+  if (aborted(myGen)) {
+    /* 用户已经喊停了 ✓ —— 静默退出，不再做任何动作 ✗ */
+    try { procDone(); } catch (e) {}
+    try { if (LOOP) taskStopReason = LOOP.finish('aborted').reason; } catch (e) {}
+    if (!taskStopReason) taskStopReason = '用户喊停（aborted）';
+    try { reportTask(); } catch (e) {}
+    return;
+  }
   if (depth === 1) {
     taskFailed = false; lookStreak = 0; taskStopReason = null; promiseNudge = 0; LOOP = newLoop();
     /* ★ 首轮：从这一轮任务的原文里取出"要找到的目标"★ */
@@ -1100,6 +1130,27 @@ async function send(text, opts) {
   try { lastUserText = String(text || ""); } catch (e) {}
   text = String(text || '').trim();
   if (!text || busy) return;
+  /* ★★★ 停止指令：先把正在跑的任务链断掉 ✗→✓ ★★★
+     ★顺序很重要✗★：先 ++ 代号（让 in-flight 的 runTask 失效 ✓），
+     再去请她回一句话 ✓ —— 而且**不管她回什么动作都不执行** ✗ */
+  if (isStopCmd(text)) {
+    taskGen++;
+    addUser(text, opts);
+    busy = true;
+    try {
+      const reply = await window.petAPI.chatSend({ text });
+      const pe = addPet(reply.en, reply.zh, reply.words);
+      renderChoices(reply.choices);
+      refreshMood();
+      /* ★无视她回复里的动作 ✗★ —— 免得她"停"完又点一下 ✓ */
+      if (reply.action) {
+        addSys("⏹ 你刚说过停 —— 这一轮的任务链已经断了 ✓，所以这个动作我没有执行 ✓");
+      }
+      speak(reply.en);
+    } catch (e) { addErr(e.message || String(e)); }
+    busy = false;
+    return;
+  }
   busy = true;
   $('input').value = ''; $('choices').innerHTML = '';
   addUser(text, opts);
@@ -1658,3 +1709,118 @@ function greet() {
     { en: 'Morning! A bit sleepy though.', zh: '早！不过还有点困。', ipa: '/ˈmɔːnɪŋ! ə bɪt ˈsliːpi ðəʊ/' }
   ]);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ★★★ 【停止】选项（2026-10-10）—— 主人："给个停止的选项，你今天必须修好"★★★
+ *
+ * 【为什么必须有它 ✗】（今天的真实现场）
+ *   唯一的停止开关是上面那个 STOP_RE：★整条消息必须恰好是一个"停"字★ ✗，
+ *   而且它走的是**聊天消息**这条路 ✓ —— 她跑任务时聊天框还是**最小化**的 ✓
+ *   （见 main.js 的"任务期隐藏"✓）→ 主人按什么、点什么都停不下来 ✗ → 他火了 ✓。
+ *
+ * 【现在两条路都接上，机制**复用**已有的 `taskGen` 代际号 ✓（不新造 ✗）】
+ *   ① 界面上的「⏹ 停止」按钮（#stop ✓ 一直在 ✓，跑任务时会闪一下 ✓）；
+ *   ② ★全局快捷键 Ctrl+Alt+S★（main.js 的 globalShortcut ✓，任何窗口焦点下都有效 ✓）
+ *      —— 它从 main 发 `task:stop` 过来 ✓，这里收到后走**同一个** applyStop ✓。
+ *
+ * 【停止要"真的停"✗→✓：这里做四件事，顺序有意义 ✗★】
+ *   ① `taskGen++` —— ★先断代★：任何 in-flight 的 runTask 一回到入口就静默退出 ✓，
+ *      而且后面每一次递归调用都带着旧代号 ✓ → ★一个动作都不会再执行★ ✓；
+ *   ② `LOOP.finish('interrupted')` —— ★冻结停止原因★ ✓：loop.js 的 finish 是"第一次说了算"✓，
+ *      所以之后 runTask 再问一次，拿到的仍然是 interrupted ✓（不会被改写成 completed ✗），
+ *      最终 reportTask 把它**如实落进会话日志** ✓（照 DSH 的 turn/end ✓）；
+ *   ③ 停朗读 + 清掉还没批准的动作条 ✓（停止之后屏幕上不该还留着一个"允许"等我点 ✗）；
+ *   ④ 立刻在聊天窗里写一行状态 ✓（main 还会让桌宠弹一个气泡 ✓ —— 聊天框最小化时也看得见 ✓）。
+ *
+ * ★这一段是"只加不改"✗★：不动上面任何一行已有逻辑 ✓（那是主人反复强调的：渲染层不敢乱动 ✓），
+ *  只从外面挂事件 ✓；并且留了 `window.__petStop` 给探针**真的**点一下 ✓（不是自查自报 ✓）。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  let stopHotkey = '';   // ★真正注册上的那个全局键★（问主进程要来 ✓；见下面 taskStopState ✓）
+
+  function applyStop(via) {
+    const why = String(via || '停止按钮');
+    /* ★① 断代★（关键：这一步之后 runTask 的任何一次进入都会走 aborted 分支 ✓） */
+    taskGen++;
+    /* ★② 冻结停止原因★ —— interrupted（外部强制中断 ✓，与"聊天里喊停"的 aborted 分开 ✓） */
+    let r = null;
+    try { if (LOOP) r = LOOP.finish('interrupted', { via: why }); } catch (e) {}
+    taskStopReason = (r && r.reason) ? r.reason : 'interrupted';
+    /* ★③ 她说的话 / 待批准的动作一起停★ */
+    try { stopSpeech(); } catch (e) {}
+    try {
+      document.querySelectorAll('.actionbar').forEach((b) => {
+        try { b.remove(); } catch (e2) {}
+      });
+    } catch (e) {}
+    try { procDone(); } catch (e) {}
+    /* ★④ 状态要看得见★ */
+    try {
+      addSys((r && r.message) || ('⏹ 已停止（' + why + '）—— 接下来一个动作都不会再执行 ✓'));
+    } catch (e) {}
+    try { $('stop').textContent = '⏹ 已停止'; } catch (e) {}
+    try { $('stop').classList.remove('pulse'); } catch (e) {}
+    const t = setTimeout(() => { try { const b = $('stop'); if (b) b.textContent = '⏹ 停止'; } catch (e) {} }, 2500);
+    void t;
+    return { ok: true, reason: taskStopReason, via: why, gen: taskGen };
+  }
+
+  /* 按钮：点一下就停 ✓ */
+  try {
+    const btn = $('stop');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        applyStop('停止按钮');
+        /* 顺带告诉 main（那一层也有一道闸门 ✓，而且快捷键与它共用同一个状态 ✓） */
+        try { if (window.petAPI.taskStop) window.petAPI.taskStop('停止按钮'); } catch (e) {}
+      });
+    }
+  } catch (e) {}
+
+  /* ★"跑任务时亮起来"✗→✓：每秒看一眼主循环的状态（纯内存读 ✓ 不花钱 ✓）——
+     她正在跑 → 按钮闪一下（一眼看出"这个键能停"✓）；跑完了 → 恢复常态 ✓。
+     ★为什么不常亮 ✗★：常亮会变成背景噪音 ✓，而且主人会以为"一直在跑"✗。 */
+  setInterval(() => {
+    try {
+      const b = $('stop');
+      if (!b) return;
+      const s = LOOP ? LOOP.stats() : null;
+      const running = !!(s && s.started && !s.reason);
+      if (running && !b.classList.contains('pulse')) b.classList.add('pulse');
+      else if (!running && b.classList.contains('pulse')) b.classList.remove('pulse');
+    } catch (e) {}
+  }, 1000);
+
+  /* ★按钮上写的快捷键必须**是真的那一个**✗→✓（真机踩到的）：
+     我在 chat.html 上写了 "Ctrl+Alt+S" ✓，而**真机实测这个键在这台机器上注册不上**✗
+     （被别的程序占着 ✓，干净进程里试也失败 ✓）→ 主进程会自动换一个能注册的键 ✓。
+     ★所以这里去问主进程"你到底注册上了哪个"✓，按实话改 title ✓
+     —— 界面上写一个按了没反应的键，正是今天主人最恼的那件事 ✗。 */
+  try {
+    if (window.petAPI.taskStopState) {
+      Promise.resolve(window.petAPI.taskStopState()).then((s) => {
+        const b = $('stop');
+        if (!b) return;
+        stopHotkey = (s && s.hotkey) || '';
+        if (stopHotkey) b.title = '停止当前任务（全局快捷键 ' + stopHotkey + '，任何窗口焦点下都有效）';
+        else b.title = '停止当前任务（★全局快捷键没注册上✗——可能是被别的软件占用了 ✓；这个按钮一直可用 ✓）';
+      }).catch(() => {});
+    }
+  } catch (e) {}
+
+  /* 全局快捷键 / 聊天里喊停 → main 发过来的事件 ✓ */
+  try {
+    if (window.petAPI.onTaskStop) {
+      window.petAPI.onTaskStop((d) => { applyStop((d && d.via) || '外部停止'); });
+    }
+  } catch (e) {}
+
+  /* ★给探针用的真入口★（probe-stop.js 调它 = 真的按一次按钮 ✓，不是"自查自报"✓） */
+  try {
+    window.__petStop = (via) => applyStop(via || '探针');
+    window.__petStopState = () => ({ taskGen, taskStopReason, hotkey: stopHotkey });
+    /* 探针要模拟"真的点按钮"：返回按钮元素，点了会走上面那条 listener ✓ */
+    window.__petStopBtn = () => $('stop');
+  } catch (e) {}
+})();

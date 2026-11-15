@@ -1,0 +1,113 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+
+const mocks = vi.hoisted(() => ({ request: vi.fn(), showChat: vi.fn(), showPetMenu: vi.fn(), startDrag: vi.fn(), endDrag: vi.fn(), audioPlay: vi.fn(), events: new Set<(frame: any) => void>(), moodEnabled: true }));
+
+vi.mock('./assets/click-duck.wav', () => ({ default: '/click-duck.wav' }));
+
+vi.mock('./petd', () => ({
+  usePetdStatus: () => ({ state: 'connected' }),
+  request: mocks.request,
+  subscribeEvents: (listener: (frame: any) => void) => { mocks.events.add(listener); return () => mocks.events.delete(listener); },
+}));
+
+import { App } from './ui';
+
+const snapshot = { mood: 71, affection: 32, energy: 80, pokes: 3, updatedAt: 10, tiers: { mood: '心情不错', affection: '逐渐熟悉', energy: '很正常' } };
+function pointerDown(target: Element, pointerId = 1, clientX = 20, clientY = 20) { fireEvent.pointerDown(target, { button: 0, pointerId, clientX, clientY }); }
+function pointerUp(target: Element, pointerId = 1, clientX = 20, clientY = 20) { fireEvent.pointerUp(target, { button: 0, pointerId, clientX, clientY }); }
+
+beforeEach(() => {
+  cleanup(); localStorage.clear(); mocks.events.clear(); mocks.showChat.mockReset(); mocks.showPetMenu.mockReset(); mocks.startDrag.mockReset(); mocks.endDrag.mockReset(); mocks.request.mockReset();
+  mocks.audioPlay.mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal('Audio', class { currentTime = 0; volume = 1; play = mocks.audioPlay; });
+  mocks.moodEnabled = true;
+  window.history.replaceState({}, '', '/?pet=1');
+  Object.defineProperty(window, 'petdBootstrap', { configurable: true, value: { showChat: mocks.showChat, showPetMenu: mocks.showPetMenu, startDrag: mocks.startDrag, endDrag: mocks.endDrag } });
+  mocks.request.mockImplementation(async (method: string) => {
+    if (method === 'mood.status') return { enabled: mocks.moodEnabled, state: snapshot };
+    if (method === 'mood.history') return { entries: [] };
+    if (method === 'mood.poke') return { ...snapshot, mood: 72, pokes: 4 };
+    return {};
+  });
+});
+
+afterEach(() => { vi.restoreAllMocks(); window.history.replaceState({}, '', '/'); cleanup(); });
+
+describe('PetOverlay mood interaction', () => {
+  it('shows the legacy reaction bubble on a single poke without opening chat', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    render(<App/>);
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
+    const artwork = pet.querySelector('.pet-float')!;
+    const reflow = vi.fn(() => 110);
+    Object.defineProperty(artwork, 'offsetWidth', { configurable: true, get: reflow });
+    pointerDown(artwork); pointerUp(artwork);
+    await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
+    expect(await screen.findByText('哼！我才不是吃白饭的大肥鱼！')).toBeTruthy();
+    expect(screen.getByText('Hmph! I am NOT a freeloader fat fish!')).toBeTruthy();
+    expect(mocks.startDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.endDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.showChat).not.toHaveBeenCalled();
+    expect(pet.querySelector('.pet-bounce')).toBeTruthy();
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
+    expect(reflow).toHaveBeenCalledTimes(1);
+    expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
+    expect(pet.querySelector('.pet-reply-bubble')).toBeTruthy();
+  });
+
+  it('keeps double-click on the pet and does not open chat', async () => {
+    render(<App/>);
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
+    const artwork = pet.querySelector('.pet-float')!;
+    const reflow = vi.fn(() => 110);
+    Object.defineProperty(artwork, 'offsetWidth', { configurable: true, get: reflow });
+    pointerDown(artwork); pointerUp(artwork);
+    pointerDown(artwork); pointerUp(artwork);
+    fireEvent.doubleClick(pet, { detail: 2 });
+    expect(mocks.showChat).not.toHaveBeenCalled();
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    expect(mocks.request.mock.calls.filter(([method]) => method === 'mood.poke')).toHaveLength(2);
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(2);
+    expect(reflow).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poke when mood is disabled', async () => {
+    mocks.moodEnabled = false;
+    render(<App/>);
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
+    const artwork = pet.querySelector('.pet-float')!;
+    pointerDown(artwork); pointerUp(artwork);
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
+    expect(pet.querySelector('.pet-bounce')).toBeTruthy();
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves the pet without treating a drag as a poke', async () => {
+    render(<App/>);
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
+    const artwork = pet.querySelector('.pet-float')!;
+    pointerDown(artwork, 2, 20, 20);
+    fireEvent.pointerMove(artwork, { pointerId: 2, clientX: 40, clientY: 20 });
+    pointerUp(artwork, 2, 40, 20);
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    expect(mocks.startDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.endDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
+    expect(mocks.audioPlay).not.toHaveBeenCalled();
+  });
+
+  it('does not show chat mood changes on the pet artwork', async () => {
+    render(<App/>);
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
+    act(() => { for (const listener of mocks.events) listener({ type: 'event', event: 'mood.changed', data: { state: snapshot, applied: [], source: 'chat' } }); });
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
+    expect(pet.textContent).toBe('');
+    expect(pet.classList.contains('pet-chat-nudge')).toBe(false);
+  });
+});

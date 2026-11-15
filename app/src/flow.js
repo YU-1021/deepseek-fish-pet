@@ -130,11 +130,36 @@ async function checkAssert(deps, assert, log) {
 }
 
 /* 执行一个动作 */
-async function doAction(deps, step, pt) {
+/* ★★ 2026-10-11：重放的坐标要**登记成 offer**，而不是开豁免 ★★（主人的决定）
+   理由：重放里的坐标不是猜的 —— 它来自**一次真实成功动作** ✓，本身就是有效证据。
+   所以：这里按 `source:'replay'` 记进账本（连同**录制时间**和**原动作 id** ✓），
+   于是它自然通过"坐标必须有定位来源"那道闸门 ✓，而且事后可审计"这个点是谁给的" ✓。
+   ⚠️ 绝不给流程开 `requireOffer:false`（那条路只留给探针/开发，且必须显式写 why ✓）。 */
+function replayOffer(step, pt, ctx) {
+  try {
+    if (!pt || !Number.isFinite(Number(pt.x))) return;
+    const how = String(pt.how || 'xy');
+    /* target=xy 只是"照搬一个录下来的坐标" ✓；template/text 是**当场重新定位**的坐标 ✓ —— 两种都记，
+       但 from 里写清楚是哪种，免得把"重放"和"现测"混为一谈 ✓ */
+    require('./prov').instance.offer(pt.x, pt.y, 'flow_run(replay:' + how + ')',
+      '流程「' + ((ctx && ctx.flowName) || '?') + '」第 ' + ((ctx && ctx.index) || '?') + ' 步 ' + String(step.action || '')
+      + (ctx && ctx.recordedAt ? '（录制于 ' + new Date(ctx.recordedAt).toLocaleString() + '）' : ''),
+      {
+        source: 'replay',
+        how: how,
+        stepId: (step && step.id != null) ? step.id : ((ctx && ctx.index) || null),
+        recordedAt: (ctx && ctx.recordedAt) || null,
+        flow: (ctx && ctx.flowName) || null,
+      });
+  } catch (e) { /* 记账绝不能影响重放 ✓ */ }
+}
+
+async function doAction(deps, step, pt, ctx) {
   const a = step.action;
   if (a === 'wait') return { ok: true };
   if (a === 'click' || a === 'rclick' || a === 'move') {
     if (!pt) return { ok: false, error: '要点击但没有解析出坐标' };
+    replayOffer(step, pt, ctx);
     if (a === 'click') await deps.click(pt.x, pt.y);
     else if (a === 'rclick') await deps.rclick(pt.x, pt.y);
     else await deps.move(pt.x, pt.y);
@@ -144,6 +169,7 @@ async function doAction(deps, step, pt) {
   if (a === 'type') { await deps.type(step.arg || ''); return { ok: true }; }
   if (a === 'scroll') {
     if (!pt) return { ok: false, error: '要滚动但没有解析出坐标' };
+    replayOffer(step, pt, ctx);
     await deps.scroll(pt.x, pt.y, step.arg || 'down');
     return { ok: true };
   }
@@ -174,7 +200,10 @@ async function runFlow(deps, flow, opts) {
         if (pt && !pt.ok) { lastErr = pt.error; rec.target = pt; }
         else {
           if (pt) rec.target = pt;
-          const act = await doAction(deps, st, pt);
+          const act = await doAction(deps, st, pt, {
+            flowName: report.name, index: i + 1,
+            recordedAt: st.at || st.recordedAt || (flow && flow.savedAt) || null,
+          });
           if (!act.ok) lastErr = act.error;
           else {
             await waitFor(deps, st.wait, log);
