@@ -30,7 +30,7 @@ Real petd smoke run (using `%TEMP%\petd-ui-dev`, not the default home): connecte
 
 ![Pet window showing only the portrait](docs/evidence/m7-pet.png)
 
-Repeated click feedback uses Web Animations API so every tap restarts the Q-bounce:
+Click feedback ports the legacy `.bounce` keyframes and restarts them on every tap:
 
 ![Pet Q-bounce after a click](docs/evidence/pet-bounce-demo.png)
 

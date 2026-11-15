@@ -135,11 +135,10 @@ export function App() {
 function PetOverlay() {
   const { enabled } = useMoodState();
   const bounceTimer = useRef<number | undefined>(undefined);
-  const petVideo = useRef<HTMLVideoElement | null>(null);
+  const petFloat = useRef<HTMLDivElement | null>(null);
   const clickAudio = useRef<HTMLAudioElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerMoved = useRef(false);
-  const [bouncing, setBouncing] = useState(false);
   async function poke() {
     if (enabled !== true) return;
     try {
@@ -147,16 +146,14 @@ function PetOverlay() {
     } catch { /* pet window keeps the interaction quiet when petd is offline */ }
   }
   function playClickFeedback() {
-    setBouncing(true);
-    petVideo.current?.animate([
-      { transform: 'scale(1)' },
-      { transform: 'scale(.9, .84) translateY(-6px)', offset: .25 },
-      { transform: 'scale(1.08, 1.1) translateY(2px)', offset: .5 },
-      { transform: 'scale(.97, 1.03)', offset: .75 },
-      { transform: 'scale(1)' },
-    ], { duration: 550, easing: 'cubic-bezier(.34, 1.56, .64, 1)' });
+    const pet = petFloat.current;
+    if (pet) {
+      pet.classList.remove('pet-bounce');
+      void pet.offsetWidth;
+      pet.classList.add('pet-bounce');
+    }
     if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
-    bounceTimer.current = window.setTimeout(() => setBouncing(false), 460);
+    bounceTimer.current = window.setTimeout(() => pet?.classList.remove('pet-bounce'), 600);
     try {
       clickAudio.current ??= new Audio(clickDuck);
       clickAudio.current.volume = 0.5;
@@ -209,7 +206,7 @@ function PetOverlay() {
   }, []);
   return <div className="pet-overlay" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 拖动移动 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
-    <div className={`pet-float ${bouncing ? 'pet-bounce' : ''}`}><video ref={petVideo} src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+    <div ref={petFloat} className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
   </div>;
 }
 
