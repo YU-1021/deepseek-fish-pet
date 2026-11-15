@@ -20,7 +20,7 @@ The Memory panel uses `memory.list/read/write/history/diff` and `blob.list/put/g
 
 ## M7 mood and status
 
-Settings shows petd-backed mood, affection, energy, recent history, and read-only mood config. Exact values are hidden by default; the debug checkbox is stored in local UI preferences. The pet window displays only the idle portrait; a confirmed single click plays the bundled `dsh-pet` click sound, adds a short Q-bounce animation, and sends `mood.poke` without adding mood indicators or expression overlays. The settings view subscribes to `mood.changed` and reloads `mood.status` on reconnect; pet-ui does not calculate chat mood changes.
+Settings shows petd-backed mood, affection, energy, recent history, and read-only mood config. Exact values are hidden by default; the debug checkbox is stored in local UI preferences. The pet window shows the idle portrait and a short bilingual reaction bubble after a click; it plays the bundled `dsh-pet` click sound, runs the legacy Q-bounce animation, and sends `mood.poke` without adding mood indicators or expression overlays. The settings view subscribes to `mood.changed` and reloads `mood.status` on reconnect; pet-ui does not calculate chat mood changes.
 
 Mock coverage: `pnpm --filter @petd/pet-ui test` — 19 component checks passing.
 
@@ -30,9 +30,9 @@ Real petd smoke run (using `%TEMP%\petd-ui-dev`, not the default home): connecte
 
 ![Pet window showing only the portrait](docs/evidence/m7-pet.png)
 
-Click feedback ports the legacy `.bounce` keyframes and restarts them on every tap:
+Click feedback ports the legacy reaction bubble below the portrait, with its bilingual poke lines and `.bounce` keyframes. The pet window grows for the bubble and shrinks after it fades:
 
-![Pet Q-bounce after a click](docs/evidence/pet-bounce-demo.png)
+![Pet interaction bubble and portrait after a click](docs/evidence/pet-interaction-demo.png)
 
 ## Screenshots and build evidence
 

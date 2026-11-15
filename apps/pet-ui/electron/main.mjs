@@ -12,14 +12,18 @@ let memoryWorkspace;
 const thumbnailCache = new Map();
 let petDragTimer;
 let petDrag;
-const petHitRegions = [
+const petArtHitRegions = [
   { x: 112, y: 40, width: 56, height: 34 },
   { x: 94, y: 66, width: 92, height: 68 },
   { x: 99, y: 128, width: 82, height: 34 },
   { x: 80, y: 163, width: 120, height: 22 },
 ];
-function applyPetHitRegions(window) {
-  if (process.platform === 'win32' && typeof window.setShape === 'function') window.setShape(petHitRegions);
+function applyPetHitRegions(window, height = 190) {
+  if (process.platform === 'win32' && typeof window.setShape === 'function') {
+    const regions = [...petArtHitRegions];
+    if (height > 190) regions.push({ x: 0, y: 168, width: 280, height: height - 168 });
+    window.setShape(regions);
+  }
 }
 function petdHome() {
   if (process.env.PETD_HOME?.trim()) return path.resolve(process.env.PETD_HOME);
@@ -101,6 +105,14 @@ function endPetDrag() {
 }
 ipcMain.handle('pet:drag-start', (event) => { if (event.sender === petWindow?.webContents) startPetDrag(); });
 ipcMain.handle('pet:drag-end', (event) => { if (event.sender === petWindow?.webContents) endPetDrag(); });
+ipcMain.handle('pet:resize', (event, requestedHeight) => {
+  if (event.sender !== petWindow?.webContents || !petWindow || petWindow.isDestroyed()) return 190;
+  const height = Math.ceil(Math.min(420, Math.max(190, Number(requestedHeight) || 190)));
+  const bounds = petWindow.getBounds();
+  if (bounds.height !== height) petWindow.setBounds({ ...bounds, height });
+  applyPetHitRegions(petWindow, height);
+  return height;
+});
 ipcMain.handle('pet:show-menu', () => {
   if (!petWindow || petWindow.isDestroyed()) return;
   Menu.buildFromTemplate([

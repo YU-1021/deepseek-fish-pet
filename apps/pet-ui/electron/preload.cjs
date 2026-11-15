@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
   showPetMenu: () => ipcRenderer.invoke('pet:show-menu'),
   startDrag: () => ipcRenderer.invoke('pet:drag-start'),
   endDrag: () => ipcRenderer.invoke('pet:drag-end'),
+  resizePet: (height) => ipcRenderer.invoke('pet:resize', height),
 });

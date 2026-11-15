@@ -12,6 +12,13 @@ import clickDuck from './assets/click-duck.wav';
 type Session = { id: string; title: string; updatedAt: string; messageCount: number };
 type Message = { role: 'user' | 'assistant'; content: string; ts: string };
 type View = 'chat' | 'persona' | 'memory' | 'settings';
+const pokeReactions = [
+  { en: 'Hmph! I am NOT a freeloader fat fish!', zh: '哼！我才不是吃白饭的大肥鱼！' },
+  { en: 'H-hey, stop poking me...', zh: '喂、喂，别乱戳我……' },
+  { en: 'W-what? I did not hear anything!', zh: '什么？我什么都没听见！' },
+  { en: 'You worked hard today... n-not that I care.', zh: '你今天很努力……才、才不是关心你呢。' },
+  { en: 'Poke me again and I will get angry!', zh: '再戳我我可要生气了！' },
+];
 const friendlyError = (error: any) => {
   const code = String(error?.code ?? '');
   const known: Record<string, string> = {
@@ -135,10 +142,26 @@ export function App() {
 function PetOverlay() {
   const { enabled } = useMoodState();
   const bounceTimer = useRef<number | undefined>(undefined);
+  const reactionTimer = useRef<number | undefined>(undefined);
   const petFloat = useRef<HTMLDivElement | null>(null);
   const clickAudio = useRef<HTMLAudioElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerMoved = useRef(false);
+  const [reaction, setReaction] = useState<{ en: string; zh: string } | null>(null);
+  useEffect(() => {
+    const overlay = document.querySelector('.pet-overlay');
+    if (!overlay) return;
+    const resize = () => { void window.petdBootstrap?.resizePet?.(Math.ceil(overlay.getBoundingClientRect().height)); };
+    resize();
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(resize);
+    observer?.observe(overlay);
+    return () => {
+      observer?.disconnect();
+      if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
+      if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
+      void window.petdBootstrap?.resizePet?.(190);
+    };
+  }, []);
   async function poke() {
     if (enabled !== true) return;
     try {
@@ -146,6 +169,9 @@ function PetOverlay() {
     } catch { /* pet window keeps the interaction quiet when petd is offline */ }
   }
   function playClickFeedback() {
+    setReaction(pokeReactions[Math.floor(Math.random() * pokeReactions.length)]);
+    if (reactionTimer.current) window.clearTimeout(reactionTimer.current);
+    reactionTimer.current = window.setTimeout(() => setReaction(null), 6000);
     const pet = petFloat.current;
     if (pet) {
       pet.classList.remove('pet-bounce');
@@ -198,15 +224,14 @@ function PetOverlay() {
       void window.petdBootstrap?.endDrag();
     };
     window.addEventListener('blur', releasePointer);
-    return () => {
-      window.removeEventListener('blur', releasePointer);
-      if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
-      releasePointer();
-    };
+    return () => { window.removeEventListener('blur', releasePointer); releasePointer(); };
   }, []);
-  return <div className="pet-overlay" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 拖动移动 · 右键菜单">
+  return <div className="pet-overlay" onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下戳戳 · 拖动移动 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
-    <div ref={petFloat} className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+    <div className="pet-art-target" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
+      <div ref={petFloat} className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+    </div>
+    {reaction && <div className="pet-reply-bubble" role="status" aria-live="polite"><div className="en">{reaction.en}</div><div className="zh">{reaction.zh}</div></div>}
   </div>;
 }
 

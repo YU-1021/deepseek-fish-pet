@@ -33,18 +33,21 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => { window.history.replaceState({}, '', '/'); cleanup(); });
+afterEach(() => { vi.restoreAllMocks(); window.history.replaceState({}, '', '/'); cleanup(); });
 
 describe('PetOverlay mood interaction', () => {
-  it('pokes once on a single click while keeping the pet window artwork-only', async () => {
+  it('shows the legacy reaction bubble on a single poke without opening chat', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     const reflow = vi.fn(() => 110);
     Object.defineProperty(artwork, 'offsetWidth', { configurable: true, get: reflow });
     pointerDown(artwork); pointerUp(artwork);
     await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
+    expect(await screen.findByText('哼！我才不是吃白饭的大肥鱼！')).toBeTruthy();
+    expect(screen.getByText('Hmph! I am NOT a freeloader fat fish!')).toBeTruthy();
     expect(mocks.startDrag).toHaveBeenCalledTimes(1);
     expect(mocks.endDrag).toHaveBeenCalledTimes(1);
     expect(mocks.showChat).not.toHaveBeenCalled();
@@ -52,13 +55,13 @@ describe('PetOverlay mood interaction', () => {
     expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
     expect(reflow).toHaveBeenCalledTimes(1);
     expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
-    expect(pet.textContent).toBe('');
+    expect(pet.querySelector('.pet-reply-bubble')).toBeTruthy();
   });
 
   it('keeps double-click on the pet and does not open chat', async () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     const reflow = vi.fn(() => 110);
     Object.defineProperty(artwork, 'offsetWidth', { configurable: true, get: reflow });
@@ -75,7 +78,7 @@ describe('PetOverlay mood interaction', () => {
   it('does not poke when mood is disabled', async () => {
     mocks.moodEnabled = false;
     render(<App/>);
-    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork); pointerUp(artwork);
     await new Promise((resolve) => window.setTimeout(resolve, 300));
@@ -87,7 +90,7 @@ describe('PetOverlay mood interaction', () => {
   it('moves the pet without treating a drag as a poke', async () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
-    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
     const artwork = pet.querySelector('.pet-float')!;
     pointerDown(artwork, 2, 20, 20);
     fireEvent.pointerMove(artwork, { pointerId: 2, clientX: 40, clientY: 20 });
@@ -103,7 +106,7 @@ describe('PetOverlay mood interaction', () => {
     render(<App/>);
     await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
     act(() => { for (const listener of mocks.events) listener({ type: 'event', event: 'mood.changed', data: { state: snapshot, applied: [], source: 'chat' } }); });
-    const pet = screen.getByTitle('点一下摸摸 · 拖动移动 · 右键菜单');
+    const pet = screen.getByTitle('点一下戳戳 · 拖动移动 · 右键菜单');
     expect(pet.textContent).toBe('');
     expect(pet.classList.contains('pet-chat-nudge')).toBe(false);
   });
