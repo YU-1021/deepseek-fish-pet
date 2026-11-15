@@ -6,12 +6,12 @@
  * Git 不可用或建仓失败时文件照写，只是没有版本历史。见 docs/记忆移植来源.md。
  */
 import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** 幂等补齐 Git 忽略规则与行尾属性；已有文件保持原样。 */
+/** 幂等补齐 Git 忽略规则与行尾属性；已有文件保持原样（.gitignore 缺规则时追加）。 */
 const REPO_FILES: ReadonlyArray<readonly [string, string]> = [
-  ['.gitignore', '# 工作区版本管理：忽略原子写临时文件\n*.tmp-*\n'],
+  ['.gitignore', '# 工作区版本管理：忽略原子写临时文件\n*.tmp-*\n# 附件二进制不纳入版本历史\nblobs/\n'],
   ['.gitattributes', '# 行尾一律原样：笔记里有靠原文对齐的地方，git 不替我们改写\n* -text\n'],
 ];
 
@@ -178,7 +178,37 @@ export class WorkspaceGit {
   private ensureRepoFiles(): void {
     for (const [name, body] of REPO_FILES) {
       const file = path.join(this.dir, name);
-      if (!existsSync(file)) writeFileSync(file, body, 'utf8');
+      if (!existsSync(file)) {
+        writeFileSync(file, body, 'utf8');
+        continue;
+      }
+      if (name === '.gitignore') this.ensureIgnoreRule(file, 'blobs/');
+    }
+  }
+
+  /** 老仓库的 .gitignore 可能没有 blobs/（附件不入版本历史），缺就补一行。 */
+  private ensureIgnoreRule(file: string, rule: string): void {
+    try {
+      const text = readFileSync(file, 'utf8');
+      if (text.split(/\r?\n/).some((line) => line.trim() === rule)) return;
+      const prefix = text.endsWith('\n') || text === '' ? '' : '\n';
+      appendFileSync(file, `${prefix}# 附件二进制不纳入版本历史\n${rule}\n`, 'utf8');
+    } catch {
+      // 读不到/写不了就下次再说，不影响文件读写。
+    }
+  }
+
+  /** 老仓库里 blobs/ 若已被跟踪过，取消跟踪（磁盘文件保留，历史不回改）。 */
+  private untrackBlobs(): void {
+    try {
+      const tracked = this.run(['ls-files', '--', 'blobs/']).trim();
+      if (tracked === '') return;
+      this.run(['rm', '--cached', '-r', '-q', '--', 'blobs/']);
+      this.run(['add', '--', '.gitignore']);
+      this.run([...this.authorArgs(AUTHOR_PETD), 'commit', '-m', 'petd: blobs/ 不再纳入版本历史', '--', '.gitignore', 'blobs']);
+      this.warn('已把 blobs/ 从版本历史中移出（磁盘文件保留）', { dir: this.dir });
+    } catch (e) {
+      this.warn('取消跟踪 blobs/ 失败（不影响附件读写）', { dir: this.dir, err: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -215,7 +245,10 @@ export class WorkspaceGit {
     try {
       this.init();
       this.initError = null;
-      if (this.isRepo()) this.ensureRepoFiles();
+      if (this.isRepo()) {
+        this.ensureRepoFiles();
+        this.untrackBlobs();
+      }
     } catch (e) {
       this.initError = e instanceof Error ? e.message : String(e);
       if (!this.warnedInitFail) {

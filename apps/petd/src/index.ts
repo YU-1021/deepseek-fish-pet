@@ -28,6 +28,7 @@ import { registerHealth } from './gateway/methods/health.js';
 import { registerChatMethods } from './gateway/methods/chat.js';
 import { registerPersonaMethods } from './gateway/methods/persona.js';
 import { registerMemoryMethods } from './gateway/methods/memory.js';
+import { registerBlobMethods } from './gateway/methods/blob.js';
 import { ChatStore } from './chat/store.js';
 import { ChatService } from './chat/service.js';
 import { PersonaStore } from './persona/store.js';
@@ -37,6 +38,7 @@ import { createLlmClient } from './llm/client.js';
 import { WorkspaceMemory } from './memory/store.js';
 import { WorkspaceGit } from './memory/git.js';
 import { MemoryService } from './memory/service.js';
+import { BlobStore } from './memory/blob.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 
@@ -179,6 +181,11 @@ async function main(): Promise<void> {
   memoryService.ensure();
   logger.info('工作区记忆已就绪', { dir: paths.memoryDir, files: memoryService.status().fileCount });
 
+  // ── 附件存储：blobs/ 下的二进制，内容寻址，不进制版本历史 ──
+  const blobs = new BlobStore(memory);
+  blobs.ensure();
+  logger.info('附件存储已就绪', { dir: path.join(paths.memoryDir, 'blobs'), files: blobs.list().length });
+
   const store = new ChatStore({ dir: path.join(paths.home, 'sessions'), logger });
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
   // 先发到进程内总线；网关起来后改为经 Gateway.publish 广播给 WS 客户端
@@ -196,7 +203,9 @@ async function main(): Promise<void> {
         service: memoryService,
         maxWrites: config.chat.maxToolWrites,
         maxResultChars: config.chat.toolResultChars,
+        blobs,
       }),
+    blobs,
     // 交接笔记跟着工作区走：写进 handoffs/ 会像普通记忆一样 Git 提交
     handoffIo: {
       readFile: (relPath) => memoryService.read(relPath).content,
@@ -228,6 +237,7 @@ async function main(): Promise<void> {
   });
   registerChatMethods(registry, { chat });
   registerMemoryMethods(registry, { memory: memoryService });
+  registerBlobMethods(registry, { blobs });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

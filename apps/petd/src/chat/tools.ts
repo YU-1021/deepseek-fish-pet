@@ -10,6 +10,8 @@
  */
 import { PetdError } from '@petd/protocol';
 import type { LlmToolCall, LlmToolDefinition } from '../llm/client.js';
+import type { BlobStore } from '../memory/blob.js';
+import { isTextMime } from '../memory/blob.js';
 import type { MemoryService } from '../memory/service.js';
 
 /** 声明给模型的工具（OpenAI function calling 格式） */
@@ -144,6 +146,43 @@ export const MEMORY_TOOLS: LlmToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'list_blobs',
+      description: '列出工作区附件（图片/文件，句柄形如 blob:xxx.png）。找用户发过的东西时先调它。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_blob',
+      description: '读一个文本类附件（txt/md/json/log 等）；图片/音频等二进制只返回元数据，看不到内容。',
+      parameters: {
+        type: 'object',
+        properties: { ref: { type: 'string', description: '附件句柄，如 blob:abc123-照片.png 或 blobs/abc123-照片.png' } },
+        required: ['ref'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_blob',
+      description: '把一段内容存成附件（文本或 base64），返回句柄。普通记忆笔记请用 write_file，这里只存二进制/原始附件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '带扩展名的文件名，如 录音.txt' },
+          mime: { type: 'string', description: 'MIME，可省略，按扩展名推断' },
+          text: { type: 'string', description: '文本内容（与 data_base64 二选一）' },
+          data_base64: { type: 'string', description: 'base64 内容（与 text 二选一）' },
+        },
+        required: ['name'],
+      },
+    },
+  },
 ];
 
 export interface ToolExecutionResult {
@@ -154,17 +193,20 @@ export interface ToolExecutionResult {
 
 export interface MemoryToolboxOptions {
   service: MemoryService;
+  /** 附件存储（blobs/）；不传 = 不启用附件工具 */
+  blobs?: BlobStore;
   /** 每轮允许的写操作次数 */
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
   maxResultChars: number;
 }
 
-/** 写操作：写/追加/编辑/删除/移动，都算一次配额 */
-const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'delete_file', 'move_file']);
+/** 写操作：写/追加/编辑/删除/移动/存附件，都算一次配额 */
+const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'delete_file', 'move_file', 'save_blob']);
 
 export class MemoryToolbox {
   private readonly service: MemoryService;
+  private readonly blobs?: BlobStore;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
   /** 本轮已用掉的写操作次数 */
@@ -172,6 +214,7 @@ export class MemoryToolbox {
 
   constructor(opts: MemoryToolboxOptions) {
     this.service = opts.service;
+    this.blobs = opts.blobs;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
   }
@@ -287,9 +330,45 @@ export class MemoryToolbox {
         const r = await this.service.move(str('from'), str('to'));
         return `已移动 ${r.from} → ${r.to}（Git ${r.commit ?? '无提交'}）`;
       }
+      case 'list_blobs': {
+        const blobs = this.requireBlobs().list();
+        if (blobs.length === 0) return '工作区里还没有附件。';
+        return `工作区附件（${blobs.length} 个）：\n${blobs
+          .map((b) => `- ${b.handle}（${b.name}，${b.mime}，${b.size} 字节，${b.createdAt}）`)
+          .join('\n')}`;
+      }
+      case 'read_blob': {
+        const { meta, data } = this.requireBlobs().getBytes(str('ref'));
+        if (!isTextMime(meta.mime)) {
+          return `${meta.handle} 是二进制附件（${meta.mime}，${meta.size} 字节），当前没有视觉/音频解析能力，只能确认它存在；需要内容请让主人转成文字。`;
+        }
+        const text = data.toString('utf8');
+        return `（${meta.handle}，${meta.mime}，${meta.size} 字节，文本共 ${text.length} 字）\n${text}`;
+      }
+      case 'save_blob': {
+        const name = str('name');
+        const textBody = typeof args['text'] === 'string' ? args['text'] : undefined;
+        const base64Body = typeof args['data_base64'] === 'string' ? args['data_base64'] : undefined;
+        if (textBody === undefined && base64Body === undefined) {
+          throw new PetdError('E_BAD_PARAMS', 'save_blob 需要 text 或 data_base64 之一');
+        }
+        const data = base64Body !== undefined ? Buffer.from(base64Body, 'base64') : Buffer.from(textBody ?? '', 'utf8');
+        const meta = this.requireBlobs().put({
+          data,
+          name,
+          ...(typeof args['mime'] === 'string' && args['mime'].trim() !== '' ? { mime: args['mime'] } : {}),
+        });
+        return `已保存附件 ${meta.handle}（${meta.mime}，${meta.size} 字节）`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
+  }
+
+  /** 附件工具必须配了 BlobStore 才能用（避免误调时给出难懂的错） */
+  private requireBlobs(): BlobStore {
+    if (!this.blobs) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用附件存储');
+    return this.blobs;
   }
 
   private truncate(text: string): string {

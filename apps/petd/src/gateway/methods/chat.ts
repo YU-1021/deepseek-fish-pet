@@ -48,6 +48,13 @@ const ToolActivity = Type.Object({
   text: Type.String(),
 });
 
+const Attachment = Type.Object({
+  handle: Type.String(),
+  name: Type.String(),
+  mime: Type.String(),
+  size: Type.Integer(),
+});
+
 export interface ChatMethodDeps {
   chat: ChatService;
 }
@@ -137,6 +144,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
       params: Type.Object({
         sessionId: Type.Optional(Type.String({ minLength: 1 })),
         text: Type.String({ minLength: 1, maxLength: 8000 }),
+        attachments: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 400 }), { maxItems: 10 })),
       }),
       result: Type.Object({
         session: SessionMeta,
@@ -144,14 +152,20 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
         assistantMessage: Message,
         reply: Type.Object({ text: Type.String(), model: Type.String(), usage: Usage, finishReason: Type.Optional(Type.String()) }),
         tools: Type.Array(ToolActivity),
+        attachments: Type.Array(Attachment),
         handoff: Type.Union([HandoffActivity, Type.Null()]),
       }),
       timeoutMs: 120_000,
       idempotent: false,
     },
     async (params, ctx) => {
-      const p = params as { sessionId?: string; text: string };
-      const result = await deps.chat.send({ sessionId: p.sessionId, text: p.text, signal: ctx.signal });
+      const p = params as { sessionId?: string; text: string; attachments?: string[] };
+      const result = await deps.chat.send({
+        sessionId: p.sessionId,
+        text: p.text,
+        ...(p.attachments === undefined ? {} : { attachments: p.attachments }),
+        signal: ctx.signal,
+      });
       return {
         session: result.session,
         userMessage: result.userMessage,
@@ -163,6 +177,7 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
           ...(result.reply.finishReason === undefined ? {} : { finishReason: result.reply.finishReason }),
         },
         tools: result.tools,
+        attachments: result.attachments,
         handoff: result.handoff,
       };
     }

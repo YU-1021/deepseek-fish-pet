@@ -9,6 +9,7 @@
 import { PetdError } from '@petd/protocol';
 import type { PetdConfig } from '../kernel/config.js';
 import type { CompleteOptions, LlmMessage, LlmReply } from '../llm/client.js';
+import type { BlobMeta, BlobStore } from '../memory/blob.js';
 import { handoffPath, renderHandoffNote, estimateMessagesTokens, estimateTokens } from './handoff.js';
 import { clampTitle, DEFAULT_TITLE } from './store.js';
 import type { ChatStore, Session, SessionMeta, StoredMessage } from './store.js';
@@ -32,6 +33,8 @@ export interface ChatServiceOptions {
   toolbox?: () => MemoryToolbox;
   /** 交接笔记读写；不传 = 不做上下文交接 */
   handoffIo?: HandoffIo;
+  /** 附件存储；不传 = 聊天不能带附件 */
+  blobs?: BlobStore;
   logger?: { info(msg: string, data?: Record<string, unknown>): void; warn(msg: string, data?: Record<string, unknown>): void };
   now?: () => string;
 }
@@ -53,11 +56,16 @@ export interface HandoffActivity {
 export interface ChatSendInput {
   sessionId?: string;
   text: string;
+  /** 附件引用（句柄 `blob:x.png` 或 `blobs/x.png`），最多 10 个 */
+  attachments?: string[];
   signal?: AbortSignal;
   /** 测试/内部调用可覆盖 */
   maxTokens?: number;
   temperature?: number;
 }
+
+/** 本轮带的附件（回给 UI 显示;也用于拼进模型输入） */
+export type ChatAttachment = Pick<BlobMeta, 'handle' | 'name' | 'mime' | 'size'>;
 
 /** 一次工具调用（回给 UI 显示「它刚才翻了记忆」） */
 export interface ChatToolActivity {
@@ -75,6 +83,8 @@ export interface ChatSendResult {
   reply: LlmReply;
   /** 本轮模型用过的记忆工具（可能为空） */
   tools: ChatToolActivity[];
+  /** 本轮是否带了附件 */
+  attachments: ChatAttachment[];
   /** 本轮是否触发了上下文交接（没触发为 null） */
   handoff: HandoffActivity | null;
 }
@@ -87,6 +97,7 @@ export class ChatService {
   private readonly systemPrompt: () => string;
   private readonly toolbox?: () => MemoryToolbox;
   private readonly handoffIo?: HandoffIo;
+  private readonly blobs?: BlobStore;
   private readonly logger?: ChatServiceOptions['logger'];
   private readonly now: () => string;
 
@@ -98,6 +109,7 @@ export class ChatService {
     this.systemPrompt = opts.systemPrompt;
     this.toolbox = opts.toolbox;
     this.handoffIo = opts.handoffIo;
+    this.blobs = opts.blobs;
     this.logger = opts.logger;
     this.now = opts.now ?? (() => new Date().toISOString());
   }
@@ -135,6 +147,10 @@ export class ChatService {
     if (!text) throw new PetdError('E_BAD_PARAMS', '消息内容不能为空');
     if (text.length > 8000) throw new PetdError('E_BAD_PARAMS', '消息太长（上限 8000 字）');
 
+    // 附件：只校验存在性并取元数据；正文不变，附件句柄作为额外提示拼进这一轮的用户消息
+    const attachments = this.resolveAttachments(input.attachments ?? []);
+    const attachmentBlock = this.buildAttachmentBlock(attachments);
+
     let meta: SessionMeta;
     if (input.sessionId) {
       const session = this.store.get(input.sessionId);
@@ -146,13 +162,14 @@ export class ChatService {
 
     const history = this.store.get(meta.id)?.messages ?? [];
     const userMessage: StoredMessage = { role: 'user', content: text, ts: this.now() };
-    this.publish('chat.user_message', { sessionId: meta.id, message: userMessage });
+    this.publish('chat.user_message', { sessionId: meta.id, message: userMessage, attachments });
 
+    const promptText = text + attachmentBlock;
     const systemPrompt = this.systemPrompt();
     let handoff: HandoffActivity | null = null;
     let note = '';
     try {
-      const created = await this.maybeHandoff(meta, history, text, systemPrompt);
+      const created = await this.maybeHandoff(meta, history, promptText, systemPrompt);
       if (created) {
         handoff = created.activity;
         note = created.note;
@@ -167,7 +184,7 @@ export class ChatService {
     const active = history.slice(fresh.contextStart ?? 0);
     const messages: LlmMessage[] = [{ role: 'system', content: note ? systemPrompt + '\n\n' + note : systemPrompt }];
     for (const m of this.pickHistory(active)) messages.push({ role: m.role, content: m.content });
-    messages.push({ role: 'user', content: text });
+    messages.push({ role: 'user', content: promptText });
 
     const toolbox = this.chat.maxToolRounds > 0 && this.toolbox ? this.toolbox() : null;
     const toolDefs = toolbox ? MEMORY_TOOLS : undefined;
@@ -259,7 +276,25 @@ export class ChatService {
       replyChars: mergedReply.text.length,
       toolCalls: tools.length,
     });
-    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, handoff };
+    return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, attachments, handoff };
+  }
+
+  /** 校验附件引用并取元数据：不存在的直接报错，不让模型瞎猜 */
+  private resolveAttachments(refs: string[]): ChatAttachment[] {
+    if (refs.length === 0) return [];
+    if (refs.length > 10) throw new PetdError('E_BAD_PARAMS', '一次最多带 10 个附件');
+    if (!this.blobs) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用附件存储');
+    return refs.map((ref) => {
+      const meta = this.blobs!.resolve(ref);
+      return { handle: meta.handle, name: meta.name, mime: meta.mime, size: meta.size };
+    });
+  }
+
+  /** 附件信息拼进用户消息（只在这一轮生效，不写进会话正文） */
+  private buildAttachmentBlock(attachments: ChatAttachment[]): string {
+    if (attachments.length === 0) return '';
+    const lines = attachments.map((a) => `- 句柄 ${a.handle}（${a.name}，${a.mime}，${a.size} 字节）`);
+    return `\n\n[用户发来的附件]\n${lines.join('\n')}\n提示：文本附件可用 read_blob 读；图片/音频等二进制只能看到元数据。`;
   }
 
   /**

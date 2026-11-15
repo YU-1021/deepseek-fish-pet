@@ -1,4 +1,4 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件）
 
 这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）。
 
@@ -12,10 +12,11 @@
   - 方法：
     - 健康/配置：`health.ping` / `health.status` / `config.get`
     - 会话：`session.create` / `session.list` / `session.get` / `session.rename` / `session.delete`
-    - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件；模型可在回复前调记忆工具，见下节）
+    - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件；模型可在回复前调记忆工具，见下节；可带 `attachments` 附件句柄）
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
     - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.delete`
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
@@ -105,6 +106,18 @@
 - **手动**：`chat.handoff {sessionId}` 立刻交接一次（`force`，一定写笔记），返回 `{file,compressed,kept,tokensBefore,tokensAfter}`；自动交接成功也会广播 `chat.handoff` 事件，`chat.send` 结果里带 `handoff`。
 - **注意**：这是估算不是精算，真实 token 以模型返回的 `usage` 为准（`session.lastPromptTokens` 记的就是它）；`chat.contextMaxTokens` 设 0 可完全关掉自动交接。
 
+## 附件 blob（图片/文件）
+
+聊天里的图片、文件不往会话里塞 base64，而是存进工作区的 `blobs/`，给模型一个句柄（Cormini 的形状）：
+
+- **存**：`blob.put {dataBase64, name?, mime?}` → 返回 `{handle, name, path, mime, size, sha256, createdAt}`；单文件上限 8MB，文件名是内容寻址的 `<sha256 前 16 位>-<安全化的原名>.<扩展名>`，同样内容只存一份。
+- **句柄**：统一写作 `blob:<文件名>`（也接受 `blobs/<文件名>`）；会话、事件、`chat.send` 参数里都用它引用附件，不暴露绝对路径。
+- **读/查/删**：`blob.list`（按修改时间新到旧）、`blob.info`、`blob.get`（base64 原始字节）、`blob.delete`（物理删除）。
+- **聊天带附件**：`chat.send {text, attachments: [句柄…]}`（最多 10 个）——petd 先校验附件存在，再把「句柄 + 文件名 + mime + size」拼成一段提示附在本轮用户消息后面；**会话 JSONL 只存原始文本**，下一轮不会重复带附件块。`chat.send` 结果里回 `attachments[]` 供 UI 显示。
+- **模型能用附件**：记忆工具里多了 `list_blobs` / `read_blob` / `save_blob`——文本附件能读出内容；图片/音频等二进制只能拿到元数据（当前没有视觉/音频解析能力，会如实说看不到）。`save_blob` 计入写配额。
+- **Git**：`blobs/` 在 `.gitignore` 里，不进版本历史（老工作区若已跟踪过 `blobs/`，启动时会自动取消跟踪并提交一条记录）；附件文件本身仍在磁盘上，靠内容 hash 名保证不重名。
+
+
 ## 跑起来
 
 ```bat
@@ -131,6 +144,9 @@ node apps/petd/scripts/chat-memory-smoke.mjs
 
 :: 冒烟：上下文交接（真调六次模型；会看到 handoffs/ 笔记和 Git 提交）
 node apps/petd/scripts/chat-handoff-smoke.mjs
+
+:: 冒烟：附件 blob（真调一次模型；会看到 blobs/ 文件与句柄）
+node apps/petd/scripts/blob-smoke.mjs
 ```
 
 READY 行示例：
@@ -159,13 +175,14 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 104/104（网关/聊天/工具循环/交接/人格/记忆）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 116/116（网关/聊天/工具循环/交接/人格/记忆/附件）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
 cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，44 项；保留 home 可翻 workspace/.git）
 cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆端到端（真 LLM 两次：让它记一件事→工作区出现文件；再问→先读记忆再答）
 cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 六次；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
+cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -178,6 +195,8 @@ cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到�
 
 交接冒烟覆盖（26 项，真 LLM）：自动交接（4 轮后 compressed 4/kept 2、token 估算变小、`chat.handoff` 事件、`handoffs/*.md` 以 `# 交接笔记` 开头、Git 有 `petd wrote handoffs/…` 提交、会话 JSONL 8 条不丢、`contextStart`/`handoffFiles`/`lastPromptTokens` 落元数据）→ 下一轮历史从 `contextStart` 起且 system 带笔记；手动 `chat.handoff`（compressed 2/kept 2、第二篇笔记）；优雅退出。
 
+附件冒烟覆盖（25 项，真 LLM 一次）：`blob.put` 句柄格式/mime/size、同内容去重、`blob.list/info`（含 `blobs/<文件名>` 写法）、`blob.get` 原字节一致、文件真的在 `workspace/blobs/`、`.gitignore` 忽略且 Git 历史里没有 `blobs/` 路径、带附件 `chat.send`（真模型回复「看不到画面但确认是 PNG」、`attachments[]` 返回、会话正文与落盘都不含附件提示）、`blob.delete` 后列表为空且磁盘文件删除、优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、附件 blob 存储/向量检索、记忆工具的流式输出……
+语音/ASR/TTS、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……

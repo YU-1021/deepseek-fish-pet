@@ -10,6 +10,7 @@ import path from 'node:path';
 import { WorkspaceMemory } from '../memory/store.js';
 import { WorkspaceGit } from '../memory/git.js';
 import { MemoryService } from '../memory/service.js';
+import { BlobStore } from '../memory/blob.js';
 import { MemoryToolbox } from './tools.js';
 import type { LlmToolCall } from '../llm/client.js';
 
@@ -26,8 +27,8 @@ function call(name: string, args: Record<string, unknown>, id = 'call-1'): LlmTo
   return { id, name, arguments: JSON.stringify(args) };
 }
 
-function makeToolbox(service: MemoryService, maxWrites = 3, maxResultChars = 4000): MemoryToolbox {
-  return new MemoryToolbox({ service, maxWrites, maxResultChars });
+function makeToolbox(service: MemoryService, maxWrites = 3, maxResultChars = 4000, blobs?: BlobStore): MemoryToolbox {
+  return new MemoryToolbox({ service, maxWrites, maxResultChars, ...(blobs === undefined ? {} : { blobs }) });
 }
 
 test('write_file 后 read_file / list_files 能读出，写入计入配额', async () => {
@@ -141,4 +142,45 @@ test('结果截断：超长文本按 maxResultChars 截断并附提示', async (
   assert.equal(r.ok, true);
   assert.ok(r.text.length < 300);
   assert.match(r.text, /已截断到 100 字符/);
+});
+
+function tmpBlobBox(): { box: MemoryToolbox; service: MemoryService } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-toolbox-blob-'));
+  const memory = new WorkspaceMemory({ dir });
+  const git = new WorkspaceGit(dir);
+  const service = new MemoryService({ memory, git, version: 'test', logger: { info() {}, warn() {} } });
+  service.ensure();
+  const blobs = new BlobStore(memory);
+  blobs.ensure();
+  return { box: makeToolbox(service, 3, 4000, blobs), service };
+}
+
+test('save_blob / list_blobs / read_blob：句柄可用，save 计入写配额', async () => {
+  const { box } = tmpBlobBox();
+  const saved = await box.execute(call('save_blob', { text: '主人发来的文字附件', name: '留言.txt' }));
+  assert.equal(saved.ok, true);
+  assert.match(saved.text, /已保存附件 blob:[0-9a-f]{16}-留言\.txt/);
+  assert.equal(box.writes, 1, 'save_blob 算写操作');
+
+  const listed = await box.execute(call('list_blobs', {}));
+  assert.equal(listed.ok, true);
+  assert.match(listed.text, /留言\.txt/);
+
+  const handle = (saved.text.match(/blob:[0-9a-f]{16}-留言\.txt/)?.[0] ?? '').trim();
+  assert.ok(handle !== '');
+  const read = await box.execute(call('read_blob', { ref: handle }));
+  assert.equal(read.ok, true);
+  assert.match(read.text, /主人发来的文字附件/);
+
+  const missing = await box.execute(call('read_blob', { ref: 'blob:nope.txt' }));
+  assert.equal(missing.ok, false);
+  assert.match(missing.text, /E_NOT_FOUND/);
+});
+
+test('没配 BlobStore 时 blob 工具给出明确错误文本', async () => {
+  const service = tmpService();
+  const box = makeToolbox(service);
+  const r = await box.execute(call('list_blobs', {}));
+  assert.equal(r.ok, false);
+  assert.match(r.text, /没有启用附件存储/);
 });

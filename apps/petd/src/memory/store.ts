@@ -257,6 +257,37 @@ export class WorkspaceMemory {
     return readTextFile(abs);
   }
 
+  /** 读二进制（附件 blob 用）；文本读取仍走 readFile。 */
+  readBytes(relPath: string): Buffer {
+    const abs = this.resolveSafe(relPath);
+    if (!existsSync(abs)) throw new PetdError('E_NOT_FOUND', `文件不存在：${this.normalize(relPath)}`);
+    if (statSync(abs).isDirectory()) {
+      throw new PetdError('E_BAD_PARAMS', `${this.normalize(relPath)} 是目录，不能按文件读`);
+    }
+    return readFileSync(abs);
+  }
+
+  /** 二进制原子写（附件 blob 用）：同目录临时文件写完 rename。 */
+  writeBytesAtomic(relPath: string, data: Buffer): void {
+    const abs = this.resolveWritable(relPath);
+    if (existsSync(abs) && statSync(abs).isDirectory()) {
+      throw new PetdError('E_BAD_PARAMS', `${this.normalize(relPath)} 是目录，不能作为文件写入`);
+    }
+    mkdirSync(path.dirname(abs), { recursive: true });
+    const tmp = `${abs}.tmp-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      writeFileSync(tmp, data);
+      retryBusy(() => renameSync(tmp, abs));
+    } catch (error) {
+      try {
+        if (existsSync(tmp)) unlinkSync(tmp);
+      } catch {
+        // 保留原始写入错误。
+      }
+      throw error;
+    }
+  }
+
   /** 同目录临时文件写完后 rename；失败时移除临时文件并抛出原始错误。 */
   writeFileAtomic(relPath: string, content: string): void {
     const abs = this.resolveWritable(relPath);
