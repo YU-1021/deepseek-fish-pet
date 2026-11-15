@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent, MouseEvent } from 'react';
+import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Wifi, WifiOff, X } from 'lucide-react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
 import { MoodSettingsPanel } from './mood-panel';
@@ -134,9 +134,11 @@ export function App() {
 
 function PetOverlay() {
   const { enabled } = useMoodState();
-  const pokeTimer = useRef<number | undefined>(undefined);
+  const clickTimer = useRef<number | undefined>(undefined);
   const bounceTimer = useRef<number | undefined>(undefined);
   const clickAudio = useRef<HTMLAudioElement | null>(null);
+  const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
+  const pointerMoved = useRef(false);
   const [bouncing, setBouncing] = useState(false);
   async function poke() {
     if (enabled !== true) return;
@@ -156,15 +158,57 @@ function PetOverlay() {
     } catch { /* audio unavailable: keep the animation */ }
     if (enabled === true) void poke();
   }
-  function onClick(event: MouseEvent) {
-    if (event.detail > 1) { if (pokeTimer.current) window.clearTimeout(pokeTimer.current); return; }
-    pokeTimer.current = window.setTimeout(playClickFeedback, 240);
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    pointerStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    pointerMoved.current = false;
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* capture is unavailable in some renderers */ }
+    void window.petdBootstrap?.startDrag();
+  }
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = pointerStart.current;
+    if (start?.id !== event.pointerId) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) >= 6) pointerMoved.current = true;
+  }
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = pointerStart.current;
+    if (start?.id !== event.pointerId) return;
+    const moved = pointerMoved.current || Math.hypot(event.clientX - start.x, event.clientY - start.y) >= 6;
+    pointerStart.current = null;
+    pointerMoved.current = false;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* capture may already be released */ }
+    void window.petdBootstrap?.endDrag();
+    if (!moved) {
+      if (clickTimer.current) window.clearTimeout(clickTimer.current);
+      clickTimer.current = window.setTimeout(playClickFeedback, 240);
+    }
+  }
+  function onPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    if (pointerStart.current?.id !== event.pointerId) return;
+    pointerStart.current = null;
+    pointerMoved.current = false;
+    void window.petdBootstrap?.endDrag();
   }
   function openChat() {
-    if (pokeTimer.current) window.clearTimeout(pokeTimer.current);
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
     void window.petdBootstrap?.showChat();
   }
-  return <div className="pet-overlay" onClick={onClick} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
+  useEffect(() => {
+    const releasePointer = () => {
+      if (!pointerStart.current) return;
+      pointerStart.current = null;
+      pointerMoved.current = false;
+      void window.petdBootstrap?.endDrag();
+    };
+    window.addEventListener('blur', releasePointer);
+    return () => {
+      window.removeEventListener('blur', releasePointer);
+      if (clickTimer.current) window.clearTimeout(clickTimer.current);
+      if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
+      releasePointer();
+    };
+  }, []);
+  return <div className="pet-overlay" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
     <div className={`pet-float ${bouncing ? 'pet-bounce' : ''}`}><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
   </div>;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,8 @@ let petWindow;
 let tray;
 let memoryWorkspace;
 const thumbnailCache = new Map();
+let petDragTimer;
+let petDrag;
 const petHitRegions = [
   { x: 112, y: 40, width: 56, height: 34 },
   { x: 94, y: 66, width: 92, height: 68 },
@@ -75,6 +77,30 @@ ipcMain.handle('blob:file-url', (_event, input) => {
   return pathToFileURL(resolveBlobPath(name)).href;
 });
 ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
+function dragPetStep() {
+  if (!petDrag || !petWindow || petWindow.isDestroyed()) return endPetDrag();
+  const cursor = screen.getCursorScreenPoint();
+  const x = Math.round(petDrag.windowX + cursor.x - petDrag.cursorX);
+  const y = Math.round(petDrag.windowY + cursor.y - petDrag.cursorY);
+  const [currentX, currentY] = petWindow.getPosition();
+  if (Math.abs(x - currentX) <= 1 && Math.abs(y - currentY) <= 1) return;
+  petWindow.setBounds({ ...petDrag.bounds, x, y });
+}
+function startPetDrag() {
+  if (!petWindow || petWindow.isDestroyed()) return;
+  endPetDrag();
+  const [windowX, windowY] = petWindow.getPosition();
+  const cursor = screen.getCursorScreenPoint();
+  petDrag = { windowX, windowY, cursorX: cursor.x, cursorY: cursor.y, bounds: petWindow.getBounds() };
+  petDragTimer = setInterval(dragPetStep, 8);
+}
+function endPetDrag() {
+  if (petDragTimer) clearInterval(petDragTimer);
+  petDragTimer = undefined;
+  petDrag = undefined;
+}
+ipcMain.handle('pet:drag-start', (event) => { if (event.sender === petWindow?.webContents) startPetDrag(); });
+ipcMain.handle('pet:drag-end', (event) => { if (event.sender === petWindow?.webContents) endPetDrag(); });
 ipcMain.handle('pet:show-menu', () => {
   if (!petWindow || petWindow.isDestroyed()) return;
   Menu.buildFromTemplate([
@@ -102,7 +128,7 @@ function createWindow() {
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   if (process.env.VITE_DEV_SERVER_URL) void petWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?pet=1`);
   else void petWindow.loadFile(path.join(here, '../dist/index.html'), { query: { pet: '1' } });
-  petWindow.on('closed', () => { petWindow = undefined; });
+  petWindow.on('closed', () => { endPetDrag(); petWindow = undefined; });
   const iconSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="9" fill="#687f62"/><text x="16" y="23" text-anchor="middle" font-size="21">🐟</text></svg>';
   tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}`));
   tray.setToolTip('大肥鱼桌宠');
@@ -118,7 +144,7 @@ function createPetWindow() {
   applyPetHitRegions(petWindow);
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   if (process.env.VITE_DEV_SERVER_URL) void petWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?pet=1`); else void petWindow.loadFile(path.join(here, '../dist/index.html'), { query: { pet: '1' } });
-  petWindow.on('closed', () => { petWindow = undefined; });
+  petWindow.on('closed', () => { endPetDrag(); petWindow = undefined; });
 }
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

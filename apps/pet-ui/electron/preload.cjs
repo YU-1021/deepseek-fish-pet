@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
   getBlobFileUrl: (meta) => ipcRenderer.invoke('blob:file-url', meta),
   showChat: () => ipcRenderer.invoke('pet:show-chat'),
   showPetMenu: () => ipcRenderer.invoke('pet:show-menu'),
+  startDrag: () => ipcRenderer.invoke('pet:drag-start'),
+  endDrag: () => ipcRenderer.invoke('pet:drag-end'),
 });
