@@ -12,6 +12,7 @@ import { WorkspaceGit } from '../memory/git.js';
 import { MemoryService } from '../memory/service.js';
 import { BlobStore } from '../memory/blob.js';
 import { ReminderStore } from '../reminders/store.js';
+import { AutomationStore } from '../automation/store.js';
 import { MemoryToolbox } from './tools.js';
 import type { LlmToolCall } from '../llm/client.js';
 
@@ -222,4 +223,41 @@ test('remind_in / remind_at / remind_list / remind_cancel：模型能设提醒�
   const off = await plain.execute(call('remind_in', { minutes: 5, text: 'x' }));
   assert.equal(off.ok, false);
   assert.match(off.text, /没有启用提醒/);
+});
+
+test('schedule_task / list_tasks / cancel_task：模型能建自动化任务', async () => {
+  const service = tmpService();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-automation-tool-'));
+  const automation = new AutomationStore({
+    file: path.join(dir, 'automations.json'),
+    armTimers: false,
+    runJob: async () => ({ output: '跑完啦' }),
+  });
+  automation.ensure();
+  const box = new MemoryToolbox({ service, maxWrites: 3, maxResultChars: 4000, automation });
+
+  const created = await box.execute(call('schedule_task', { prompt: '每小时看看主人在做什么', every_minutes: 60 }));
+  assert.equal(created.ok, true);
+  assert.match(created.text, /已建自主任务 a1/);
+  assert.match(created.text, /每 60 分钟/);
+  assert.equal(box.writes, 1, 'schedule_task 算写操作');
+
+  const listed = await box.execute(call('list_tasks', {}));
+  assert.equal(listed.ok, true);
+  assert.match(listed.text, /a1/);
+  assert.match(listed.text, /每小时看看主人在做什么/);
+
+  const cancelled = await box.execute(call('cancel_task', { id: 'a1' }));
+  assert.equal(cancelled.ok, true);
+  assert.match(cancelled.text, /已删除自主任务 a1/);
+  assert.equal(automation.listJobs().length, 0);
+
+  const empty = await box.execute(call('list_tasks', {}));
+  assert.match(empty.text, /现在没有自主任务/);
+
+  // 没配 AutomationStore 时给出明确说明
+  const plain = makeToolbox(service);
+  const off = await plain.execute(call('schedule_task', { prompt: 'x', every_minutes: 5 }));
+  assert.equal(off.ok, false);
+  assert.match(off.text, /没有启用自动化/);
 });

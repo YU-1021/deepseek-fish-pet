@@ -49,6 +49,8 @@ import { MoodStore } from './state/mood.js';
 import { registerMoodMethods } from './gateway/methods/mood.js';
 import { ReminderStore } from './reminders/store.js';
 import { registerReminderMethods } from './gateway/methods/reminder.js';
+import { AutomationStore } from './automation/store.js';
+import { registerAutomationMethods } from './gateway/methods/automation.js';
 
 interface CliArgs {
   home?: string;
@@ -239,6 +241,8 @@ async function main(): Promise<void> {
   });
 
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
+  // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
+  let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
   const voice = new VoiceService({
     config: config.voice,
@@ -276,6 +280,7 @@ async function main(): Promise<void> {
         maxResultChars: config.chat.toolResultChars,
         blobs,
         reminders,
+        ...(automation === undefined ? {} : { automation }),
       }),
     blobs,
     voice,
@@ -318,6 +323,46 @@ async function main(): Promise<void> {
     wakeEnabled: config.asr.wakeEnabled,
   });
 
+  // ── 自动化 / 自主任务：到点让聊天在专用会话里自己跑一轮（OpenClaw 的 cron 形状） ──
+  // 每个任务一个专用会话（标题「自动化 · 任务名」），运行记录落 home/state/automations.json。
+  const automationSessionFor = (job: { sessionId?: string; name: string }) => {
+    if (job.sessionId) {
+      const existing = store.get(job.sessionId);
+      if (existing) return existing;
+    }
+    return chat.createSession(`自动化 · ${job.name}`);
+  };
+  automation = new AutomationStore({
+    file: path.join(paths.home, 'state', 'automations.json'),
+    log: logger,
+    publish: (event, data) => publishEvent(event, data),
+    enabled: () => config.automation.enabled,
+    tickSeconds: config.automation.tickSeconds,
+    catchUpMinutes: config.automation.catchUpMinutes,
+    maxJobs: config.automation.maxJobs,
+    maxRunsKept: config.automation.maxRunsKept,
+    runTimeoutMs: config.automation.runTimeoutMs,
+    runJob: async (job, signal) => {
+      const session = automationSessionFor(job);
+      const sent = await chat.send({ sessionId: session.id, text: job.prompt, signal, speak: false });
+      return {
+        output: sent.assistantMessage.content,
+        sessionId: session.id,
+        usage: {
+          ...(sent.reply.usage.promptTokens === undefined ? {} : { promptTokens: sent.reply.usage.promptTokens }),
+          ...(sent.reply.usage.completionTokens === undefined ? {} : { completionTokens: sent.reply.usage.completionTokens }),
+          ...(sent.reply.usage.totalTokens === undefined ? {} : { totalTokens: sent.reply.usage.totalTokens }),
+        },
+      };
+    },
+  });
+  const automationReady = automation.ensure();
+  logger.info('自动化服务已就绪', {
+    enabled: config.automation.enabled,
+    jobs: automationReady.jobs,
+    nextAt: automationReady.nextAt,
+  });
+
   const gateway = new Gateway({
     host: config.gateway.host,
     port: config.gateway.port,
@@ -354,6 +399,10 @@ async function main(): Promise<void> {
   registerReminderMethods(registry, {
     store: reminders,
     enabled: () => config.reminders.enabled,
+  });
+  registerAutomationMethods(registry, {
+    store: automation,
+    enabled: () => config.automation.enabled,
   });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
@@ -405,6 +454,7 @@ async function main(): Promise<void> {
     }, 5000);
     force.unref?.();
     try {
+      automation?.stop();
       reminders.stop();
       await gateway.stop();
     } finally {

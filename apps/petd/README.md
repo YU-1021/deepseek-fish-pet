@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），以及**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务）。
 
 ## 现在有什么
 
@@ -20,19 +20,21 @@
     - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
     - 情绪与状态：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`（心情/好感/精力 0–100，离线回落，聊天时给行为指导、聊完小步变化，可让模型评估一段对话）
     - 提醒与日程：`reminder.status` / `reminder.list` / `reminder.create` / `reminder.cancel` / `reminder.snooze`（一次性提醒；到点广播 `reminder.due`，错过太久的标 skipped；聊天里模型可用 `remind_in/remind_at/remind_list/remind_cancel` 自己设提醒）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 自动化：`automation.status` / `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.delete` / `automation.pause` / `automation.resume` / `automation.run` / `automation.runs`（cron 式自主任务；运行 = 在专用会话里跑一轮聊天并记下输出/用量；聊天里模型可用 `schedule_task/list_tasks/cancel_task` 自己排任务）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders 八段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation 九段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
 5. ASR：找 `whisper-cli`（环境变量 `PETD_WHISPER_DIR` → `asr.binaryDir` → `apps/petd/vendor/whisper` → 仓库 `app/vendor/whisper`）和模型（`asr.modelDir` → `home/asr` → 旧版 `%APPDATA%/dayu-pet/asr`）；缺模型时 `asr.download` 会从 hf-mirror 拉（模型很大，建议提前下）
 6. 情绪状态：`home/state/mood.json` 不存在时播种默认值（心情 70 / 好感 30 / 精力 80）
 7. 提醒：`home/state/reminders.json` 不存在时创建空文件，并把待响提醒重新布防（重启不丢）
-8. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+8. 自动化：`home/state/automations.json` 不存在时创建空文件；`config.automation.enabled=false`（默认）时定时器不跑，避免偷偷花 token
+9. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -94,6 +96,14 @@
     "maxPending": 50,
     "catchUpHours": 24,
     "keepFiredDays": 7
+  },
+  "automation": {
+    "enabled": false,
+    "tickSeconds": 30,
+    "catchUpMinutes": 15,
+    "maxJobs": 10,
+    "maxRunsKept": 100,
+    "runTimeoutMs": 180000
   }
 }
 ```
@@ -134,6 +144,12 @@
 - `reminders.maxPending`：最多同时挂多少条待响提醒（默认 50，防手滑刷屏）。
 - `reminders.catchUpHours`：错过多少小时内的提醒还会补报；更老的标记为 skipped 不补。
 - `reminders.keepFiredDays`：已响/已取消的记录保留多少天（之后自动清理）。
+- `automation.enabled`：自动化总开关（**默认 false**：自主任务会真花 token，不想花钱/不想让它自己动就别开）。
+- `automation.tickSeconds`：调度器多久检查一次任务是否到点（5–600，默认 30）。
+- `automation.catchUpMinutes`：错过多久内的任务还会补跑；超过就跳过（发 `automation.skipped`、不花 token）。
+- `automation.maxJobs`：最多同时存在多少个任务（1–100，默认 10）。
+- `automation.maxRunsKept`：运行记录保留最近多少条（1–1000，默认 100）。
+- `automation.runTimeoutMs`：单个任务跑一轮的超时（默认 180000 = 3 分钟，超时中止并记 failed）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -249,6 +265,19 @@
 - **落盘**：`home/state/reminders.json`（待响 + 已响历史），坏条目自动跳过、不整档报废。
 - **确认方式**：`node apps/petd/scripts/reminder-smoke.mjs`（不需要模型：3 秒提醒真的响、稍后/取消、重启保留；32 项断言）。
 
+## 自动化/自主任务（automation）
+
+cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，到点就让 petd 在**专用会话**里跑一轮完整聊天（能调记忆/提醒等工具），把回复与用量记为一次运行（run）。这是从 OpenClaw 借来的「agent 挂机」形状，但只跑在本机、只花你的 API 额度。
+
+- **计划（四选一）**：`interval {everyMinutes}`、`daily {atClock}`、`once {at}`、`manual`（只手动跑）。错过超过 `automation.catchUpMinutes` 的不补跑（避免一开机连环烧钱）。
+- **方法**：`automation.status`（开关/任务数/下次时间）、`automation.list` / `automation.get`、`automation.create`（`name?` + `prompt` + `schedule`）、`automation.update`、`automation.delete`、`automation.pause` / `automation.resume`、`automation.run`（立即手动跑一次，结果同步返回，最长 4 分钟）、`automation.runs`（运行记录，带 output/error/usage）。
+- **事件**：`automation.job.created/updated/deleted`、`automation.run.started/succeeded/failed/cancelled`、`automation.skipped`（错过太久被跳过）。
+- **单飞**：同一时刻只跑一个任务，不会并发烧 token；运行超时用 AbortSignal 中止并记 failed。
+- **聊天联动**：模型拿到 `schedule_task`（排任务）/ `list_tasks` / `cancel_task`，可以直接答应「每天早上 8 点给我总结一下待办」并真的排上；排任务也算一次写操作（计入 `chat.maxToolWrites`）。
+- **落盘**：`home/state/automations.json`（任务定义 + 最近 N 条运行记录）——重启后任务还在、重新布防。
+- **安全默认**：`automation.enabled` 默认 false，定时器根本不启动；打开后也只在你配置的计划上跑，不自主加任务。
+- **确认方式**：`node apps/petd/scripts/automation-smoke.mjs`（真 LLM 手动跑一次；38 项断言）。
+
 ## 跑起来
 
 ```bat
@@ -290,6 +319,9 @@ node apps/petd/scripts/mood-smoke.mjs
 
 :: 冒烟：提醒与日程（不花 token；3 秒提醒真的响、稍后/取消、重启保留）
 node apps/petd/scripts/reminder-smoke.mjs
+
+:: 冒烟：自动化/自主任务（真调一次模型；手动排一个任务并立刻跑）
+node apps/petd/scripts/automation-smoke.mjs
 ```
 
 READY 行示例：
@@ -318,7 +350,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 181/181（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 200/200（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -330,6 +362,7 @@ cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到�
 cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端（本机 SAPI 合成 16k WAV + whisper.cpp 真识别；43 项；不花 token）
 cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到端（真 LLM 两次：一轮聊天 + 一次评估；status/adjust/poke/history/聊天微调/重启保留；31 项）
 cd apps/petd && node scripts/reminder-smoke.mjs --home D:\x    :: 提醒端到端（不花 token；3 秒提醒真的响、到点事件/稍后/取消/重启保留；32 项）
+cd apps/petd && node scripts/automation-smoke.mjs --home D:\x  :: 自动化端到端（真 LLM 一次；手动任务跑通/运行记录/暂停恢复/重启保留；38 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -352,6 +385,8 @@ ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 
 
 提醒冒烟覆盖（32 项，不花 token）：`config.get` 的 reminders 段、`reminder.status` 初始无待响、`reminder.create`（3 秒后 / 60 分钟后 / HH:MM 三种）、`reminder.list` 排序与 inMinutes、到点真的广播 `reminder.due` 且携带 item、响过的移出待响列表、`reminder.snooze` 改到 10 分钟后且 `snoozes=1`、`reminder.cancel` + 从列表消失、`reminder.created/snoozed/cancelled` 事件、`state/reminders.json` 落盘（fired/pending 状态正确）、重启后待响提醒还在且重新布防、两次优雅退出。
 
+自动化冒烟覆盖（38 项，真 LLM 手动跑一次）：`config.get` 的 automation 段、`automation.status` 初始为空、`automation.create` 手动任务、`automation.job.created` 事件、真模型手动跑成功（output/usage/sessionId 回写、`run.started/succeeded` 事件）、`automation.runs` 运行记录、interval 任务排期（约 60 分钟）、`pause/resume` 与 `job.updated`、`state/automations.json` 落盘、重启后任务与运行记录保留且重新布防、`delete`、两次优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、插件、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……

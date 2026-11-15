@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 54 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 64 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -274,6 +274,21 @@ petd 已上线一次性提醒：`reminder.status` / `reminder.list` / `reminder.
 7. **配置只读**：设置页展示 `config.get.reminders`（enabled/maxPending/catchUpHours/keepFiredDays），改配置由后端文件控制。
 
 **验收**：建一条 1 分钟后的提醒 → 到点弹 toast 且桌宠说一句 → 点「稍后 5 分钟」后列表时间 +5 分钟 → 重启 petd 后列表仍在 → 关闭 `reminders.enabled` 后新建按钮置灰。截图贴 README。
+
+## 8.10 M9：自动化/自主任务 UI 规格（petd 后端已就绪）
+
+petd 已上线 cron 式自主任务：每个任务是「一段 prompt + 一种计划（interval / daily / once / manual）」，到点由 petd 在专用会话里跑一轮聊天并把结果记为 run。方法：`automation.status` / `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.delete` / `automation.pause` / `automation.resume` / `automation.run` / `automation.runs`。事件：`automation.job.created/updated/deleted`、`automation.run.started/succeeded/failed/cancelled`、`automation.skipped`。**默认 `automation.enabled=false`**，打开会真花 token——UI 必须把「让它自己干活=花你的 API 额度」写清楚，并在关闭时把新建/运行按钮置灰。
+
+1. **入口**：设置页「自主任务」tab（托盘菜单给个二级入口即可，别做成主界面）。列表列任务（name、scheduleText、enabled、runCount、lastStatus、nextAt），按 nextAt 升序，空态给「还没有任务，让它每天帮你做点什么？」示例。
+2. **新建/编辑**：`name?`（≤40 字）+ `prompt`（≤2000 字，多行）+ 四选一计划（每 N 分钟 / 每天 HH:MM / 某个时间点 / 只手动）。提交 `automation.create`，成功后插入列表并 toast「已创建：每天 08:00 总结待办」。`update` 用于改名字/prompt/计划。
+3. **运行**：行内「立即运行」→ `automation.run {id}`（同步等结果，最长 4 分钟，timeout 240s；期间按钮 loading 且禁用重复点击，别让用户以为卡死——给「它正在干活…」状态）。返回 `{run, output, usage}`，UI 展示 output 文本与 token 用量。
+4. **运行记录**：`automation.runs {id, limit?}` 展示最近运行（状态、开始时间、output/error、usage）；failed 显示 error 摘要；cancelled（超时/进程退出）单独样式。别默认展开长 output，点开看。
+5. **实时刷新**：订阅 `automation.*` 事件更新列表与运行记录（`run.succeeded` 时若当前正在看该任务的记录就追加）；断线重连后重拉 `automation.status/list`。到点自动跑时给一个不打断的角标提示（如底部轻提示「自主任务已运行：…」）。
+6. **暂停/删除**：`pause`/`resume` 行内切换（显示「已于下个计划生效」）；删除二次确认，提示「会一起删除运行记录（不影响会话）」。
+7. **配置只读**：设置页展示 `config.get.automation`（enabled/tickSeconds/catchUpMinutes/maxJobs/maxRunsKept/runTimeoutMs），改配置由后端文件控制。
+8. **错误**：`E_UNAVAILABLE`（自动化关闭）→ 提示并引导「在主目录 config.json 打开 automation.enabled」；`E_BAD_PARAMS`（计划格式/过去时间/prompt 空）→ 就地标红；`E_NOT_FOUND`（任务被删/并发）→ 刷新列表并 toast。
+
+**验收**：建一个 manual 任务 → 「立即运行」拿到真模型输出与用量 → 改 interval 60 分钟看到 nextAt → 暂停后不跑 → 重启 petd 后任务与运行记录都在 → 关闭 `automation.enabled` 后新建/运行置灰。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

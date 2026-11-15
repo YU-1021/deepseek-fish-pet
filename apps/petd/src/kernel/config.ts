@@ -132,6 +132,20 @@ export interface PetdConfig {
     /** 已响/已取消的记录保留多少天后清理 */
     keepFiredDays: number;
   };
+  automation: {
+    /** 自动化总开关：关闭后定时任务不会跑，automation.* 写方法与聊天工具返回 E_UNAVAILABLE */
+    enabled: boolean;
+    /** 多久检查一次到期任务（秒） */
+    tickSeconds: number;
+    /** 关停期间错过的任务，超过多少分钟就不再补跑（直接排下一次） */
+    catchUpMinutes: number;
+    /** 最多挂多少条任务 */
+    maxJobs: number;
+    /** 运行记录保留多少条 */
+    maxRunsKept: number;
+    /** 单次任务运行超时（毫秒） */
+    runTimeoutMs: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -201,6 +215,15 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxPending: 50,
     catchUpHours: 24,
     keepFiredDays: 7,
+  },
+  automation: {
+    // 默认关闭：自主任务会花真实 token，明确打开才跑
+    enabled: false,
+    tickSeconds: 30,
+    catchUpMinutes: 15,
+    maxJobs: 10,
+    maxRunsKept: 100,
+    runTimeoutMs: 180_000,
   },
 };
 
@@ -425,6 +448,29 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof kf === 'number' && Number.isFinite(kf) && kf >= 1 && kf <= 30) out.reminders.keepFiredDays = kf;
       else if (kf !== undefined) warnings.push('reminders.keepFiredDays 非法，回默认 7');
     } else warnings.push('reminders 段必须是对象，回默认');
+  }
+  const automationRaw = raw['automation'];
+  if (automationRaw !== undefined) {
+    if (isObject(automationRaw)) {
+      const ae = automationRaw['enabled'];
+      if (typeof ae === 'boolean') out.automation.enabled = ae;
+      else if (ae !== undefined) warnings.push('automation.enabled 非法，回默认 false');
+      const ts = automationRaw['tickSeconds'];
+      if (typeof ts === 'number' && Number.isInteger(ts) && ts >= 5 && ts <= 600) out.automation.tickSeconds = ts;
+      else if (ts !== undefined) warnings.push('automation.tickSeconds 非法，回默认 30');
+      const cm = automationRaw['catchUpMinutes'];
+      if (typeof cm === 'number' && Number.isFinite(cm) && cm >= 0 && cm <= 1440) out.automation.catchUpMinutes = cm;
+      else if (cm !== undefined) warnings.push('automation.catchUpMinutes 非法，回默认 15');
+      const mj = automationRaw['maxJobs'];
+      if (typeof mj === 'number' && Number.isInteger(mj) && mj >= 1 && mj <= 100) out.automation.maxJobs = mj;
+      else if (mj !== undefined) warnings.push('automation.maxJobs 非法，回默认 10');
+      const mr = automationRaw['maxRunsKept'];
+      if (typeof mr === 'number' && Number.isInteger(mr) && mr >= 1 && mr <= 1000) out.automation.maxRunsKept = mr;
+      else if (mr !== undefined) warnings.push('automation.maxRunsKept 非法，回默认 100');
+      const rt = automationRaw['runTimeoutMs'];
+      if (typeof rt === 'number' && Number.isInteger(rt) && rt >= 5_000 && rt <= 900_000) out.automation.runTimeoutMs = rt;
+      else if (rt !== undefined) warnings.push('automation.runTimeoutMs 非法，回默认 180000');
+    } else warnings.push('automation 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

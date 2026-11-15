@@ -143,6 +143,14 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           catchUpHours: Type.Number(),
           keepFiredDays: Type.Number(),
         }),
+        automation: Type.Object({
+          enabled: Type.Boolean(),
+          tickSeconds: Type.Integer(),
+          catchUpMinutes: Type.Number(),
+          maxJobs: Type.Integer(),
+          maxRunsKept: Type.Integer(),
+          runTimeoutMs: Type.Integer(),
+        }),
       }),
     },
     () => {
@@ -167,6 +175,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         },
         mood: { ...cfg.mood },
         reminders: { ...cfg.reminders },
+        automation: { ...cfg.automation },
       };
     }
   );

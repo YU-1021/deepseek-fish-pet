@@ -9,6 +9,8 @@
  *   - 工具错误不抛给上层，而是变成「错误：…」文本回给模型，让它自己纠正。
  */
 import { PetdError } from '@petd/protocol';
+import type { AutomationStore } from '../automation/store.js';
+import { validateScheduleInput } from '../automation/store.js';
 import type { LlmToolCall, LlmToolDefinition } from '../llm/client.js';
 import type { BlobStore } from '../memory/blob.js';
 import { isTextMime } from '../memory/blob.js';
@@ -240,8 +242,58 @@ export const REMINDER_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
-/** 聊天里可用的全部工具（记忆 + 提醒） */
+/** 自动化工具：让模型能给自己安排定时任务（自主挂机），不占记忆写配额之外的额外限制 */
+export const AUTOMATION_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'schedule_task',
+      description:
+        '给未来的自己安排一个自主任务：到点后你会在专用会话里自己跑一轮（会花 token）。主人说「以后每天/每隔一会儿帮我…」时用。只给一种时间；都不给 = 建一个只手动跑的任务。',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', maxLength: 2000, description: '到点后你要做的事（就是给自己的一条消息）' },
+          name: { type: 'string', maxLength: 40, description: '任务名（可选，方便以后认）' },
+          every_minutes: { type: 'number', minimum: 1, maximum: 43200, description: '每隔多少分钟跑一次' },
+          at_clock: { type: 'string', description: '每天几点跑，形如 08:30' },
+          at: { type: 'string', description: '只跑一次的绝对时间（ISO，如 2026-11-20T09:00:00+08:00）' },
+        },
+        required: ['prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_tasks',
+      description: '列出现在有哪些自主任务、各自什么时候跑（确认安排前先看）。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_task',
+      description: '删掉一条自主任务（需要 id，可先用 list_tasks 查）。',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: '任务编号，如 a3' } },
+        required: ['id'],
+      },
+    },
+  },
+];
+
+/** 聊天里可用的全部工具（记忆 + 提醒 + 自动化） */
 export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
+
+/** 所有已知工具名（含未启用的组）：执行时用来区分「没这个工具」和「这组没启用」 */
+const ALL_TOOL_NAMES = new Set<string>([
+  ...MEMORY_TOOLS,
+  ...REMINDER_TOOLS,
+  ...AUTOMATION_TOOLS,
+].map((t) => t.function.name));
 
 export interface ToolExecutionResult {
   ok: boolean;
@@ -255,14 +307,25 @@ export interface MemoryToolboxOptions {
   blobs?: BlobStore;
   /** 提醒存储；不传 = 不启用提醒工具 */
   reminders?: ReminderStore;
+  /** 自动化任务存储；不传 = 不启用自主任务工具 */
+  automation?: AutomationStore;
   /** 每轮允许的写操作次数 */
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
   maxResultChars: number;
 }
 
-/** 写操作：写/追加/编辑/删除/移动/存附件，都算一次配额 */
-const WRITE_TOOLS = new Set(['write_file', 'append_file', 'edit_file', 'delete_file', 'move_file', 'save_blob']);
+/** 写操作：写/追加/编辑/删除/移动/存附件/建改任务，都算一次配额 */
+const WRITE_TOOLS = new Set([
+  'write_file',
+  'append_file',
+  'edit_file',
+  'delete_file',
+  'move_file',
+  'save_blob',
+  'schedule_task',
+  'cancel_task',
+]);
 
 /** 本地时间（给模型看的，形如 2026-11-15 20:30） */
 function formatAt(ts: number): string {
@@ -284,6 +347,7 @@ export class MemoryToolbox {
   private readonly service: MemoryService;
   private readonly blobs?: BlobStore;
   private readonly reminders?: ReminderStore;
+  private readonly automation?: AutomationStore;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
   /** 本轮已用掉的写操作次数 */
@@ -293,13 +357,17 @@ export class MemoryToolbox {
     this.service = opts.service;
     this.blobs = opts.blobs;
     this.reminders = opts.reminders;
+    this.automation = opts.automation;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
   }
 
-  /** 声明给模型的工具列表（没配提醒就不暴露提醒工具） */
+  /** 声明给模型的工具列表（没配对应服务就不暴露那组工具） */
   definitions(): LlmToolDefinition[] {
-    return this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
+    const base = this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
+    const withAutomation =
+      this.automation !== undefined && this.automation.isEnabled() ? [...base, ...AUTOMATION_TOOLS] : base;
+    return withAutomation;
   }
 
   /** 执行一个工具调用；永远返回文本结果，不抛错（错误也交给模型自己纠正）。 */
@@ -313,7 +381,7 @@ export class MemoryToolbox {
       return { ok: false, text: this.truncate(`错误：工具参数不是合法 JSON（${e instanceof Error ? e.message : String(e)}）`) };
     }
 
-    if (!WRITE_TOOLS.has(call.name) && !CHAT_TOOLS.some((t) => t.function.name === call.name)) {
+    if (!WRITE_TOOLS.has(call.name) && !ALL_TOOL_NAMES.has(call.name)) {
       return { ok: false, text: `错误：没有这个工具（${call.name}）` };
     }
     if (WRITE_TOOLS.has(call.name)) {
@@ -466,6 +534,47 @@ export class MemoryToolbox {
         const item = this.requireReminders().cancel(str('id'));
         return `已取消提醒 ${item.id}：${item.text}`;
       }
+      case 'schedule_task': {
+        const prompt = str('prompt');
+        const name = optStr('name');
+        const every = optNum('every_minutes');
+        const atClock = optStr('at_clock');
+        const atRaw = optStr('at');
+        const given = [every, atClock, atRaw].filter((v) => v !== undefined).length;
+        if (given > 1) throw new PetdError('E_BAD_PARAMS', '时间只能给一种：every_minutes / at_clock / at');
+        const rounded = every === undefined ? undefined : Math.round(every);
+        const raw: unknown =
+          rounded !== undefined
+            ? { kind: 'interval', everyMinutes: rounded }
+            : atClock !== undefined
+              ? { kind: 'daily', atClock }
+              : atRaw !== undefined
+                ? { kind: 'once', at: atRaw }
+                : { kind: 'manual' };
+        const schedule = validateScheduleInput(raw, Date.now());
+        const job = this.requireAutomation().create({
+          ...(name === undefined ? {} : { name }),
+          prompt,
+          schedule,
+        });
+        const next = job.nextRunAt === null ? '手动运行' : `下次 ${formatAt(job.nextRunAt)}`;
+        return `已建自主任务 ${job.id}：${job.name}（${job.scheduleText}，${next}）。到点我会自己跑一轮，会花 token，随时可以取消。`;
+      }
+      case 'list_tasks': {
+        const jobs = this.requireAutomation().listJobs();
+        if (jobs.length === 0) return '现在没有自主任务。';
+        return `自主任务（${jobs.length} 条）：\n${jobs
+          .map(
+            (j) =>
+              `- ${j.id}｜${j.name}｜${j.scheduleText}｜${j.enabled ? '启用' : '暂停'}｜${j.nextRunAt === null ? '无下次' : formatAt(j.nextRunAt)}`
+          )
+          .join('\n')}`;
+      }
+      case 'cancel_task': {
+        const id = str('id');
+        this.requireAutomation().delete(id);
+        return `已删除自主任务 ${id}。`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
@@ -481,6 +590,13 @@ export class MemoryToolbox {
   private requireReminders(): ReminderStore {
     if (!this.reminders) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用提醒');
     return this.reminders;
+  }
+
+  /** 自动化工具必须配了自动化存储且总开关开着才能用 */
+  private requireAutomation(): AutomationStore {
+    if (!this.automation) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用自动化');
+    if (!this.automation.isEnabled()) throw new PetdError('E_UNAVAILABLE', '自动化已关闭（config.automation.enabled=false）');
+    return this.automation;
   }
 
   private truncate(text: string): string {
