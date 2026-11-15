@@ -58,4 +58,4 @@ export function request(method: string, params: unknown, timeout = 120000): Prom
 }
 export function subscribeEvents(listener: (frame: Frame) => void) { events.add(listener); return () => events.delete(listener); }
 export function usePetdStatus() { return useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => snapshot); }
-if (!new URLSearchParams(window.location.search).has('pet')) connect();
+connect();

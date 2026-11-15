@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
+import type { CSSProperties, FormEvent, KeyboardEvent, MouseEvent } from 'react';
 import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Wifi, WifiOff, X } from 'lucide-react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
+import { MoodSettingsPanel } from './mood-panel';
+import { useMoodNumberPreference, useMoodState } from './mood';
 import { MemoryPanel, uploadAttachmentFile } from './memory-panel';
 import type { QueuedAttachment } from './memory-panel';
 import fishIdle from './assets/fish-idle.webm';
@@ -27,6 +29,7 @@ const friendlyError = (error: any) => {
 
 export function App() {
   const status = usePetdStatus();
+  const [showMoodValues, setShowMoodValues] = useMoodNumberPreference();
   const [view, setView] = useState<View>('chat');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState('');
@@ -120,7 +123,7 @@ export function App() {
     </section>
     <section className="chat"><header className="chat-header"><div className="pet-avatar"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆"/><i/></div><div className="chat-title"><strong>{view === 'chat' ? '小鱼' : view === 'persona' ? '小鱼的人格' : '偏好设置'}</strong><span>{view === 'chat' ? '你的桌面伙伴' : view === 'persona' ? `人格版本 v${persona?.version ?? '—'}` : 'petd 连接配置'}</span></div><div className="header-actions"><button title="服务状态"><Activity size={17}/></button></div></header>
       {view === 'chat' ? <><div className="messages" ref={scrollRef}><div className="day-divider"><span>对话记录</span></div>{messages.length === 0 && <div className="welcome"><div className="welcome-orb">🐋</div><h2>嗨，回来啦</h2><p>今天想聊点什么？我一直都在。</p></div>}{messages.map((m, i) => <div className={`message-row ${m.role === 'user' ? 'mine' : ''}`} key={`${m.ts}-${i}`}>{m.role === 'assistant' && <div className="mini-avatar">🐟</div>}<div><div className={`bubble ${m.role}`}>{m.content}</div>{(messageAttachments[`${activeId}:${m.ts}`] ?? []).map((attachment) => <button className="message-attachment" key={attachment.handle} onClick={() => attachment.mime.startsWith('image/') ? void openMessageImage(attachment) : setView('memory')}><Paperclip size={12}/>{attachment.name}</button>)}<time>{m.role === 'assistant' ? '小鱼 · ' : ''}{new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div></div>)}{sending && <div className="message-row"><div className="mini-avatar">🐟</div><div className="bubble assistant typing">小鱼正在想…</div></div>}</div>
-        <div className="composer-wrap"><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={keySend} placeholder="和小鱼说说话…（Enter 发送，Shift+Enter 换行）" rows={2} disabled={status.state !== 'connected' || sending}/>{pendingAttachments.length > 0 && <div className="pending-attachments">{pendingAttachments.map((item) => <span key={item.handle}>{item.name}<button type="button" disabled={sending} onClick={() => setPendingAttachments((items) => items.filter((entry) => entry.handle !== item.handle))} aria-label={`移除 ${item.name}`}><X size={12}/></button></span>)}</div>}<div className="composer-tools"><span>{error && <span className="error-text">{error}</span>}</span><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={(e) => void uploadChatFiles(e.target.files)}/><button type="button" className="attach-button" onClick={() => fileInput.current?.click()} disabled={uploading || sending || status.state !== 'connected'} title="添加附件"><Paperclip size={15}/></button><button className="send" type="submit" disabled={!draft.trim() || sending || status.state !== 'connected'} aria-label="发送"><Send size={15}/></button></div></div></form><div className="fine-print">{uploading ? '正在上传附件…' : '小鱼可能会犯错，请核对重要信息'}</div></div></> : <div className="messages detail-view">{error && <div className="notice">{error}</div>}{view === 'persona' && persona && <><div className="detail-intro"><div className="welcome-orb">✨</div><h2>{persona.title || '小鱼'}</h2><p>人格版本 v{persona.version} · {new Date(persona.updatedAt).toLocaleString()}</p><div className="persona-actions">{personaEditing ? <><button onClick={() => { setPersonaEditing(false); void refreshPersona(); }}>取消</button><button className="primary-action" disabled={personaSaving} onClick={() => void savePersona()}>{personaSaving ? '保存中…' : '保存修改'}</button></> : <button className="primary-action" onClick={() => setPersonaEditing(true)}>编辑人格</button>}</div></div><div className="persona-content">{persona.preamble && <p>{persona.preamble}</p>}{persona.sections.map((section: any) => <article key={section.key}><div className="section-heading"><h3>{section.heading}</h3><span>{section.locked ? '🔒 已锁定' : section.aiEditable ? '可随相处演化' : '用户专属'}</span></div>{personaEditing ? <textarea className="persona-editor" value={personaDraft[section.key] ?? ''} onChange={(e) => setPersonaDraft({ ...personaDraft, [section.key]: e.target.value })} /> : <p>{section.content || '（尚未填写）'}</p>}{section.aiEditable && <button className="lock-action" onClick={() => void toggleLock(section)}>{section.locked ? '解锁 AI 修改' : '锁定，禁止 AI 修改'}</button>}</article>)}{personaHistory.length > 0 && <article><h3>历史版本</h3>{personaHistory.map((item) => <div className="history-row" key={`${item.version}-${item.ts}`}><span>v{item.version} · {item.actor === 'agent' ? '小鱼演化' : '用户修改'} · {item.reason || '无备注'}</span>{item.version < persona.version && <button onClick={() => void rollbackPersona(item.version)}>回滚到此版本</button>}</div>)}</article>}</div></>}{view === 'settings' && config && <div className="persona-content"><article><div className="section-heading"><h3>petd 服务</h3><span>{status.state === 'connected' ? '● 在线' : '○ 离线'}</span></div><p>版本：{status.version ?? config.version ?? '—'}</p><p>监听地址：{config.gateway?.host ?? '127.0.0.1'}:{status.gatewayPort ?? (config.gateway?.port || '动态端口')}</p><p>日志等级：{config.log?.level ?? '—'}</p></article><article><h3>界面</h3><p>消息与人格数据保存在 petd。此处只展示非敏感配置，不读取或显示 API 密钥。</p></article></div>}{!persona && !config && !error && <div className="detail-intro">正在读取 petd…</div>}</div>}
+        <div className="composer-wrap"><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={keySend} placeholder="和小鱼说说话…（Enter 发送，Shift+Enter 换行）" rows={2} disabled={status.state !== 'connected' || sending}/>{pendingAttachments.length > 0 && <div className="pending-attachments">{pendingAttachments.map((item) => <span key={item.handle}>{item.name}<button type="button" disabled={sending} onClick={() => setPendingAttachments((items) => items.filter((entry) => entry.handle !== item.handle))} aria-label={`移除 ${item.name}`}><X size={12}/></button></span>)}</div>}<div className="composer-tools"><span>{error && <span className="error-text">{error}</span>}</span><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={(e) => void uploadChatFiles(e.target.files)}/><button type="button" className="attach-button" onClick={() => fileInput.current?.click()} disabled={uploading || sending || status.state !== 'connected'} title="添加附件"><Paperclip size={15}/></button><button className="send" type="submit" disabled={!draft.trim() || sending || status.state !== 'connected'} aria-label="发送"><Send size={15}/></button></div></div></form><div className="fine-print">{uploading ? '正在上传附件…' : '小鱼可能会犯错，请核对重要信息'}</div></div></> : <div className="messages detail-view">{error && <div className="notice">{error}</div>}{view === 'persona' && persona && <><div className="detail-intro"><div className="welcome-orb">✨</div><h2>{persona.title || '小鱼'}</h2><p>人格版本 v{persona.version} · {new Date(persona.updatedAt).toLocaleString()}</p><div className="persona-actions">{personaEditing ? <><button onClick={() => { setPersonaEditing(false); void refreshPersona(); }}>取消</button><button className="primary-action" disabled={personaSaving} onClick={() => void savePersona()}>{personaSaving ? '保存中…' : '保存修改'}</button></> : <button className="primary-action" onClick={() => setPersonaEditing(true)}>编辑人格</button>}</div></div><div className="persona-content">{persona.preamble && <p>{persona.preamble}</p>}{persona.sections.map((section: any) => <article key={section.key}><div className="section-heading"><h3>{section.heading}</h3><span>{section.locked ? '🔒 已锁定' : section.aiEditable ? '可随相处演化' : '用户专属'}</span></div>{personaEditing ? <textarea className="persona-editor" value={personaDraft[section.key] ?? ''} onChange={(e) => setPersonaDraft({ ...personaDraft, [section.key]: e.target.value })} /> : <p>{section.content || '（尚未填写）'}</p>}{section.aiEditable && <button className="lock-action" onClick={() => void toggleLock(section)}>{section.locked ? '解锁 AI 修改' : '锁定，禁止 AI 修改'}</button>}</article>)}{personaHistory.length > 0 && <article><h3>历史版本</h3>{personaHistory.map((item) => <div className="history-row" key={`${item.version}-${item.ts}`}><span>v{item.version} · {item.actor === 'agent' ? '小鱼演化' : '用户修改'} · {item.reason || '无备注'}</span>{item.version < persona.version && <button onClick={() => void rollbackPersona(item.version)}>回滚到此版本</button>}</div>)}</article>}</div></>}{view === 'settings' && config && <div className="persona-content"><MoodSettingsPanel config={config} sessionId={activeId} showValues={showMoodValues} onShowValuesChange={setShowMoodValues}/><article><div className="section-heading"><h3>petd 服务</h3><span>{status.state === 'connected' ? '● 在线' : '○ 离线'}</span></div><p>版本：{status.version ?? config.version ?? '—'}</p><p>监听地址：{config.gateway?.host ?? '127.0.0.1'}:{status.gatewayPort ?? (config.gateway?.port || '动态端口')}</p><p>日志等级：{config.log?.level ?? '—'}</p></article><article><h3>界面</h3><p>消息与人格数据保存在 petd。此处只展示非敏感配置，不读取或显示 API 密钥。</p></article></div>}{!persona && !config && !error && <div className="detail-intro">正在读取 petd…</div>}</div>}
     </section>
     </>}
     {imagePreview && <div className="memory-image-backdrop" onClick={() => setImagePreview(null)}><div className="memory-image-dialog" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}><button className="memory-image-close" onClick={() => setImagePreview(null)} aria-label="关闭"><X/></button><img src={imagePreview.src} alt={imagePreview.name}/><span>{imagePreview.name}</span></div></div>}
@@ -129,9 +132,56 @@ export function App() {
 }
 
 function PetOverlay() {
-  return <div className="pet-overlay" onDoubleClick={() => void window.petdBootstrap?.showChat()} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="双击打开聊天 · 右键菜单">
+  const { enabled, state, lastChange, applySnapshot } = useMoodState();
+  const [showMoodValues] = useMoodNumberPreference();
+  const [feedback, setFeedback] = useState(false);
+  const [chatNudge, setChatNudge] = useState(false);
+  const pokeTimer = useRef<number | undefined>(undefined);
+  const feedbackTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (lastChange?.source !== 'chat') return;
+    setChatNudge(true);
+    const timer = window.setTimeout(() => setChatNudge(false), 360);
+    return () => window.clearTimeout(timer);
+  }, [lastChange]);
+  async function poke() {
+    if (enabled !== true || !state) return;
+    try {
+      const snapshot = await request('mood.poke', {});
+      applySnapshot(snapshot);
+      setFeedback(true);
+      if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current);
+      feedbackTimer.current = window.setTimeout(() => setFeedback(false), 320);
+    } catch { /* pet window keeps the interaction quiet when petd is offline */ }
+  }
+  function onClick(event: MouseEvent) {
+    if (event.detail > 1) { if (pokeTimer.current) window.clearTimeout(pokeTimer.current); return; }
+    pokeTimer.current = window.setTimeout(() => { void poke(); }, 240);
+  }
+  function openChat() {
+    if (pokeTimer.current) window.clearTimeout(pokeTimer.current);
+    void window.petdBootstrap?.showChat();
+  }
+  const moodFace = state?.tiers.mood === '很低落' ? '😔' : state?.tiers.mood === '有点闷' ? '😶' : state?.tiers.mood === '平静' ? '🙂' : state?.tiers.mood === '心情不错' ? '😊' : state?.tiers.mood === '很开心' ? '🥰' : '🐟';
+  const affectionCopy = state?.tiers.affection === '还生疏' ? '慢慢熟悉你' : state?.tiers.affection === '逐渐熟悉' ? '越来越熟悉' : state?.tiers.affection === '比较亲近' ? '喜欢陪着你' : state?.tiers.affection === '很黏你' ? '最喜欢黏着你' : '';
+  const sleepy = state?.tiers.energy === '很累' || state?.tiers.energy === '有点乏';
+  return <div className={`pet-overlay ${feedback ? 'pet-feedback' : ''} ${chatNudge ? 'pet-chat-nudge' : ''} ${sleepy ? 'pet-sleepy' : ''}`} onClick={onClick} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
-    <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div><div className="pet-hint">双击打开聊天</div>
+    <div className="pet-face" role="img" aria-label={state?.tiers.mood ?? '情绪读取中'}>{enabled && state ? moodFace : '🐟'}</div>
+    <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+    {enabled && state && <div className="pet-mood-rings" role="group" aria-label={`${state.tiers.mood}、${state.tiers.affection}、${state.tiers.energy}`}>
+      <MoodRing label="心情" tier={state.tiers.mood} value={state.mood} color="#f0a78e" showValue={showMoodValues}/>
+      <MoodRing label="好感" tier={state.tiers.affection} value={state.affection} color="#d79bb6" showValue={showMoodValues}/>
+      <MoodRing label="精力" tier={state.tiers.energy} value={state.energy} color="#86ad83" showValue={showMoodValues}/>
+    </div>}
+    <div className="pet-hint">{enabled && state ? `${affectionCopy} · ${state.tiers.energy}` : '双击打开聊天'}</div>
+    {feedback && <span className="pet-heart" aria-hidden="true">♥</span>}
   </div>;
+}
+
+function MoodRing({ label, tier, value, color, showValue }: { label: string; tier: string; value: number; color: string; showValue: boolean }) {
+  return <span className="pet-mood-ring" title={`${label}：${tier}`} aria-label={`${label}：${tier}`} style={{ '--ring-value': `${Math.max(0, Math.min(100, value))}%`, '--ring-color': color } as CSSProperties}>
+    <i>{showValue ? Number(value.toFixed(1)) : ''}</i><small>{label}</small>
+  </span>;
 }
 
