@@ -2,12 +2,14 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
 let petWindow;
 let tray;
+let memoryWorkspace;
+const thumbnailCache = new Map();
 const petHitRegions = [
   { x: 112, y: 40, width: 56, height: 34 },
   { x: 94, y: 66, width: 92, height: 68 },
@@ -22,6 +24,19 @@ function petdHome() {
   const base = process.env.APPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Roaming');
   return path.join(base, 'dayu-pet', 'petd');
 }
+function resolveBlobPath(name) {
+  if (!memoryWorkspace || typeof name !== 'string' || name === '' || path.basename(name) !== name) throw new Error('附件路径无效');
+  const blobRoot = path.resolve(memoryWorkspace, 'blobs');
+  const candidate = path.resolve(blobRoot, name);
+  if (path.dirname(candidate) !== blobRoot) throw new Error('附件路径超出 blobs 目录');
+  const realWorkspace = fs.realpathSync(memoryWorkspace);
+  const realRoot = fs.realpathSync(blobRoot);
+  if (realRoot !== path.join(realWorkspace, 'blobs')) throw new Error('附件目录不能是工作区外的链接');
+  const realFile = fs.realpathSync(candidate);
+  const relative = path.relative(realRoot, realFile);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('附件路径超出 blobs 目录');
+  return realFile;
+}
 ipcMain.handle('petd:bootstrap', () => {
   try {
     const home = petdHome();
@@ -32,6 +47,32 @@ ipcMain.handle('petd:bootstrap', () => {
   } catch (error) {
     return { error: error instanceof Error ? error.message : '无法读取 petd 连接信息' };
   }
+});
+ipcMain.handle('memory:set-workspace', (_event, workspace) => {
+  const expected = path.resolve(petdHome(), 'workspace');
+  const candidate = typeof workspace === 'string' ? path.resolve(workspace) : '';
+  if (candidate !== expected) throw new Error('petd workspace 路径与本机配置不符');
+  memoryWorkspace = expected;
+  return true;
+});
+ipcMain.handle('blob:thumbnail', (_event, input) => {
+  const { name, sha256 } = input && typeof input === 'object' ? input : {};
+  if (typeof sha256 !== 'string' || !/^[a-f\d]{64}$/i.test(sha256)) throw new Error('附件 SHA-256 无效');
+  const blobPath = resolveBlobPath(name);
+  const cached = thumbnailCache.get(sha256);
+  if (cached) return cached;
+  const image = nativeImage.createFromPath(blobPath);
+  if (image.isEmpty()) throw new Error('无法读取图片附件');
+  const size = image.getSize();
+  const scale = Math.min(1, 256 / Math.max(size.width, size.height));
+  const dataUrl = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)), quality: 'good' }).toDataURL();
+  thumbnailCache.set(sha256, dataUrl);
+  if (thumbnailCache.size > 128) thumbnailCache.delete(thumbnailCache.keys().next().value);
+  return dataUrl;
+});
+ipcMain.handle('blob:file-url', (_event, input) => {
+  const { name } = input && typeof input === 'object' ? input : {};
+  return pathToFileURL(resolveBlobPath(name)).href;
 });
 ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
 ipcMain.handle('pet:show-menu', () => {

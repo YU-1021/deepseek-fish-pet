@@ -8,7 +8,7 @@ let snapshot: Snapshot = { state: 'connecting' };
 let socket: WebSocket | undefined;
 let requestId = 0;
 let retry = 0;
-declare global { interface Window { petdBootstrap?: { read: () => Promise<{ port?: number; token?: string; version?: string; error?: string }>; showChat: () => Promise<void>; showPetMenu: () => Promise<void> } } }
+declare global { interface Window { petdBootstrap?: { read: () => Promise<{ port?: number; token?: string; version?: string; error?: string }>; setMemoryWorkspace: (workspace: string) => Promise<boolean>; getBlobThumbnail: (meta: { name: string; sha256: string }) => Promise<string>; getBlobFileUrl: (meta: { name: string }) => Promise<string>; showChat: () => Promise<void>; showPetMenu: () => Promise<void> } } }
 const pending = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: number }>();
 const publish = (next: Snapshot) => { snapshot = next; listeners.forEach((fn) => fn()); };
 const delays = [1000, 2000, 5000];

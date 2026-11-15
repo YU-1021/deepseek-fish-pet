@@ -16,6 +16,8 @@ The desktop shell includes a Vite renderer, Electron main entry and preload, a f
 
 Chat uses `session.list/get`, `session.create`, `chat.send`, and event-backed messages. The settings view reads only non-secret data from `config.get`. The persona view supports section edits through `persona.patch` with `expectedVersion`, AI edit locks, revision history, rollback, and `persona.changed` refresh handling. `E_CONFLICT` displays a refresh message and reloads the latest persona before further edits.
 
+The Memory panel uses `memory.list/read/write/history/diff` and `blob.list/put/get/delete`, with tree, Markdown preview, file history, local image thumbnails, and chat attachment handles. The current petd branch still needs `memory.changed`, `blob.preview`, `memory.restore`, atomic memory write conflict parameters, and `memory.status.workspace`; see `docs/pet-ui-待接方法.md`. Until then, the UI performs a read-before-write conflict check, and disables history restore/text attachment summaries with a clear pending-method message.
+
 ## Screenshots and build evidence
 
 Build: `pnpm --filter @petd/pet-ui build` — passing.

@@ -6,5 +6,6 @@ import './detail.css';
 import './pet.css';
 import './pet-interaction.css';
 import './fish.css';
+import './memory-panel.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
