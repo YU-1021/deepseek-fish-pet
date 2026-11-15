@@ -61,6 +61,10 @@ import { CuaEngine } from './cua/engine.js';
 import { buildCuaPrompt } from './cua/prompt.js';
 import { registerCuaMethods } from './gateway/methods/cua.js';
 import { registerRunMethods } from './gateway/methods/run.js';
+import { HookStore } from './hooks/store.js';
+import { ApprovalBroker } from './hooks/approval.js';
+import { HooksService } from './hooks/service.js';
+import { registerHooksMethods } from './gateway/methods/hooks.js';
 
 interface CliArgs {
   home?: string;
@@ -120,6 +124,9 @@ const USAGE = `petd — 桌宠常驻网关（阶段 1 骨架）
   --echo        日志同时打到 stdout
   --version     打印版本
   --help        打印帮助`;
+
+/** 审批门自身的方法不走 guard：否则用户规则写成 '*' 时 approval.answer 会被自己拦住 */
+const EXEMPT_METHODS = new Set(['approval.answer', 'approval.list', 'hooks.status', 'hooks.list', 'hooks.get']);
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -296,6 +303,31 @@ async function main(): Promise<void> {
     permission: config.cua.permission,
     platform: process.platform,
   });
+  // ── 审批门（hooks）：危险动作先确认；规则存 state/hooks.json ──
+  const approvalBroker = new ApprovalBroker({
+    publish: (event, data) => publishEvent(event, data),
+    timeoutMs: config.hooks.approvalTimeoutMs,
+    logger: (msg, data) => logger.info(msg, data),
+  });
+  const hookStore = new HookStore({
+    file: path.join(paths.home, 'state', 'hooks.json'),
+    logger: (msg, data) => logger.info(msg, data),
+    publish: (event, data) => publishEvent(event, data),
+  });
+  hookStore.ensure();
+  const hooksService = new HooksService({
+    store: hookStore,
+    approval: approvalBroker,
+    publish: (event, data) => publishEvent(event, data),
+    enabled: () => config.hooks.enabled,
+    approvalEnabled: () => config.hooks.approvalEnabled,
+    logger: (msg, data) => logger.info(msg, data),
+  });
+  logger.info('审批门已就绪', {
+    enabled: config.hooks.enabled,
+    approvalEnabled: config.hooks.approvalEnabled,
+    rules: hookStore.list().length,
+  });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
@@ -361,6 +393,15 @@ async function main(): Promise<void> {
         ...(config.skills.enabled ? { skills: skillStore } : {}),
         ...(cua.enabled ? { cua } : {}),
         cuaIncludeImages: config.cua.includeImages,
+        guard: async (ctx) => {
+          const decision = await hooksService.guard({
+            kind: 'tool',
+            name: ctx.name,
+            ...(ctx.args === undefined ? {} : { args: ctx.args }),
+            ...(ctx.sessionId === undefined ? {} : { meta: { sessionId: ctx.sessionId } }),
+          });
+          return { allowed: decision.allowed, reason: decision.reason };
+        },
       }),
     blobs,
     voice,
@@ -453,6 +494,22 @@ async function main(): Promise<void> {
     bus,
     logger,
     clock: systemClock,
+    // 审批门：危险方法（删记忆/删会话/停用插件等）先问用户；审批门自身方法不走规则
+    guard: async (ctx) => {
+      if (EXEMPT_METHODS.has(ctx.name)) return { allowed: true };
+      const decision = await hooksService.guard({
+        kind: 'method',
+        name: ctx.name,
+        ...(ctx.params === undefined || ctx.params === null || typeof ctx.params !== 'object'
+          ? {}
+          : { args: ctx.params as Record<string, unknown> }),
+        meta: {
+          ...(ctx.sessionId === undefined ? {} : { sessionId: ctx.sessionId }),
+          ...(ctx.client === undefined ? {} : { client: { name: ctx.client.name, version: ctx.client.version } }),
+        },
+      });
+      return { allowed: decision.allowed, reason: decision.reason };
+    },
   });
   publishEvent = (event, data) => gateway.publish(event, data);
   registerHealth(registry, {
@@ -491,6 +548,16 @@ async function main(): Promise<void> {
     answerPermission: (id, accepted) => permissionBroker.answer(id, accepted),
   });
   registerRunMethods(registry, { pauseGate, publish: (event, data) => publishEvent(event, data) });
+  registerHooksMethods(registry, {
+    store: hookStore,
+    approval: approvalBroker,
+    service: hooksService,
+    config: () => ({
+      enabled: config.hooks.enabled,
+      approvalEnabled: config.hooks.approvalEnabled,
+      approvalTimeoutMs: config.hooks.approvalTimeoutMs,
+    }),
+  });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {
@@ -543,6 +610,7 @@ async function main(): Promise<void> {
     try {
       cua.onTurnEnded();
       permissionBroker.cancelAll();
+      approvalBroker.cancelAll();
       automation?.stop();
       reminders.stop();
       await gateway.stop();

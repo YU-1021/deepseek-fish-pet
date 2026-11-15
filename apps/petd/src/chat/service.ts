@@ -276,7 +276,10 @@ export class ChatService {
         if (round >= this.chat.maxToolRounds) break; // 轮数用完了，不再继续调工具
         messages.push({ role: 'assistant', content: r.text, toolCalls: r.toolCalls });
         for (const call of r.toolCalls) {
-          const res = await toolbox!.execute(call, { ...(input.signal === undefined ? {} : { signal: input.signal }) });
+          const res = await toolbox!.execute(call, {
+            ...(input.signal === undefined ? {} : { signal: input.signal }),
+            sessionId: meta.id,
+          });
           const activity: ChatToolActivity = { round: round + 1, name: call.name, args: call.arguments, ok: res.ok, text: res.text };
           tools.push(activity);
           this.publish('chat.tool', {

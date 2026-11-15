@@ -352,6 +352,13 @@ export interface MemoryToolboxOptions {
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
   maxResultChars: number;
+  /** 审批门：返回 not allowed 时工具直接失败（危险动作先确认） */
+  guard?: (ctx: {
+    kind: 'tool';
+    name: string;
+    args?: Record<string, unknown>;
+    sessionId?: string;
+  }) => Promise<{ allowed: boolean; reason?: string }>;
 }
 
 /** 写操作：写/追加/编辑/删除/移动/存附件/建改任务，都算一次配额 */
@@ -392,6 +399,7 @@ export class MemoryToolbox {
   private readonly cuaIncludeImages: boolean;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
+  private readonly guard?: MemoryToolboxOptions['guard'];
   /** 本轮已用掉的写操作次数 */
   writes = 0;
 
@@ -405,6 +413,7 @@ export class MemoryToolbox {
     this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
+    this.guard = opts.guard;
   }
 
   /** 声明给模型的工具列表（没配对应服务就不暴露那组工具） */
@@ -417,7 +426,10 @@ export class MemoryToolbox {
   }
 
   /** 执行一个工具调用；永远返回文本结果，不抛错（错误也交给模型自己纠正）。 */
-  async execute(call: LlmToolCall, opts: { signal?: AbortSignal } = {}): Promise<ToolExecutionResult> {
+  async execute(
+    call: LlmToolCall,
+    opts: { signal?: AbortSignal; sessionId?: string } = {}
+  ): Promise<ToolExecutionResult> {
     let args: Record<string, unknown>;
     try {
       const parsed: unknown = call.arguments.trim() === '' ? {} : JSON.parse(call.arguments);
@@ -425,6 +437,28 @@ export class MemoryToolbox {
       args = parsed as Record<string, unknown>;
     } catch (e) {
       return { ok: false, text: this.truncate(`错误：工具参数不是合法 JSON（${e instanceof Error ? e.message : String(e)}）`) };
+    }
+
+    if (this.guard !== undefined) {
+      try {
+        const verdict = await this.guard({
+          kind: 'tool',
+          name: call.name,
+          args,
+          ...(opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }),
+        });
+        if (!verdict.allowed) {
+          return {
+            ok: false,
+            text: this.truncate(`错误（E_FORBIDDEN）：${verdict.reason ?? '这次操作没有通过审批门'}`),
+          };
+        }
+      } catch (e) {
+        return {
+          ok: false,
+          text: this.truncate(`错误（E_INTERNAL）：审批门出错（${e instanceof Error ? e.message : String(e)}）`),
+        };
+      }
     }
 
     if (CUA_TOOL_NAMES.has(call.name)) {

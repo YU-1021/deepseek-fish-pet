@@ -290,3 +290,51 @@ test('load_skill / list_skills：模型能按需读取技能正文，不算写�
   assert.equal(off.ok, false);
   assert.match(off.text, /没有启用技能/);
 });
+
+test('审批门 guard：拒绝时工具不执行，放行时正常，异常变成错误文本', async () => {
+  const service = tmpService();
+  const seen: Array<Record<string, unknown>> = [];
+  const denyBox = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    guard: async (ctx) => {
+      seen.push({ kind: ctx.kind, name: ctx.name, args: ctx.args, sessionId: ctx.sessionId });
+      if (ctx.name === 'delete_file') return { allowed: false, reason: '测试拒绝删除' };
+      return { allowed: true };
+    },
+  });
+
+  await denyBox.execute(call('write_file', { path: 'a.md', content: 'hi' }), { sessionId: 's1' });
+  const denied = await denyBox.execute(call('delete_file', { path: 'a.md' }), { sessionId: 's1' });
+  assert.equal(denied.ok, false);
+  assert.match(denied.text, /错误（E_FORBIDDEN）：测试拒绝删除/);
+  assert.equal(denyBox.writes, 1, '被拒绝的删除不计写配额');
+
+  const guardCall = seen.find((e) => e['name'] === 'delete_file');
+  assert.ok(guardCall);
+  assert.equal(guardCall['kind'], 'tool');
+  assert.equal(guardCall['sessionId'], 's1');
+  assert.equal((guardCall['args'] as Record<string, unknown>)['path'], 'a.md');
+
+  const allowBox = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    guard: async () => ({ allowed: true }),
+  });
+  const ok = await allowBox.execute(call('delete_file', { path: 'a.md' }));
+  assert.equal(ok.ok, true);
+
+  const brokenBox = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    guard: async () => {
+      throw new Error('门坏了');
+    },
+  });
+  const broken = await brokenBox.execute(call('write_file', { path: 'b.md', content: 'x' }));
+  assert.equal(broken.ok, false);
+  assert.match(broken.text, /错误（E_INTERNAL）：审批门出错/);
+});

@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 审批门）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**审批门（hooks）**（危险动作先问一次：删记忆/删会话/删文件/移文件/关插件/删自动化等；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦）。
 
 ## 现在有什么
 
@@ -25,12 +25,13 @@
     - 插件：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`（声明式：`home/plugins/<id>/plugin.json` + `prompt.md` + `skills/`，不执行任意 JS；启停状态持久化）
     - 感知与输入（CUA）：`cua.status` / `cua.screenshot` / `cua.zoom` / `cua.windows` / `cua.focus` / `cua.click` / `cua.move` / `cua.drag` / `cua.mouse_down` / `cua.mouse_up` / `cua.scroll` / `cua.type` / `cua.key` / `cua.wait` / `cua.answer`（照 Coo 形状：GDI 截屏 + 窗口/前台 + SendInput 操作；带权限门、用户让位、终端保护、只读开关；聊天里对应 13 个工具）
     - 运行控制：`run.status` / `run.pause` / `run.resume`（暂停后聊天、自动化、电脑操作都会被挡住；恢复后继续）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` + `approval.list` / `approval.answer`（危险动作先问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.blocked`）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua 十二段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks 十三段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -40,7 +41,8 @@
 8. 自动化：`home/state/automations.json` 不存在时创建空文件；`config.automation.enabled=false`（默认）时定时器不跑，避免偷偷花 token
 9. 技能与插件：`home/skills/` 不存在时创建；`home/plugins/` 下的每个插件目录读 `plugin.json`（缺字段/坏清单跳过并记 warn），启停状态存 `home/state/plugins.json`（默认启用）
 10. 电脑操作（CUA）：只检查平台与显示器，不截屏、不申请权限；`config.cua.enabled=false`（默认）时聊天里没有 CUA 工具，只有 `cua.status` 之类能看
-11. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+11. 审批门：`home/state/hooks.json` 不存在时播种 9 条内置 ask 规则（删记忆/删会话/删文件/移文件/关插件/删自动化/移动文件等）；用户规则与停用状态从这里读，坏文件按内置规则启动且不覆盖原文件
+12. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -131,6 +133,11 @@
     "maxYieldWaitMs": 15000,
     "typeChunkDelayMs": 20,
     "includeImages": false
+  },
+  "hooks": {
+    "enabled": true,
+    "approvalEnabled": true,
+    "approvalTimeoutMs": 60000
   }
 }
 ```
@@ -192,6 +199,9 @@
 - `cua.maxYieldWaitMs`：最多等多久（默认 15000ms），超了就放弃本次操作、不硬抢。
 - `cua.typeChunkDelayMs`：打字分块间隔（毫秒），防止一次灌太多字符。
 - `cua.includeImages`：是否把截图真的作为图片发给多模态模型（默认 false，只给文字描述 + 建议用 `zoom` 看局部；打开会显著增加 token）。
+- `hooks.enabled`：审批门总开关（默认 true；关掉后危险动作不再问，等于全部放行——除非你自己写了 deny 规则，关掉开关后规则也不生效）。
+- `hooks.approvalEnabled`：是否允许「问用户」这一档（默认 true；关掉后命中 ask 规则的动作直接拒绝并说明审批门已关闭）。
+- `hooks.approvalTimeoutMs`：等待用户确认的超时（5000–600000，默认 60000）；超时按拒绝处理，动作不会执行。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -348,6 +358,19 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 - **没做的**：UIA 元素树、OCR、浏览器 DOM、shell——Coo 也没有；引擎子进程隔离（v1 在 petd 进程内跑，跨平台只有 Windows）。
 - **确认方式**：`node apps/petd/scripts/cua-smoke.mjs`（真截屏/真窗口列表；权限拒绝、暂停、只读三条路径都测；不移动你的鼠标键盘）。
 
+## 审批门（hooks）
+
+一层独立于模型的规则网：**工具调用或网关方法在执行前先过规则**，命中 deny 直接拒绝，命中 ask 就弹审批问用户，批准才执行；超时/拒绝都不执行。默认开启，不需要前端配合也能用。
+
+- **两侧都拦**：聊天工具（文件/记忆/定时/技能等）在 `MemoryToolbox.execute` 里过；网关方法在 `Gateway` 的 `guard` 里过（参数校验之后、handler 之前）。审批门自身的方法（`hooks.status/list/get`、`approval.list/answer`）不拦自己。
+- **内置规则**（priority 100，默认 ask）：`memory.delete`、`memory.move`、`blob.delete`、`skill.delete`、`plugin.disable`、`session.delete`、`automation.delete`、工具 `delete_file` / `move_file`。也就是说：**删/移东西默认都会先问一次**——这是「危险动作二次确认」的最小集。
+- **规则形状**：`{id, kind: 'tool'|'method', names: string[]（支持 `*`/`?` 通配）, action: 'allow'|'ask'|'deny', message?, argContains?, priority, enabled}`；按 priority 升序取**第一条命中**生效。`argContains` 是参数 JSON 里的关键字（大小写不敏感）——例如「工具 `cua_type` 参数里出现 `rm -rf /` 就 deny」。
+- **谁能写**：`hooks.create/update/delete/toggle`（用户/前端）；默认规则 priority 100，用户规则默认 priority 10（所以能覆盖内置 ask）。
+- **记住本次**：`approval.answer {id, accepted, remember: true}` 后，**同一个 WS 连接**在该规则上不再问；换个连接会重新问。`clearSessionAllows` 只在本进程内由服务维护，重启后清空。
+- **事件**：`approval.requested {id, kind, name, ruleId, title, detail?, requestedAt, deadlineAt}` → UI 弹确认；`approval.resolved {id, accepted, reason, remember}`；`hooks.blocked {kind, name, ruleId, action, message}`（deny 时记一笔）；`hooks.changed {action, rule}`。
+- **超时**：`hooks.approvalTimeoutMs` 内没人答按拒绝处理（`reason: 'timeout'`），动作不执行。
+- **确认方式**：`node apps/petd/scripts/hooks-smoke.mjs`（不花 token：内置 ask 拒绝/允许/记住、超时、自定义 deny 规则、toggle 放行、删除规则、优雅退出）。
+
 ## 跑起来
 
 ```bat
@@ -398,6 +421,9 @@ node apps/petd/scripts/skills-plugins-smoke.mjs
 
 :: 冒烟：感知与输入 CUA（真截屏/真窗口列表；权限拒绝/暂停/只读；不移动你的鼠标键盘）
 node apps/petd/scripts/cua-smoke.mjs
+
+:: 冒烟：审批门（不花 token；内置 ask 拒绝/允许/记住、超时、自定义 deny、toggle、删除规则）
+node apps/petd/scripts/hooks-smoke.mjs
 ```
 
 READY 行示例：
@@ -426,7 +452,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 248/248（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 275/275（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -441,6 +467,7 @@ cd apps/petd && node scripts/reminder-smoke.mjs --home D:\x    :: 提醒端到�
 cd apps/petd && node scripts/automation-smoke.mjs --home D:\x  :: 自动化端到端（真 LLM 一次；手动任务跑通/运行记录/暂停恢复/重启保留；38 项）
 cd apps/petd && node scripts/skills-plugins-smoke.mjs --home D:\x :: 技能/插件端到端（不花 token；技能 CRUD/插件技能只读/启停持久/重启保留；37 项）
 cd apps/petd && node scripts/cua-smoke.mjs --home D:\x        :: 感知/输入端到端（真截屏/真窗口/权限拒绝/暂停/只读；不移动真实鼠标键盘；34 项）
+cd apps/petd && node scripts/hooks-smoke.mjs --home D:\x      :: 审批门端到端（不花 token；内置 ask 允许/拒绝/记住/超时、自定义 deny、toggle、删除；31 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -469,6 +496,8 @@ ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 
 
 CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）：`config.get` 的 cua 段、`cua.status`（引擎 win32/显示器/前台）、`cua.screenshot`（800×450、scale 换算、JPEG base64 真能解码）、`cua.windows` 能列出可见窗口（标题/进程）、`cua.permission` 事件 → `cua.answer` 拒绝 → 点击返回 `E_FORBIDDEN`、未知权限 id 返 `found=false`、`run.pause` 后截图/聊天被挡且 `run.paused` 事件、`run.resume` 恢复、只读模式（`control=false`）能看不能动、两次优雅退出。
 
+审批门冒烟覆盖（31 项，不花 token）：`config.get` 的 hooks 段、`hooks.status/list` 内置 9 条规则、删除文件前真的弹 `approval.requested`（kind/name/ruleId/id 正确）、`approval.answer` 拒绝 → `E_FORBIDDEN`「你拒绝了这次操作」、允许后删除成功、`remember=true` 后同连接不再问、不回答 → 超时自动拒绝（`approval.resolved.reason=timeout`）、自定义 deny 规则生效并广播 `hooks.blocked`、`toggle` 关闭后落到内置 ask、`hooks.delete` 删除规则、`hooks.changed` 广播、优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-口语/发音评测（用户明确不做）、说话人识别、游戏助手、WebUI、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、UIA/OCR/DOM 感知（CUA 只有截图+窗口+键鼠）、CUA 引擎子进程隔离、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、游戏助手、WebUI、多 agent 实例、SQLite 状态、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、UIA/OCR/DOM 感知（CUA 只有截图+窗口+键鼠）、CUA 引擎子进程隔离、记忆工具的流式输出……

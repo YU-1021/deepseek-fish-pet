@@ -178,6 +178,11 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           typeChunkDelayMs: Type.Integer(),
           includeImages: Type.Boolean(),
         }),
+        hooks: Type.Object({
+          enabled: Type.Boolean(),
+          approvalEnabled: Type.Boolean(),
+          approvalTimeoutMs: Type.Integer(),
+        }),
       }),
     },
     () => {
@@ -206,6 +211,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         skills: { ...cfg.skills },
         plugins: { ...cfg.plugins },
         cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
+        hooks: { ...cfg.hooks },
       };
     }
   );

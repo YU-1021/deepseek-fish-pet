@@ -49,6 +49,14 @@ export interface GatewayOptions {
   bus: EventBus;
   logger: Logger;
   clock: Clock;
+  /** 审批门：参数校验通过后、handler 执行前调用；返回 not allowed 时拒绝 */
+  guard?: (ctx: {
+    kind: 'method';
+    name: string;
+    params?: unknown;
+    sessionId?: string;
+    client?: ClientInfo;
+  }) => Promise<{ allowed: boolean; reason?: string }>;
 }
 
 interface ClientState {
@@ -240,7 +248,25 @@ export class Gateway {
       if (paramError) {
         frame = { type: 'res', id, ok: false, error: paramError };
       } else {
-        const timeoutMs = reg.descriptor.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const verdict =
+          this.opts.guard === undefined
+            ? { allowed: true as const }
+            : await this.opts.guard({
+                kind: 'method',
+                name: method,
+                params,
+                sessionId: state.id,
+                ...(state.client === null ? {} : { client: state.client }),
+              });
+        if (!verdict.allowed) {
+          frame = {
+            type: 'res',
+            id,
+            ok: false,
+            error: errorBody('E_FORBIDDEN', verdict.reason ?? '这次操作没有通过审批门'),
+          };
+        } else {
+          const timeoutMs = reg.descriptor.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         timer.unref?.();
@@ -267,8 +293,9 @@ export class Gateway {
             );
           });
           frame = { type: 'res', id, ok: true, ...(data === undefined ? {} : { data }) };
-        } finally {
-          clearTimeout(timer);
+          } finally {
+            clearTimeout(timer);
+          }
         }
       }
     } catch (err) {

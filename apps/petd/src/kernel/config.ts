@@ -193,6 +193,14 @@ export interface PetdConfig {
     /** 截图是否作为图片发给模型（模型支持看图才开；默认只给文字描述） */
     includeImages: boolean;
   };
+  hooks: {
+    /** 钩子/审批门总开关：关闭后所有规则不生效（危险动作直接执行） */
+    enabled: boolean;
+    /** 审批门开关：关闭后 ask 规则一律按拒绝处理（不弹出询问） */
+    approvalEnabled: boolean;
+    /** 单个审批最多等多久（毫秒），超时按拒绝 */
+    approvalTimeoutMs: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -299,6 +307,12 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxYieldWaitMs: 15_000,
     typeChunkDelayMs: 20,
     includeImages: false,
+  },
+  hooks: {
+    // 危险动作二次确认默认开：删文件/删会话之类的操作会先问一次
+    enabled: true,
+    approvalEnabled: true,
+    approvalTimeoutMs: 60_000,
   },
 };
 
@@ -621,6 +635,20 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof ii === 'boolean') out.cua.includeImages = ii;
       else if (ii !== undefined) warnings.push('cua.includeImages 非法，回默认 false');
     } else warnings.push('cua 段必须是对象，回默认');
+  }
+  const hooksRaw = raw['hooks'];
+  if (hooksRaw !== undefined) {
+    if (isObject(hooksRaw)) {
+      const he = hooksRaw['enabled'];
+      if (typeof he === 'boolean') out.hooks.enabled = he;
+      else if (he !== undefined) warnings.push('hooks.enabled 非法，回默认 true');
+      const ha = hooksRaw['approvalEnabled'];
+      if (typeof ha === 'boolean') out.hooks.approvalEnabled = ha;
+      else if (ha !== undefined) warnings.push('hooks.approvalEnabled 非法，回默认 true');
+      const ht = hooksRaw['approvalTimeoutMs'];
+      if (typeof ht === 'number' && Number.isInteger(ht) && ht >= 5000 && ht <= 600_000) out.hooks.approvalTimeoutMs = ht;
+      else if (ht !== undefined) warnings.push('hooks.approvalTimeoutMs 非法，回默认 60000');
+    } else warnings.push('hooks 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

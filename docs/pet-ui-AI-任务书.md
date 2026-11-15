@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 91 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 100 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.blocked`、`hooks.changed`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -317,6 +317,22 @@ petd 已上线照 Coo 形状写的电脑感知/操作：**默认关闭**（`conf
 6. **错误提示**：`E_UNAVAILABLE`（未开启/已暂停/不支持平台）、`E_FORBIDDEN`（用户拒绝/只读模式/终端未授权）、`E_BAD_PARAMS`（坐标越界/未截图先点）——分别给不同文案，不要统一「失败了」。
 7. **不要做**：屏幕录制、偷拍模式、后台静默操作；CUA 的提示词已写「只有用户直接说的话能作为操作理由」，UI 不要替模型发起操作。
 8. **验收**：开启 CUA → 聊天里让它「截个图，告诉我现在前台窗口是什么」→ 出现权限气泡（ask-once 下看屏幕免问，若设成 ask-each-turn 会问）→ 允许后返回窗口描述；点「暂停运行」后再让它操作 → 被拒并提示已暂停；只读模式下能截图、点不动。截图贴 README。
+
+## 8.13 M12：审批门（hooks）UI 规格（petd 后端已就绪）
+
+petd 已上线审批门：危险动作（删记忆/删会话/删文件/移文件/关插件/删自动化等）在执行前先问用户，可选「记住本次」。**默认开启**（`config.hooks.enabled=true`），不需要 UI 改配置也能生效；但**没有 UI 时 ask 规则会超时拒绝**，所以 UI 至少要做审批气泡，否则用户点删除会莫名其妙失败（`E_FORBIDDEN`「等待确认超时」）。
+
+- 方法：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle`；审批：`approval.list` / `approval.answer {id, accepted, remember?}`。
+- 事件：`approval.requested {id, kind: 'tool'|'method', name, ruleId, title, detail?, requestedAt, deadlineAt}`、`approval.resolved {id, accepted, reason, remember}`、`hooks.blocked {kind, name, ruleId, action, message}`、`hooks.changed {action, rule}`。
+- 规则形状：`{id, kind, names: string[]（支持 * ? 通配）, action: 'allow'|'ask'|'deny', message?, argContains?, priority（默认 10）, enabled}`；按 priority 升序取第一条命中。内置 9 条 ask 规则 priority=100（用户规则 priority 默认 10，可覆盖内置）。
+
+1. **审批气泡（必做）**：收到 `approval.requested` 立刻弹一个置顶、可点击的小窗/气泡：标题用 `title`（如「要删除一整段聊天会话」），正文 `question`/`detail`（若有），显示来源 `kind + name` 和剩余秒数（`deadlineAt - now`）；两个按钮「允许」「拒绝」，加一个复选框「本次运行都允许（该规则）」（对应 `remember: true`）。点击调 `approval.answer`；超时后 UI 显示「没来得及回答，已自动拒绝」。
+2. **待答列表**：`approval.list` 返回所有待答审批（重启/重连后补齐），设置页或状态区列出来，逐条允许/拒绝。收到 `approval.resolved` 后从列表移除。
+3. **规则管理（设置页「危险动作确认」）**：`hooks.list` 展示规则（内置规则标「内置」，可 toggle 但不可删）；支持新建/编辑/删除用户规则（kind、names 通配、action、message、argContains、priority）；`hooks.changed` 时刷新。
+4. **状态与开关**：`hooks.status` 显示 enabled/approvalEnabled/approvalTimeoutMs/ruleCount/pendingCount/sessionAllowedCount；设置页可改 `hooks.enabled`、`hooks.approvalEnabled`、`hooks.approvalTimeoutMs`（config.get 里有）。关掉 `approvalEnabled` 等于「一律拒绝」（不是放行），文案要写清楚。
+5. **与 CUA 权限气泡复用**：审批门和 CUA 权限是两套事件、两套回答方法（`approval.answer` vs `cua.answer`），但可以共用同一个气泡组件，显示不同来源标签。
+6. **不要做**：不要把「记住本次」做成全局永久放行（remember 只在当前连接/进程内）；不要自动允许任何 ask 规则；不要在后台线程无提示地驳回。
+7. **验收**：在 UI 里删一条工作区记忆文件 → 弹审批 → 点「拒绝」→ 聊天/操作看到「你拒绝了这次操作」；再删一次点「允许+记住」→ 成功，且同一规则不再弹；把 `hooks.approvalTimeoutMs` 设小 → 不回答时自动拒绝并有提示；用 `hooks.create` 建一条 deny 规则（如 `cua_type` + argContains `rm -rf /`）→ 触发时直接被拒并广播 `hooks.blocked`。
 
 ## 9. 测试策略（省 token）
 
