@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), showChat: vi.fn(), showPetMenu: vi.fn(), startDrag: vi.fn(), endDrag: vi.fn(), audioPlay: vi.fn(), events: new Set<(frame: any) => void>(), moodEnabled: true }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), showChat: vi.fn(), showPetMenu: vi.fn(), startDrag: vi.fn(), endDrag: vi.fn(), audioPlay: vi.fn(), animate: vi.fn(), events: new Set<(frame: any) => void>(), moodEnabled: true }));
 
 vi.mock('./assets/click-duck.wav', () => ({ default: '/click-duck.wav' }));
 
@@ -21,6 +21,8 @@ function pointerUp(target: Element, pointerId = 1, clientX = 20, clientY = 20) {
 beforeEach(() => {
   cleanup(); localStorage.clear(); mocks.events.clear(); mocks.showChat.mockReset(); mocks.showPetMenu.mockReset(); mocks.startDrag.mockReset(); mocks.endDrag.mockReset(); mocks.request.mockReset();
   mocks.audioPlay.mockReset().mockResolvedValue(undefined);
+  mocks.animate.mockReset();
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: mocks.animate });
   vi.stubGlobal('Audio', class { currentTime = 0; volume = 1; play = mocks.audioPlay; });
   mocks.moodEnabled = true;
   window.history.replaceState({}, '', '/?pet=1');
@@ -48,6 +50,7 @@ describe('PetOverlay mood interaction', () => {
     expect(mocks.showChat).not.toHaveBeenCalled();
     expect(pet.querySelector('.pet-bounce')).toBeTruthy();
     expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
+    expect(mocks.animate).toHaveBeenCalledTimes(1);
     expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
     expect(pet.textContent).toBe('');
   });
@@ -64,6 +67,7 @@ describe('PetOverlay mood interaction', () => {
     await new Promise((resolve) => window.setTimeout(resolve, 300));
     expect(mocks.request.mock.calls.filter(([method]) => method === 'mood.poke')).toHaveLength(2);
     expect(mocks.audioPlay).toHaveBeenCalledTimes(2);
+    expect(mocks.animate).toHaveBeenCalledTimes(2);
   });
 
   it('does not poke when mood is disabled', async () => {
