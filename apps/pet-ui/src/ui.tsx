@@ -7,6 +7,7 @@ import { useMoodNumberPreference, useMoodState } from './mood';
 import { MemoryPanel, uploadAttachmentFile } from './memory-panel';
 import type { QueuedAttachment } from './memory-panel';
 import fishIdle from './assets/fish-idle.webm';
+import clickDuck from './assets/click-duck.wav';
 
 type Session = { id: string; title: string; updatedAt: string; messageCount: number };
 type Message = { role: 'user' | 'assistant'; content: string; ts: string };
@@ -134,15 +135,30 @@ export function App() {
 function PetOverlay() {
   const { enabled } = useMoodState();
   const pokeTimer = useRef<number | undefined>(undefined);
+  const bounceTimer = useRef<number | undefined>(undefined);
+  const clickAudio = useRef<HTMLAudioElement | null>(null);
+  const [bouncing, setBouncing] = useState(false);
   async function poke() {
     if (enabled !== true) return;
     try {
       await request('mood.poke', {});
     } catch { /* pet window keeps the interaction quiet when petd is offline */ }
   }
+  function playClickFeedback() {
+    setBouncing(true);
+    if (bounceTimer.current) window.clearTimeout(bounceTimer.current);
+    bounceTimer.current = window.setTimeout(() => setBouncing(false), 460);
+    try {
+      clickAudio.current ??= new Audio(clickDuck);
+      clickAudio.current.volume = 0.5;
+      clickAudio.current.currentTime = 0;
+      void clickAudio.current.play().catch(() => {});
+    } catch { /* audio unavailable: keep the animation */ }
+    if (enabled === true) void poke();
+  }
   function onClick(event: MouseEvent) {
     if (event.detail > 1) { if (pokeTimer.current) window.clearTimeout(pokeTimer.current); return; }
-    pokeTimer.current = window.setTimeout(() => { void poke(); }, 240);
+    pokeTimer.current = window.setTimeout(playClickFeedback, 240);
   }
   function openChat() {
     if (pokeTimer.current) window.clearTimeout(pokeTimer.current);
@@ -150,7 +166,7 @@ function PetOverlay() {
   }
   return <div className="pet-overlay" onClick={onClick} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
-    <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
+    <div className={`pet-float ${bouncing ? 'pet-bounce' : ''}`}><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
   </div>;
 }
 

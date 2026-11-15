@@ -2,7 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), showChat: vi.fn(), showPetMenu: vi.fn(), events: new Set<(frame: any) => void>(), moodEnabled: true }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), showChat: vi.fn(), showPetMenu: vi.fn(), audioPlay: vi.fn(), events: new Set<(frame: any) => void>(), moodEnabled: true }));
+
+vi.mock('./assets/click-duck.wav', () => ({ default: '/click-duck.wav' }));
 
 vi.mock('./petd', () => ({
   usePetdStatus: () => ({ state: 'connected' }),
@@ -16,6 +18,8 @@ const snapshot = { mood: 71, affection: 32, energy: 80, pokes: 3, updatedAt: 10,
 
 beforeEach(() => {
   cleanup(); localStorage.clear(); mocks.events.clear(); mocks.showChat.mockReset(); mocks.showPetMenu.mockReset(); mocks.request.mockReset();
+  mocks.audioPlay.mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal('Audio', class { currentTime = 0; volume = 1; play = mocks.audioPlay; });
   mocks.moodEnabled = true;
   window.history.replaceState({}, '', '/?pet=1');
   Object.defineProperty(window, 'petdBootstrap', { configurable: true, value: { showChat: mocks.showChat, showPetMenu: mocks.showPetMenu } });
@@ -36,6 +40,8 @@ describe('PetOverlay mood interaction', () => {
     const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
     fireEvent.click(pet);
     await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
+    expect(pet.querySelector('.pet-bounce')).toBeTruthy();
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
     expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
     expect(pet.textContent).toBe('');
   });
@@ -50,6 +56,7 @@ describe('PetOverlay mood interaction', () => {
     expect(mocks.showChat).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => window.setTimeout(resolve, 300));
     expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
+    expect(mocks.audioPlay).not.toHaveBeenCalled();
   });
 
   it('does not poke when mood is disabled', async () => {
@@ -59,6 +66,8 @@ describe('PetOverlay mood interaction', () => {
     fireEvent.click(pet);
     await new Promise((resolve) => window.setTimeout(resolve, 300));
     expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
+    expect(pet.querySelector('.pet-bounce')).toBeTruthy();
+    expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
   });
 
   it('does not show chat mood changes on the pet artwork', async () => {
