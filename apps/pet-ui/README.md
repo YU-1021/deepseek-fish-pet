@@ -12,7 +12,7 @@ pnpm --filter @petd/pet-ui typecheck
 pnpm --filter @petd/pet-ui test
 ```
 
-The desktop shell includes a Vite renderer, Electron main entry and preload, a floating draggable pet window, tray controls, and a gateway status strip with reconnect delays (1s/2s/5s). Electron reads `gateway.json` and `token.json` from `%APPDATA%/dayu-pet/petd` (or `PETD_HOME`) in the main process and exposes only the connection bootstrap over narrow IPC methods. Double-click the floating pet to show chat; right-click toggles click-through, which can also be reset from the tray menu. The floating pet uses the local Coopanion DeepSeek fish-maid thumbnail; its source is recorded in `src/assets/README.md`.
+The desktop shell includes a Vite renderer, Electron main entry and preload, a floating draggable pet window, tray controls, and a gateway status strip with reconnect delays (1s/2s/5s). Electron reads `gateway.json` and `token.json` from `%APPDATA%/dayu-pet/petd` (or `PETD_HOME`) in the main process and exposes only the connection bootstrap over narrow IPC methods. Double-click the floating pet to show chat; right-click toggles click-through, which can also be reset from the tray menu. The pet uses the transparent idle animation from the local `dsh-pet` package; its source and artwork credit are recorded in `src/assets/README.md`.
 
 Chat uses `session.list/get`, `session.create`, `chat.send`, and event-backed messages. The settings view reads only non-secret data from `config.get`. The persona view supports section edits through `persona.patch` with `expectedVersion`, AI edit locks, revision history, rollback, and `persona.changed` refresh handling. `E_CONFLICT` displays a refresh message and reloads the latest persona before further edits.
 

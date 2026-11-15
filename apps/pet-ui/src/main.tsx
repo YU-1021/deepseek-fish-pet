@@ -5,6 +5,6 @@ import './style.css';
 import './detail.css';
 import './pet.css';
 import './pet-interaction.css';
-import './whale.css';
+import './fish.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
