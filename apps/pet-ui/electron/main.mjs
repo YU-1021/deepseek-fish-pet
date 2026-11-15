@@ -74,20 +74,20 @@ ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus();
 function dragPetStep() {
   if (!petDrag || !petWindow || petWindow.isDestroyed()) return endPetDrag();
   const cursor = screen.getCursorScreenPoint();
+  if (!petDrag.moved && Math.hypot(cursor.x - petDrag.cursorX, cursor.y - petDrag.cursorY) < 6) return;
+  petDrag.moved = true;
   const x = Math.round(petDrag.windowX + cursor.x - petDrag.cursorX);
   const y = Math.round(petDrag.windowY + cursor.y - petDrag.cursorY);
   const [currentX, currentY] = petWindow.getPosition();
   if (Math.abs(x - currentX) <= 1 && Math.abs(y - currentY) <= 1) return;
   petWindow.setBounds({ ...petDrag.bounds, x, y });
 }
-function startPetDrag(initialDelta = {}) {
+function startPetDrag() {
   if (!petWindow || petWindow.isDestroyed()) return;
   endPetDrag();
   const [windowX, windowY] = petWindow.getPosition();
   const cursor = screen.getCursorScreenPoint();
-  const dx = Number.isFinite(initialDelta?.x) ? Math.max(-2000, Math.min(2000, initialDelta.x)) : 0;
-  const dy = Number.isFinite(initialDelta?.y) ? Math.max(-2000, Math.min(2000, initialDelta.y)) : 0;
-  petDrag = { windowX, windowY, cursorX: cursor.x - dx, cursorY: cursor.y - dy, bounds: petWindow.getBounds() };
+  petDrag = { windowX, windowY, cursorX: cursor.x, cursorY: cursor.y, bounds: petWindow.getBounds(), moved: false };
   petMouseIgnored = false;
   petWindow.setIgnoreMouseEvents(false, { forward: true });
   petDragTimer = setInterval(dragPetStep, 8);
@@ -98,7 +98,7 @@ function endPetDrag() {
   petDrag = undefined;
   updatePetMousePassthrough();
 }
-ipcMain.handle('pet:drag-start', (event, initialDelta) => { if (event.sender === petWindow?.webContents) startPetDrag(initialDelta); });
+ipcMain.handle('pet:drag-start', (event) => { if (event.sender === petWindow?.webContents) startPetDrag(); });
 ipcMain.handle('pet:drag-end', (event) => { if (event.sender === petWindow?.webContents) endPetDrag(); });
 ipcMain.on('pet:hit-regions', (event, input) => {
   if (event.sender !== petWindow?.webContents || !Array.isArray(input)) return;

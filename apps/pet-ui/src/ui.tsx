@@ -148,7 +148,6 @@ function PetOverlay() {
   const petVideo = useRef<HTMLVideoElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerMoved = useRef(false);
-  const dragStarted = useRef(false);
   const [reaction, setReaction] = useState<{ en: string; zh: string } | null>(null);
   function syncPetHitRegions() {
     const overlay = document.querySelector('.pet-overlay');
@@ -251,7 +250,7 @@ function PetOverlay() {
     if (event.button !== 0) return;
     pointerStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     pointerMoved.current = false;
-    dragStarted.current = false;
+    void window.petdBootstrap?.startDrag();
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* capture is unavailable in some renderers */ }
   }
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
@@ -261,10 +260,6 @@ function PetOverlay() {
     const dy = event.clientY - start.y;
     if (Math.hypot(dx, dy) >= 6) {
       pointerMoved.current = true;
-      if (!dragStarted.current) {
-        dragStarted.current = true;
-        void window.petdBootstrap?.startDrag({ x: dx, y: dy });
-      }
     }
   }
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
@@ -274,24 +269,21 @@ function PetOverlay() {
     pointerStart.current = null;
     pointerMoved.current = false;
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* capture may already be released */ }
-    if (dragStarted.current) void window.petdBootstrap?.endDrag();
-    dragStarted.current = false;
+    void window.petdBootstrap?.endDrag();
     if (!moved) playClickFeedback();
   }
   function onPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
     if (pointerStart.current?.id !== event.pointerId) return;
     pointerStart.current = null;
     pointerMoved.current = false;
-    if (dragStarted.current) void window.petdBootstrap?.endDrag();
-    dragStarted.current = false;
+    void window.petdBootstrap?.endDrag();
   }
   useEffect(() => {
     const releasePointer = () => {
       if (!pointerStart.current) return;
       pointerStart.current = null;
       pointerMoved.current = false;
-      if (dragStarted.current) void window.petdBootstrap?.endDrag();
-      dragStarted.current = false;
+      void window.petdBootstrap?.endDrag();
     };
     window.addEventListener('blur', releasePointer);
     return () => { window.removeEventListener('blur', releasePointer); releasePointer(); };
