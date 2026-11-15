@@ -73,20 +73,18 @@ function dragPetStep() {
   const cursor = screen.getCursorScreenPoint();
   const x = Math.round(petDrag.windowX + cursor.x - petDrag.cursorX);
   const y = Math.round(petDrag.windowY + cursor.y - petDrag.cursorY);
-  // Pointer-down also precedes a normal click. Ignore DPI rounding jitter
-  // until the cursor has actually crossed the renderer's drag threshold.
-  if (!petDrag.moved && Math.hypot(cursor.x - petDrag.cursorX, cursor.y - petDrag.cursorY) < 6) return;
-  petDrag.moved = true;
   const [currentX, currentY] = petWindow.getPosition();
   if (Math.abs(x - currentX) <= 1 && Math.abs(y - currentY) <= 1) return;
   petWindow.setBounds({ ...petDrag.bounds, x, y });
 }
-function startPetDrag() {
+function startPetDrag(initialDelta = {}) {
   if (!petWindow || petWindow.isDestroyed()) return;
   endPetDrag();
   const [windowX, windowY] = petWindow.getPosition();
   const cursor = screen.getCursorScreenPoint();
-  petDrag = { windowX, windowY, cursorX: cursor.x, cursorY: cursor.y, bounds: petWindow.getBounds() };
+  const dx = Number.isFinite(initialDelta?.x) ? Math.max(-2000, Math.min(2000, initialDelta.x)) : 0;
+  const dy = Number.isFinite(initialDelta?.y) ? Math.max(-2000, Math.min(2000, initialDelta.y)) : 0;
+  petDrag = { windowX, windowY, cursorX: cursor.x - dx, cursorY: cursor.y - dy, bounds: petWindow.getBounds() };
   petDragTimer = setInterval(dragPetStep, 8);
 }
 function endPetDrag() {
@@ -94,7 +92,7 @@ function endPetDrag() {
   petDragTimer = undefined;
   petDrag = undefined;
 }
-ipcMain.handle('pet:drag-start', (event) => { if (event.sender === petWindow?.webContents) startPetDrag(); });
+ipcMain.handle('pet:drag-start', (event, initialDelta) => { if (event.sender === petWindow?.webContents) startPetDrag(initialDelta); });
 ipcMain.handle('pet:drag-end', (event) => { if (event.sender === petWindow?.webContents) endPetDrag(); });
 ipcMain.handle('pet:resize', (event, requestedHeight) => {
   if (event.sender !== petWindow?.webContents || !petWindow || petWindow.isDestroyed()) return 190;

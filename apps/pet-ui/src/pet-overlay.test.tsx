@@ -48,8 +48,8 @@ describe('PetOverlay mood interaction', () => {
     await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
     expect(await screen.findByText('哼！我才不是吃白饭的大肥鱼！')).toBeTruthy();
     expect(screen.getByText('Hmph! I am NOT a freeloader fat fish!')).toBeTruthy();
-    expect(mocks.startDrag).toHaveBeenCalledTimes(1);
-    expect(mocks.endDrag).toHaveBeenCalledTimes(1);
+    expect(mocks.startDrag).not.toHaveBeenCalled();
+    expect(mocks.endDrag).not.toHaveBeenCalled();
     expect(mocks.showChat).not.toHaveBeenCalled();
     expect(pet.querySelector('.pet-bounce')).toBeTruthy();
     expect(mocks.audioPlay).toHaveBeenCalledTimes(1);
