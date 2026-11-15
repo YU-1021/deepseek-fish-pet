@@ -71,7 +71,7 @@
 
 - [x] Add tests proving poke calls once, triggers feedback, and double-click only opens chat.
 - [x] Show face/tier caption and three circular indicators; exact numbers only when debug preference is enabled.
-- [x] Add 300ms bounce/heart feedback after successful `mood.poke` and subtle chat-source expression response.
+- [x] Keep the pet window artwork-only; `mood.poke` remains silent and chat mood changes do not add a visual overlay.
 - [x] Run focused tests and full suite.
 
 ### Task 4: Integration evidence and handoff

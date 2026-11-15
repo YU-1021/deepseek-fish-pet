@@ -30,19 +30,19 @@ beforeEach(() => {
 afterEach(() => { window.history.replaceState({}, '', '/'); cleanup(); });
 
 describe('PetOverlay mood interaction', () => {
-  it('pokes once on a single click and shows short feedback', async () => {
+  it('pokes once on a single click while keeping the pet window artwork-only', async () => {
     render(<App/>);
-    await screen.findByText('😊');
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
     const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
     fireEvent.click(pet);
     await waitFor(() => expect(mocks.request).toHaveBeenCalledWith('mood.poke', {}), { timeout: 1000 });
-    expect(pet.classList.contains('pet-feedback')).toBe(true);
-    expect(screen.getByText('♥')).toBeTruthy();
+    expect(pet.querySelector('.pet-face, .pet-mood-rings, .pet-heart, .pet-hint')).toBeNull();
+    expect(pet.textContent).toBe('');
   });
 
   it('opens chat on double-click without poking', async () => {
     render(<App/>);
-    await screen.findByText('😊');
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
     const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
     fireEvent.click(pet, { detail: 1 });
     fireEvent.click(pet, { detail: 2 });
@@ -61,10 +61,12 @@ describe('PetOverlay mood interaction', () => {
     expect(mocks.request).not.toHaveBeenCalledWith('mood.poke', {});
   });
 
-  it('uses a subtle class when chat mood changes arrive', async () => {
+  it('does not show chat mood changes on the pet artwork', async () => {
     render(<App/>);
-    await screen.findByText('😊');
+    await screen.findByLabelText('蓝色大肥鱼女仆，待机呼吸动画');
     act(() => { for (const listener of mocks.events) listener({ type: 'event', event: 'mood.changed', data: { state: snapshot, applied: [], source: 'chat' } }); });
-    expect(screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单').classList.contains('pet-chat-nudge')).toBe(true);
+    const pet = screen.getByTitle('点一下摸摸 · 双击打开聊天 · 右键菜单');
+    expect(pet.textContent).toBe('');
+    expect(pet.classList.contains('pet-chat-nudge')).toBe(false);
   });
 });

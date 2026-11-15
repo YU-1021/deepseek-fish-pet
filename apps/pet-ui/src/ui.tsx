@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, FormEvent, KeyboardEvent, MouseEvent } from 'react';
+import type { FormEvent, KeyboardEvent, MouseEvent } from 'react';
 import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Wifi, WifiOff, X } from 'lucide-react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
 import { MoodSettingsPanel } from './mood-panel';
@@ -132,26 +132,12 @@ export function App() {
 }
 
 function PetOverlay() {
-  const { enabled, state, lastChange, applySnapshot } = useMoodState();
-  const [showMoodValues] = useMoodNumberPreference();
-  const [feedback, setFeedback] = useState(false);
-  const [chatNudge, setChatNudge] = useState(false);
+  const { enabled } = useMoodState();
   const pokeTimer = useRef<number | undefined>(undefined);
-  const feedbackTimer = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (lastChange?.source !== 'chat') return;
-    setChatNudge(true);
-    const timer = window.setTimeout(() => setChatNudge(false), 360);
-    return () => window.clearTimeout(timer);
-  }, [lastChange]);
   async function poke() {
-    if (enabled !== true || !state) return;
+    if (enabled !== true) return;
     try {
-      const snapshot = await request('mood.poke', {});
-      applySnapshot(snapshot);
-      setFeedback(true);
-      if (feedbackTimer.current) window.clearTimeout(feedbackTimer.current);
-      feedbackTimer.current = window.setTimeout(() => setFeedback(false), 320);
+      await request('mood.poke', {});
     } catch { /* pet window keeps the interaction quiet when petd is offline */ }
   }
   function onClick(event: MouseEvent) {
@@ -162,26 +148,9 @@ function PetOverlay() {
     if (pokeTimer.current) window.clearTimeout(pokeTimer.current);
     void window.petdBootstrap?.showChat();
   }
-  const moodFace = state?.tiers.mood === '很低落' ? '😔' : state?.tiers.mood === '有点闷' ? '😶' : state?.tiers.mood === '平静' ? '🙂' : state?.tiers.mood === '心情不错' ? '😊' : state?.tiers.mood === '很开心' ? '🥰' : '🐟';
-  const affectionCopy = state?.tiers.affection === '还生疏' ? '慢慢熟悉你' : state?.tiers.affection === '逐渐熟悉' ? '越来越熟悉' : state?.tiers.affection === '比较亲近' ? '喜欢陪着你' : state?.tiers.affection === '很黏你' ? '最喜欢黏着你' : '';
-  const sleepy = state?.tiers.energy === '很累' || state?.tiers.energy === '有点乏';
-  return <div className={`pet-overlay ${feedback ? 'pet-feedback' : ''} ${chatNudge ? 'pet-chat-nudge' : ''} ${sleepy ? 'pet-sleepy' : ''}`} onClick={onClick} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
+  return <div className="pet-overlay" onClick={onClick} onDoubleClick={openChat} onContextMenu={(event) => { event.preventDefault(); void window.petdBootstrap?.showPetMenu(); }} title="点一下摸摸 · 双击打开聊天 · 右键菜单">
     <svg className="pet-alpha-filter" aria-hidden="true"><defs><filter id="pet-alpha-fix"><feComponentTransfer><feFuncA type="linear" slope="1" intercept="-0.0039215686"/></feComponentTransfer></filter></defs></svg>
-    <div className="pet-face" role="img" aria-label={state?.tiers.mood ?? '情绪读取中'}>{enabled && state ? moodFace : '🐟'}</div>
     <div className="pet-float"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆，待机呼吸动画"/></div>
-    {enabled && state && <div className="pet-mood-rings" role="group" aria-label={`${state.tiers.mood}、${state.tiers.affection}、${state.tiers.energy}`}>
-      <MoodRing label="心情" tier={state.tiers.mood} value={state.mood} color="#f0a78e" showValue={showMoodValues}/>
-      <MoodRing label="好感" tier={state.tiers.affection} value={state.affection} color="#d79bb6" showValue={showMoodValues}/>
-      <MoodRing label="精力" tier={state.tiers.energy} value={state.energy} color="#86ad83" showValue={showMoodValues}/>
-    </div>}
-    <div className="pet-hint">{enabled && state ? `${affectionCopy} · ${state.tiers.energy}` : '双击打开聊天'}</div>
-    {feedback && <span className="pet-heart" aria-hidden="true">♥</span>}
   </div>;
-}
-
-function MoodRing({ label, tier, value, color, showValue }: { label: string; tier: string; value: number; color: string; showValue: boolean }) {
-  return <span className="pet-mood-ring" title={`${label}：${tier}`} aria-label={`${label}：${tier}`} style={{ '--ring-value': `${Math.max(0, Math.min(100, value))}%`, '--ring-color': color } as CSSProperties}>
-    <i>{showValue ? Number(value.toFixed(1)) : ''}</i><small>{label}</small>
-  </span>;
 }
 

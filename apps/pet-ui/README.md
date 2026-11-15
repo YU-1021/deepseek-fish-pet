@@ -20,7 +20,7 @@ The Memory panel uses `memory.list/read/write/history/diff` and `blob.list/put/g
 
 ## M7 mood and status
 
-Settings shows petd-backed mood, affection, energy, recent history, and read-only mood config. Exact values are hidden by default; the debug checkbox is stored in local UI preferences and shared with the pet window. The pet window shows tier-driven expression, three circular indicators, a sleepy motion at low energy, a single-click poke response, and a subtle chat-change expression. Both windows subscribe to `mood.changed` and reload `mood.status` on reconnect; pet-ui does not calculate chat mood changes.
+Settings shows petd-backed mood, affection, energy, recent history, and read-only mood config. Exact values are hidden by default; the debug checkbox is stored in local UI preferences. The pet window displays only the idle portrait; a single click still sends `mood.poke` without adding mood indicators or expression overlays. The settings view subscribes to `mood.changed` and reloads `mood.status` on reconnect; pet-ui does not calculate chat mood changes.
 
 Mock coverage: `pnpm --filter @petd/pet-ui test` — 19 component checks passing.
 
@@ -28,7 +28,7 @@ Real petd smoke run (using `%TEMP%\petd-ui-dev`, not the default home): connecte
 
 ![M7 settings mood panel](docs/evidence/m7-settings.png)
 
-![M7 pet window mood rings and poke feedback](docs/evidence/m7-pet.png)
+![Pet window showing only the portrait](docs/evidence/m7-pet.png)
 
 ## Screenshots and build evidence
 
