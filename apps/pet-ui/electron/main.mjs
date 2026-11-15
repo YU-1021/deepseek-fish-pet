@@ -38,7 +38,7 @@ function createWindow() {
   petWindow = new BrowserWindow({
     width: 150, height: 150, x: 80, y: 120, frame: false, transparent: true,
     alwaysOnTop: true, resizable: false, skipTaskbar: true, show: true,
-    webPreferences: { preload: path.join(here, 'preload.mjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   petWindow.setAlwaysOnTop(true, 'screen-saver');
   if (process.env.VITE_DEV_SERVER_URL) void petWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?pet=1`);
