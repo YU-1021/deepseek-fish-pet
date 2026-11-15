@@ -77,6 +77,40 @@ export interface PetdConfig {
     /** edge 失败时是否自动回退到本地 SAPI（离线兜底） */
     fallbackToSapi: boolean;
   };
+  asr: {
+    /** 语音识别总开关：关闭后 asr.* 返回 E_UNAVAILABLE */
+    enabled: boolean;
+    /** whisper-cli.exe 所在目录（空 = 自动探测：petd/vendor、仓库 app/vendor、环境变量 PETD_WHISPER_DIR） */
+    binaryDir: string;
+    /** 模型缓存目录（空 = 自动：home/asr，其次旧版 %APPDATA%/dayu-pet/asr） */
+    modelDir: string;
+    /** 模型档位（多语言：tiny/base/small） */
+    model: 'tiny' | 'base' | 'small';
+    /** whisper 识别语言（zh / en / auto） */
+    language: string;
+    /** 是否用 silero VAD 过滤静音（需要 ggml-silero 模型，免幻觉且更快） */
+    useVad: boolean;
+    /** silero VAD 阈值（0–1，越大越严格） */
+    vadThreshold: number;
+    /** 偏置提示词：把唤醒词编进去，显著提升「大肥鱼」这类专名的识别率 */
+    prompt: string;
+    /** 是否开启唤醒词监听 */
+    wakeEnabled: boolean;
+    /** 唤醒词（匹配时容忍标点/空格/大小写差异） */
+    wakeWords: string[];
+    /** 唤醒后是否把后面那句话自动发给聊天 */
+    autoChat: boolean;
+    /** 输入采样率（流式喂音频时用，必须 16000） */
+    sampleRate: number;
+    /** 能量 VAD 阈值（0–1 的 RMS，环境噪声大就调高） */
+    energyThreshold: number;
+    /** 一段话最短时长（毫秒），过短当噪声丢弃 */
+    minSpeechMs: number;
+    /** 静音多久算说完（毫秒） */
+    silenceMs: number;
+    /** 单段最长时长（毫秒），超了强制切段 */
+    maxSegmentMs: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -115,6 +149,24 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxChars: 1200,
     autoSpeak: false,
     fallbackToSapi: true,
+  },
+  asr: {
+    enabled: true,
+    binaryDir: '',
+    modelDir: '',
+    model: 'base',
+    language: 'zh',
+    useVad: true,
+    vadThreshold: 0.5,
+    prompt: '你好大肥鱼。大肥鱼。小鱼。',
+    wakeEnabled: true,
+    wakeWords: ['你好大肥鱼', '大肥鱼', '你好大飞鱼'],
+    autoChat: false,
+    sampleRate: 16000,
+    energyThreshold: 0.012,
+    minSpeechMs: 300,
+    silenceMs: 600,
+    maxSegmentMs: 15_000,
   },
 };
 
@@ -244,6 +296,64 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
     const vf = voice['fallbackToSapi'];
     if (typeof vf === 'boolean') out.voice.fallbackToSapi = vf;
     else if (vf !== undefined) warnings.push('voice.fallbackToSapi 非法，回默认 true');
+  }
+  const asr = raw['asr'];
+  if (isObject(asr)) {
+    const ae = asr['enabled'];
+    if (typeof ae === 'boolean') out.asr.enabled = ae;
+    else if (ae !== undefined) warnings.push('asr.enabled 非法，回默认 true');
+    const bd = asr['binaryDir'];
+    if (typeof bd === 'string') out.asr.binaryDir = bd.trim();
+    else if (bd !== undefined) warnings.push('asr.binaryDir 非法，回默认空');
+    const md = asr['modelDir'];
+    if (typeof md === 'string') out.asr.modelDir = md.trim();
+    else if (md !== undefined) warnings.push('asr.modelDir 非法，回默认空');
+    const am = asr['model'];
+    if (am === 'tiny' || am === 'base' || am === 'small') out.asr.model = am;
+    else if (am !== undefined) warnings.push('asr.model 非法，回默认 base');
+    const al = asr['language'];
+    if (typeof al === 'string' && al.trim()) out.asr.language = al.trim();
+    else if (al !== undefined) warnings.push('asr.language 非法，回默认 zh');
+    const uv = asr['useVad'];
+    if (typeof uv === 'boolean') out.asr.useVad = uv;
+    else if (uv !== undefined) warnings.push('asr.useVad 非法，回默认 true');
+    const vt = asr['vadThreshold'];
+    if (typeof vt === 'number' && Number.isFinite(vt) && vt > 0 && vt < 1) out.asr.vadThreshold = vt;
+    else if (vt !== undefined) warnings.push('asr.vadThreshold 非法，回默认 0.5');
+    const ap = asr['prompt'];
+    if (typeof ap === 'string') out.asr.prompt = ap.trim().slice(0, 200);
+    else if (ap !== undefined) warnings.push('asr.prompt 非法，回默认');
+    const we = asr['wakeEnabled'];
+    if (typeof we === 'boolean') out.asr.wakeEnabled = we;
+    else if (we !== undefined) warnings.push('asr.wakeEnabled 非法，回默认 true');
+    const ww = asr['wakeWords'];
+    if (Array.isArray(ww)) {
+      const list = ww
+        .filter((x): x is string => typeof x === 'string')
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0 && x.length <= 20)
+        .slice(0, 10);
+      if (list.length > 0) out.asr.wakeWords = list;
+      else warnings.push('asr.wakeWords 为空或非法，回默认');
+    } else if (ww !== undefined) warnings.push('asr.wakeWords 非法，回默认');
+    const ac = asr['autoChat'];
+    if (typeof ac === 'boolean') out.asr.autoChat = ac;
+    else if (ac !== undefined) warnings.push('asr.autoChat 非法，回默认 false');
+    const sr2 = asr['sampleRate'];
+    if (sr2 === 16000 || sr2 === 8000) out.asr.sampleRate = sr2;
+    else if (sr2 !== undefined) warnings.push('asr.sampleRate 只支持 16000，回默认');
+    const et = asr['energyThreshold'];
+    if (typeof et === 'number' && Number.isFinite(et) && et >= 0.0005 && et <= 0.5) out.asr.energyThreshold = et;
+    else if (et !== undefined) warnings.push('asr.energyThreshold 非法，回默认 0.012');
+    const ms = asr['minSpeechMs'];
+    if (typeof ms === 'number' && Number.isInteger(ms) && ms >= 100 && ms <= 5000) out.asr.minSpeechMs = ms;
+    else if (ms !== undefined) warnings.push('asr.minSpeechMs 非法，回默认 300');
+    const si = asr['silenceMs'];
+    if (typeof si === 'number' && Number.isInteger(si) && si >= 200 && si <= 5000) out.asr.silenceMs = si;
+    else if (si !== undefined) warnings.push('asr.silenceMs 非法，回默认 600');
+    const mx = asr['maxSegmentMs'];
+    if (typeof mx === 'number' && Number.isInteger(mx) && mx >= 1000 && mx <= 60_000) out.asr.maxSegmentMs = mx;
+    else if (mx !== undefined) warnings.push('asr.maxSegmentMs 非法，回默认 15000');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

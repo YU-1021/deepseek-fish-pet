@@ -96,6 +96,9 @@ importers:
       '@sinclair/typebox':
         specifier: ^0.34.41
         version: 0.34.52
+      opencc-js:
+        specifier: ^1.4.2
+        version: 1.4.2
       ws:
         specifier: ^8.18.3
         version: 8.23.0
@@ -1596,6 +1599,9 @@ packages:
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
+
+  opencc-js@1.4.2:
+    resolution: {integrity: sha512-EdcspgdROiCCZDM+jZR6Pa670xW+EW2QhctPBQ8gRjg6lrx4IHEl+2s+kt5izk/TkxVRgdWuFgaGkaEdIUfdaw==}
 
   parse5@8.1.1:
     resolution: {integrity: sha512-EcR/6WDcU7b2N3vQSxKALCk9lXGtUMQxXio008OEMBE0kavu/7JLfBEeFPzi43nMqVDSbEn3QCK+BMCc9zO//w==}
@@ -3351,6 +3357,8 @@ snapshots:
   node-releases@2.0.64: {}
 
   obug@2.2.1: {}
+
+  opencc-js@1.4.2: {}
 
   parse5@8.1.1:
     dependencies:

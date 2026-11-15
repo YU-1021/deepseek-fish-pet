@@ -41,6 +41,8 @@ import { MemoryService } from './memory/service.js';
 import { BlobStore } from './memory/blob.js';
 import { VoiceService } from './voice/service.js';
 import { registerVoiceMethods } from './gateway/methods/voice.js';
+import { AsrService } from './asr/service.js';
+import { registerAsrMethods } from './gateway/methods/asr.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 
@@ -233,6 +235,36 @@ async function main(): Promise<void> {
     logger,
   });
 
+  // ── 语音识别：本地 whisper.cpp + 能量 VAD + 唤醒词；autoChat 时把整句接进聊天 ──
+  const asr = new AsrService({
+    config: config.asr,
+    home: paths.home,
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+    onUtterance: (text, wake) => {
+      if (!text.trim()) return;
+      void (async () => {
+        try {
+          const sessionId = chat.listSessions()[0]?.id;
+          const sent = await chat.send({
+            ...(sessionId ? { sessionId } : {}),
+            text,
+            speak: config.voice.autoSpeak,
+          });
+          logger.info('语音自动聊天完成', { wake: wake ?? null, sessionId: sent.session.id, chars: sent.assistantMessage.content.length });
+        } catch (e) {
+          logger.warn('语音自动聊天失败', { error: e instanceof Error ? e.message : String(e) });
+        }
+      })();
+    },
+  });
+  logger.info('语音识别已就绪', {
+    model: config.asr.model,
+    binary: asr.status().binary.found,
+    enabled: config.asr.enabled,
+    wakeEnabled: config.asr.wakeEnabled,
+  });
+
   const gateway = new Gateway({
     host: config.gateway.host,
     port: config.gateway.port,
@@ -258,6 +290,7 @@ async function main(): Promise<void> {
   registerMemoryMethods(registry, { memory: memoryService });
   registerBlobMethods(registry, { blobs });
   registerVoiceMethods(registry, { voice });
+  registerAsrMethods(registry, { asr });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

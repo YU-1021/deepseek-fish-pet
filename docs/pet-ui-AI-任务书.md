@@ -103,19 +103,21 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
+目前共 44 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway{host,port}, log{level,maxBytes}}`（不含密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
 | `session.rename` | `{sessionId,title}` | `SessionMeta` |
 | `session.delete` | `{sessionId}` | `{deleted:boolean}` |
-| `chat.send` | `{sessionId?, text}` | `{session, userMessage, assistantMessage, reply{text,model,usage}}`；无 sessionId 自动建会话；timeout 120s |
+| `chat.send` | `{sessionId?, text, speak?, attachments?}` | `{session, userMessage, assistantMessage, reply{text,model,usage}, tools?, speech?, handoff?, attachments?}`；无 sessionId 自动建会话；timeout 120s |
 
-`SessionMeta = {id,title,createdAt,updatedAt,messageCount}`。
+`SessionMeta = {id,title,createdAt,updatedAt,messageCount,contextStart?,lastPromptTokens?,handoffFiles?}`。
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
@@ -215,6 +217,33 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 7. **不要把音频 base64 存进聊天历史或状态库**，随用随取。
 
 **验收**：聊天能出声、能停；设置能选音色并持久（下次启动仍用）；断网/Edge 失败自动回退 SAPI 时 UI 有小提示。
+
+## 8.7 M6：语音识别/唤醒词 UI 规格（petd 后端已就绪）
+
+目标：用户能对着麦克风说话，petd 在本地识别；可看见「在听/听到什么/唤醒词命中」，并可选让识别结果自动发进聊天。
+
+**数据来源（已上线；方法清单以 `health.status` 为准）**
+- `asr.status` → `{enabled, engine:'whisper.cpp', model, language, binary:{found,path}, models, wakeEnabled, wakeWords, listening, autoChat}`
+- `asr.models` → `{models:[{name,ready,current,sizeBytes?}], active:'tiny'|'base'|'small'}`
+- `asr.download {model}` → 下载模型（进度走事件）；模型大（base≈148MB），给进度条与「取消不保证」提示
+- `asr.transcribe {audioBase64, language?, model?}` → `{text, language, durationMs, tookMs, wake}`（一次性识别；audio 是 16k 单声道 PCM16 WAV 的 base64）
+- `asr.listen.start {}` → `{streamId, sampleRate:16000, vad:{energyThreshold,minSpeechMs,silenceMs,maxSegmentMs,preRollMs}, model, wakeWords}`
+- `asr.listen.feed {streamId, pcmBase64}` → `{accepted:number, segments:[…]}`（PCM16LE 原始字节的 base64；建议 100–300ms 一片）
+- `asr.listen.stop {streamId}` → `{segments:[…]}`（flush 尾巴）
+- 事件：`asr.download {model, got, total, url}`、`asr.transcribed {text, language, durationMs, tookMs}`、`asr.segment {streamId, text, durationMs, tookMs, wake}`、`asr.wake {streamId, text, wakeWord}`
+
+**关键交互（别漏）**
+1. **采集**：`navigator.mediaDevices.getUserMedia({audio:{channelCount:1, sampleRate:16000, echoCancellation:true, noiseSuppression:true}})`，用 **AudioWorklet**（不要 ScriptProcessor）拿 Float32 帧；转成 Int16LE：`Math.max(-1, Math.min(1, x)) * 0x7fff`；每累积 ~160–320ms 就 base64 一次发 `asr.listen.feed`。只在 `asr.listen.start` 成功后开始 feed；`stop` / 组件卸载 / 断线时必须停止麦克风（`track.stop()`）并清 streamId。
+2. **权限与解锁**：麦克风必须由用户手势触发（点「开始听」）；权限被拒/无设备要明确提示，不要静默失败。
+3. **状态显示**：顶部小指示器「🎤 在听 / 已识别 N 句」；`asr.segment` 到达时把句子追加到实时字幕区；`asr.wake` 到达时给一次明显提示（高亮/轻提示音由你决定）。
+4. **唤醒词管理**：设置页展示 `wakeWords`（只读展示也行，编辑需要 Lead 加 `config.patch`；先显示即可），`autoChat` 开关同理先只读展示当前值。
+5. **模型管理**：展示 `asr.models` 三档（ready/current/大小），可点下载；下载中显示 `asr.download` 进度；模型目录/引擎路径错误时展示 `asr.status.binary.path` 帮助用户排查。
+6. **一次性识别**：可作为「按钮说话」备用入口：录音 → 编码 WAV → `asr.transcribe` → 显示结果（wake 非空时标出命中词）。
+7. **错误**：`E_UNAVAILABLE`（ASR 关闭/模型缺失）→ 提示去设置页开启或下载；`E_NOT_FOUND`（监听流过期/被回收）→ 重新 start；`E_BAD_PARAMS`（PCM 为空/格式不对）→ 检查采样率与声道。
+8. **隐私文案**：明确告诉用户「音频只在本机处理、不落盘、不上传；识别文本才会进入事件与会话」。
+9. **性能**：识别是本地 CPU 推理（base 模型约 0.5–2s/句），UI 不要每片都等返回——用事件驱动；feed 请求可以并发少量（≤2）以免积压。
+
+**验收**：点「开始听」→ 说话 → 字幕出现句子；说「你好大肥鱼」→ 唤醒提示；停止后麦克风指示灯熄灭（系统麦克风占用消失）；模型页能看到 ready/下载进度；ASR 关闭时给出清晰错误提示。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

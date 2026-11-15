@@ -9,6 +9,7 @@ param(
   [string]$Voice,
   [int]$Rate = 0,
   [int]$Volume = 100,
+  [int]$SampleRate = 0,
   [switch]$ListVoices
 )
 $ErrorActionPreference = 'Stop'
@@ -51,7 +52,16 @@ $dir = [System.IO.Path]::GetDirectoryName($OutFile)
 if ($dir -and -not (Test-Path -LiteralPath $dir)) {
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
-$synth.SetOutputToWaveFile($OutFile)
+if ($SampleRate -gt 0) {
+  $fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(
+    $SampleRate,
+    [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen,
+    [System.Speech.AudioFormat.AudioChannel]::Mono
+  )
+  $synth.SetOutputToWaveFile($OutFile, $fmt)
+} else {
+  $synth.SetOutputToWaveFile($OutFile)
+}
 $synth.Speak($text)
 $synth.Dispose()
 Write-Output 'OK'

@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）。
 
 ## 现在有什么
 
@@ -17,16 +17,18 @@
     - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
     - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
     - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice 五段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr 六段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
-5. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+5. ASR：找 `whisper-cli`（环境变量 `PETD_WHISPER_DIR` → `asr.binaryDir` → `apps/petd/vendor/whisper` → 仓库 `app/vendor/whisper`）和模型（`asr.modelDir` → `home/asr` → 旧版 `%APPDATA%/dayu-pet/asr`）；缺模型时 `asr.download` 会从 hf-mirror 拉（模型很大，建议提前下）
+6. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -57,6 +59,24 @@
     "maxChars": 1200,
     "autoSpeak": false,
     "fallbackToSapi": true
+  },
+  "asr": {
+    "enabled": true,
+    "binaryDir": "",
+    "modelDir": "",
+    "model": "base",
+    "language": "zh",
+    "useVad": true,
+    "vadThreshold": 0.5,
+    "prompt": "你好大肥鱼。大肥鱼。小鱼。",
+    "wakeEnabled": true,
+    "wakeWords": ["你好大肥鱼", "大肥鱼", "你好大飞鱼"],
+    "autoChat": false,
+    "sampleRate": 16000,
+    "energyThreshold": 0.012,
+    "minSpeechMs": 300,
+    "silenceMs": 600,
+    "maxSegmentMs": 15000
   }
 }
 ```
@@ -79,6 +99,15 @@
 - `voice.maxChars`：单次朗读文本上限（超了拒绝，先截断再请求）。
 - `voice.autoSpeak`：聊天回复是否默认朗读（`chat.send` 里的 `speak` 参数优先级更高）。
 - `voice.fallbackToSapi`：Edge 失败时是否自动用本机 SAPI 兜底（默认 true；两边都失败才报错）。
+- `asr.enabled`：语音识别总开关；关掉后 `asr.*` 返回 `E_UNAVAILABLE`。
+- `asr.binaryDir` / `asr.modelDir`：whisper-cli 与模型目录（留空则按内置顺序找，见「首次启动」）。
+- `asr.model`：`tiny` / `base` / `small`（多语言模型，中文可用；越大越准越慢，默认 `base`）。
+- `asr.language`：识别语言，默认 `zh`；中文结果会自动转简体（OpenCC tw→cn）。
+- `asr.useVad` / `asr.vadThreshold`：是否用 Silero VAD 配合语音端点检测、阈值（0–1）。
+- `asr.prompt`：识别提示词（把唤醒词和常见称呼塞进去，命中率更高）。
+- `asr.wakeEnabled` / `asr.wakeWords`：唤醒词开关与列表（含近似匹配，容忍一两个字听错）。
+- `asr.autoChat`：唤醒词命中后是否自动把整句发进聊天（`chat.send`）；默认 false，只广播 `asr.wake`。
+- `asr.sampleRate` / `energyThreshold` / `minSpeechMs` / `silenceMs` / `maxSegmentMs`：流式监听的采样率与能量 VAD 参数（喂 PCM 用）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -153,6 +182,23 @@
 - **事件**：合成成功广播 `voice.speech {id,file,mime,bytes,durationMs,cached,engine,voice,text}`；UI 可用 `durationMs` 做口型/动画时长。
 - **离线可用**：`voice.engine=sapi` 时完全不联网（本机 `System.Speech`），适合断网或不想走在线语音的场景。
 
+## 语音识别与唤醒词（ASR）
+
+说一句「你好大肥鱼，今天天气不错」，petd 在本地把话听成文字；命中唤醒词还会广播事件（可选自动发进聊天）。全程离线：whisper.cpp + Silero VAD，不走任何云 API。
+
+- **引擎**：本机 whisper.cpp（复用仓库里 `app/vendor/whisper/whisper-cli.exe` 与 DLL），模型是 **多语言** ggml（`tiny`/`base`/`small`，默认 `base`）；模型文件放 `asr/` 下，用 `asr.models` 看就绪状态。本机没装 Windows 语音识别器也能用（不走 SAPI ASR）。实现形状参考了旧桌宠 `app/src/asr.js`（同项目 MIT），但改成了常驻服务 + 事件驱动 + 唤醒词近似匹配。
+- **一次性识别**：`asr.transcribe {audioBase64}`（16k 单声道 PCM16 WAV 的 base64）→ `{text, language, durationMs, tookMs, wake}`；`tookMs` 是识别耗时，`wake` 是命中的唤醒词（没命中为 null）。
+- **流式监听**（麦克风持续输入）：
+  1. `asr.listen.start {}` → `{streamId, sampleRate, vad:{energyThreshold,minSpeechMs,silenceMs,maxSegmentMs,preRollMs}, model, wakeWords}`；
+  2. 把 16k PCM16 分片（base64）不断 `asr.listen.feed {streamId, pcmBase64}`，petd 用能量 VAD 切句（带 300ms 预卷、句尾留 200ms，超长自动切）；
+  3. 每切出一句就识别并广播 `asr.segment {streamId, text, durationMs, tookMs, wake}`；命中唤醒词再广播 `asr.wake {streamId, text, wakeWord}`；
+  4. `asr.listen.stop {streamId}` 收尾（flush 尾巴），返回 `{segments}`；空闲 60s 自动回收，最多 4 路并发。
+- **唤醒词匹配**：先做文本归一化（去空白/标点、小写），再用 LCS 相似度（阈值 0.66）容忍「大肥鱼→大飞鱼」这类单字听错；`asr.prompt` 里塞唤醒词也能明显提高识别命中率。
+- **自动进聊天**：`asr.autoChat=true` 时，命中唤醒词的整句会以最近会话发 `chat.send`（按 `voice.autoSpeak` 决定要不要读出来），失败只 warn 不影响识别。
+- **模型下载**：`asr.download {model}` 从 hf-mirror（备用 HuggingFace）拉模型，进度事件 `asr.download {model, got, total, url}`；模型很大（base ≈148MB），第一次慢慢等，之后按 `asr.models` 的 ready 判断就绪。
+- **隐私**：音频不落盘（只在 `asr/tmp/` 短暂写 WAV，识别完删除）、不上传；识别文本才进事件与会话。
+- **确认方式**：`node apps/petd/scripts/asr-smoke.mjs` 会本机合成一段中文语音、真跑 whisper 识别与流式监听，43 项断言全绿。
+
 ## 跑起来
 
 ```bat
@@ -185,6 +231,9 @@ node apps/petd/scripts/blob-smoke.mjs
 
 :: 冒烟：语音（本机 SAPI 离线；真调一次模型验证 chat.send 朗读）
 node apps/petd/scripts/voice-smoke.mjs
+
+:: 冒烟：语音识别/唤醒词（本机 SAPI 合成 16k 语音 + whisper.cpp 真识别，不花 token）
+node apps/petd/scripts/asr-smoke.mjs
 ```
 
 READY 行示例：
@@ -213,7 +262,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 134/134（网关/聊天/工具循环/交接/人格/记忆/附件/语音）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 152/152（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -222,6 +271,7 @@ cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆�
 cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 若干次（含摘要）；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
 cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
 cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到端（本机 SAPI 离线；真 LLM 一次；合成/缓存/事件/聊天朗读）
+cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端（本机 SAPI 合成 16k WAV + whisper.cpp 真识别；43 项；不花 token）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -238,6 +288,8 @@ cd apps/petd && node scripts/voice-smoke.mjs --home D:\x       :: 语音端到�
 
 语音冒烟覆盖（26 项，本机 SAPI 离线 + 真 LLM 一次）：`voice.status` 开关/引擎/音色/缓存统计、`voice.voices` 含本机 SAPI 音色、`voice.speak` 出 WAV/字节数合理/时长>0/base64 是 RIFF、缓存命中且 id 一致、`voice.speech` 事件广播、`chat.send {speak:true}` 返回 `speech` 且会话里只有文字、JSONL 不存音频、优雅退出。
 
+ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 token）：`asr.status`（引擎/binary/模型就绪）、`asr.models` 三档、SAPI 合成 16k 中文 WAV、`asr.transcribe` 识别出「你好大肥鱼,今天天气不错,陪我聊两句吧。」（自动转简体）且唤醒词命中、`asr.listen.start`→16 片 300ms PCM feed + 静音→能量 VAD 切 1 句、`asr.segment` 事件、`asr.listen.stop`、流式识别文本一致、优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-ASR/唤醒词、口语/发音评测（用户明确不做）、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、插件、cron、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……
