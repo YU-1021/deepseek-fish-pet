@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能）。
 
 ## 现在有什么
 
@@ -21,12 +21,14 @@
     - 情绪与状态：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`（心情/好感/精力 0–100，离线回落，聊天时给行为指导、聊完小步变化，可让模型评估一段对话）
     - 提醒与日程：`reminder.status` / `reminder.list` / `reminder.create` / `reminder.cancel` / `reminder.snooze`（一次性提醒；到点广播 `reminder.due`，错过太久的标 skipped；聊天里模型可用 `remind_in/remind_at/remind_list/remind_cancel` 自己设提醒）
     - 自动化：`automation.status` / `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.delete` / `automation.pause` / `automation.resume` / `automation.run` / `automation.runs`（cron 式自主任务；运行 = 在专用会话里跑一轮聊天并记下输出/用量；聊天里模型可用 `schedule_task/list_tasks/cancel_task` 自己排任务）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+    - 技能：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`（`SKILL.md` + frontmatter；清单进系统提示词，正文靠 `load_skill` 按需读；插件技能只读且带 `pluginId/` 前缀）
+    - 插件：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`（声明式：`home/plugins/<id>/plugin.json` + `prompt.md` + `skills/`，不执行任意 JS；启停状态持久化）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation 九段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins 十一段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -34,7 +36,8 @@
 6. 情绪状态：`home/state/mood.json` 不存在时播种默认值（心情 70 / 好感 30 / 精力 80）
 7. 提醒：`home/state/reminders.json` 不存在时创建空文件，并把待响提醒重新布防（重启不丢）
 8. 自动化：`home/state/automations.json` 不存在时创建空文件；`config.automation.enabled=false`（默认）时定时器不跑，避免偷偷花 token
-9. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+9. 技能与插件：`home/skills/` 不存在时创建；`home/plugins/` 下的每个插件目录读 `plugin.json`（缺字段/坏清单跳过并记 warn），启停状态存 `home/state/plugins.json`（默认启用）
+10. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -104,6 +107,15 @@
     "maxJobs": 10,
     "maxRunsKept": 100,
     "runTimeoutMs": 180000
+  },
+  "skills": {
+    "enabled": true,
+    "dir": "skills",
+    "promptMaxChars": 4000
+  },
+  "plugins": {
+    "enabled": true,
+    "dir": "plugins"
   }
 }
 ```
@@ -150,6 +162,11 @@
 - `automation.maxJobs`：最多同时存在多少个任务（1–100，默认 10）。
 - `automation.maxRunsKept`：运行记录保留最近多少条（1–1000，默认 100）。
 - `automation.runTimeoutMs`：单个任务跑一轮的超时（默认 180000 = 3 分钟，超时中止并记 failed）。
+- `skills.enabled`：技能总开关（关掉后 `skill.create/update/delete` 返回 `E_UNAVAILABLE`，`skill.list/get` 仍可读，聊天提示词里也不带技能清单）。
+- `skills.dir`：工作区技能目录（相对 `home` 或绝对路径，默认 `skills`）；每个技能一个子目录，里面放 `SKILL.md`。
+- `skills.promptMaxChars`：系统提示词里技能区的字符上限（500–20000，默认 4000）：清单按预算截断，`always: true` 的技能正文优先占位。
+- `plugins.enabled`：插件总开关（关掉后不加载任何插件技能/提示词，`plugin.enable/disable` 返回 `E_UNAVAILABLE`）。
+- `plugins.dir`：插件目录（相对 `home` 或绝对路径，默认 `plugins`）；每个插件一个子目录，含 `plugin.json`（必需 `name/version/description`）、可选 `prompt.md` 与 `skills/`。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -278,6 +295,19 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 - **安全默认**：`automation.enabled` 默认 false，定时器根本不启动；打开后也只在你配置的计划上跑，不自主加任务。
 - **确认方式**：`node apps/petd/scripts/automation-smoke.mjs`（真 LLM 手动跑一次；38 项断言）。
 
+## 技能与插件
+
+技能 = 一段可复用的做事方法（`SKILL.md` + YAML frontmatter），插件 = 一组技能的声明式打包（还能附带一段额外提示词）。都不执行任意代码。
+
+- **技能文件**：`home/skills/<技能名>/SKILL.md`，frontmatter 支持 `name`（展示用）/`description`/`keywords`/`always`，正文是纯 Markdown；目录名就是技能 id（安全字符，避免同名前缀互相覆盖）。
+- **提示词里怎么出现**：只放「清单 + `always: true` 的正文」，按 `skills.promptMaxChars` 预算截断；模型需要某技能的完整步骤时调 `load_skill {name}`，用 `list_skills` 看全部。这样技能很多也不炸上下文。
+- **管理方法**：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`；插件技能只读（`update/delete` 返回 `E_FORBIDDEN`），键带 `pluginId/` 前缀。
+- **插件目录**：`home/plugins/<id>/` 下 `plugin.json`（`name`/`version`/`description` 必填，可选 `author`）、可选 `prompt.md`（最多 2000 字，拼在系统提示词里）、可选 `skills/`（结构同工作区技能，启用后自动进清单）。
+- **启停**：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`；状态存 `home/state/plugins.json`（默认启用，停用后它的技能与提示词都不再生效，但文件和技能仍保留）。
+- **声明式、不执行 JS**：插件不能带可执行代码，只贡献「技能 + 提示词」；将来要做动态插件再单独设计权限与沙箱。
+- **聊天里模型能自己用**：`load_skill` / `list_skills` 两个工具（不计写配额）；技能与插件都关闭时工具不会出现。
+- **确认方式**：`node apps/petd/scripts/skills-plugins-smoke.mjs`（真 petd、纯本地、37 项断言，含插件技能只读、启停持久、重启保留）。
+
 ## 跑起来
 
 ```bat
@@ -322,6 +352,9 @@ node apps/petd/scripts/reminder-smoke.mjs
 
 :: 冒烟：自动化/自主任务（真调一次模型；手动排一个任务并立刻跑）
 node apps/petd/scripts/automation-smoke.mjs
+
+:: 冒烟：技能与插件（不花 token；技能 CRUD/插件启停/重启持久）
+node apps/petd/scripts/skills-plugins-smoke.mjs
 ```
 
 READY 行示例：
@@ -350,7 +383,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 200/200（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 221/221（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -363,6 +396,7 @@ cd apps/petd && node scripts/asr-smoke.mjs --home D:\x         :: ASR 端到端�
 cd apps/petd && node scripts/mood-smoke.mjs --home D:\x        :: 情绪端到端（真 LLM 两次：一轮聊天 + 一次评估；status/adjust/poke/history/聊天微调/重启保留；31 项）
 cd apps/petd && node scripts/reminder-smoke.mjs --home D:\x    :: 提醒端到端（不花 token；3 秒提醒真的响、到点事件/稍后/取消/重启保留；32 项）
 cd apps/petd && node scripts/automation-smoke.mjs --home D:\x  :: 自动化端到端（真 LLM 一次；手动任务跑通/运行记录/暂停恢复/重启保留；38 项）
+cd apps/petd && node scripts/skills-plugins-smoke.mjs --home D:\x :: 技能/插件端到端（不花 token；技能 CRUD/插件技能只读/启停持久/重启保留；37 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -387,6 +421,8 @@ ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 
 
 自动化冒烟覆盖（38 项，真 LLM 手动跑一次）：`config.get` 的 automation 段、`automation.status` 初始为空、`automation.create` 手动任务、`automation.job.created` 事件、真模型手动跑成功（output/usage/sessionId 回写、`run.started/succeeded` 事件）、`automation.runs` 运行记录、interval 任务排期（约 60 分钟）、`pause/resume` 与 `job.updated`、`state/automations.json` 落盘、重启后任务与运行记录保留且重新布防、`delete`、两次优雅退出。
 
+技能/插件冒烟覆盖（37 项，不花 token）：`config.get` 的 skills/plugins 段、插件技能 `demo/hello` 自动进清单且 `always=true`、插件技能 update/delete 返回 `E_FORBIDDEN`、`skill.create/get/update/delete` 与文件落盘、`plugin.list/get/enable/disable` 与 `plugin.changed` 事件、`state/plugins.json` 停用持久、重启后工作区技能仍在且停用插件技能隐藏、两次优雅退出。
+
 ## 刻意没做（等需求逐个说）
 
-口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、插件、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、感知、输入、游戏助手、WebUI、多 agent 实例、SQLite 状态、审批门（危险动作确认）、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、记忆工具的流式输出……

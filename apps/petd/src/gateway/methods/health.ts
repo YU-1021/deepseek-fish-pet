@@ -151,6 +151,15 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           maxRunsKept: Type.Integer(),
           runTimeoutMs: Type.Integer(),
         }),
+        skills: Type.Object({
+          enabled: Type.Boolean(),
+          dir: Type.String(),
+          promptMaxChars: Type.Integer(),
+        }),
+        plugins: Type.Object({
+          enabled: Type.Boolean(),
+          dir: Type.String(),
+        }),
       }),
     },
     () => {
@@ -176,6 +185,8 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         mood: { ...cfg.mood },
         reminders: { ...cfg.reminders },
         automation: { ...cfg.automation },
+        skills: { ...cfg.skills },
+        plugins: { ...cfg.plugins },
       };
     }
   );

@@ -146,6 +146,20 @@ export interface PetdConfig {
     /** 单次任务运行超时（毫秒） */
     runTimeoutMs: number;
   };
+  skills: {
+    /** 技能总开关：关闭后不扫描、不注入提示词（skill.* 读方法仍可用） */
+    enabled: boolean;
+    /** 技能目录（相对 home 或绝对路径） */
+    dir: string;
+    /** 技能清单+常驻技能正文注入系统提示词的总字符预算 */
+    promptMaxChars: number;
+  };
+  plugins: {
+    /** 插件总开关：关闭后不扫描插件、不贡献技能与提示词 */
+    enabled: boolean;
+    /** 插件目录（相对 home 或绝对路径） */
+    dir: string;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -224,6 +238,15 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxJobs: 10,
     maxRunsKept: 100,
     runTimeoutMs: 180_000,
+  },
+  skills: {
+    enabled: true,
+    dir: 'skills',
+    promptMaxChars: 4000,
+  },
+  plugins: {
+    enabled: true,
+    dir: 'plugins',
   },
 };
 
@@ -471,6 +494,31 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof rt === 'number' && Number.isInteger(rt) && rt >= 5_000 && rt <= 900_000) out.automation.runTimeoutMs = rt;
       else if (rt !== undefined) warnings.push('automation.runTimeoutMs 非法，回默认 180000');
     } else warnings.push('automation 段必须是对象，回默认');
+  }
+  const skillsRaw = raw['skills'];
+  if (skillsRaw !== undefined) {
+    if (isObject(skillsRaw)) {
+      const se = skillsRaw['enabled'];
+      if (typeof se === 'boolean') out.skills.enabled = se;
+      else if (se !== undefined) warnings.push('skills.enabled 非法，回默认 true');
+      const sd = skillsRaw['dir'];
+      if (typeof sd === 'string' && sd.trim().length > 0 && sd.trim().length <= 200) out.skills.dir = sd.trim().replace(/[\\/]+$/, '');
+      else if (sd !== undefined) warnings.push('skills.dir 非法，回默认 skills');
+      const sp = skillsRaw['promptMaxChars'];
+      if (typeof sp === 'number' && Number.isInteger(sp) && sp >= 500 && sp <= 20_000) out.skills.promptMaxChars = sp;
+      else if (sp !== undefined) warnings.push('skills.promptMaxChars 非法，回默认 4000');
+    } else warnings.push('skills 段必须是对象，回默认');
+  }
+  const pluginsRaw = raw['plugins'];
+  if (pluginsRaw !== undefined) {
+    if (isObject(pluginsRaw)) {
+      const pe = pluginsRaw['enabled'];
+      if (typeof pe === 'boolean') out.plugins.enabled = pe;
+      else if (pe !== undefined) warnings.push('plugins.enabled 非法，回默认 true');
+      const pd = pluginsRaw['dir'];
+      if (typeof pd === 'string' && pd.trim().length > 0 && pd.trim().length <= 200) out.plugins.dir = pd.trim().replace(/[\\/]+$/, '');
+      else if (pd !== undefined) warnings.push('plugins.dir 非法，回默认 plugins');
+    } else warnings.push('plugins 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

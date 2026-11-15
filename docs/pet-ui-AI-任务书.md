@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 64 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 73 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation, skills, plugins}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -289,6 +289,21 @@ petd 已上线 cron 式自主任务：每个任务是「一段 prompt + 一种�
 8. **错误**：`E_UNAVAILABLE`（自动化关闭）→ 提示并引导「在主目录 config.json 打开 automation.enabled」；`E_BAD_PARAMS`（计划格式/过去时间/prompt 空）→ 就地标红；`E_NOT_FOUND`（任务被删/并发）→ 刷新列表并 toast。
 
 **验收**：建一个 manual 任务 → 「立即运行」拿到真模型输出与用量 → 改 interval 60 分钟看到 nextAt → 暂停后不跑 → 重启 petd 后任务与运行记录都在 → 关闭 `automation.enabled` 后新建/运行置灰。截图贴 README。
+
+## 8.11 M10：技能/插件 UI 规格（petd 后端已就绪）
+
+petd 已上线「技能（SKILL.md）+ 声明式插件」：技能是一段可复用做法，插件是技能/额外提示词的打包；**都不执行任意代码**。方法：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`、`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`。事件：`plugin.changed`。配置：`config.get.skills {enabled,dir,promptMaxChars}`、`config.get.plugins {enabled,dir}`。
+
+1. **入口**：设置页「技能」tab，两段：「我的技能」（`skill.list` 里 source=workspace）和「插件」（`plugin.list`，显示 name/version/description/author/skillCount/enabled）。
+2. **技能列表**：每行显示 key、description、keywords、`always` 徽标、来源（工作区/插件前缀）。插件技能标「随插件提供·只读」，不显示编辑/删除按钮（后端也会拒绝）。
+3. **查看/编辑**：点开调 `skill.get {key}` 展示正文（Markdown 渲染即可）；工作区技能可编辑 description/body/keywords/always（`skill.update {name,...}`）；新建走 `skill.create {name,description?,body,keywords?,always?}`，name 只允许字母数字 `-` `_`，重名 `E_CONFLICT`。
+4. **删除**：`skill.delete {name}` 二次确认，提示「会删掉整个技能目录，聊天里它就不再出现」。
+5. **插件启停**：`plugin.enable/disable {id}`，行内开关 + toast；停用后它的技能从技能列表消失（提示「重启或刷新后生效」不准确——petd 是即时的，刷新列表即可），订阅 `plugin.changed` 刷新。
+6. **插件详情**：`plugin.get {id}` 展示版本/描述/技能数/是否有 prompt.md；**不要**做「安装插件」的在线商店（当前只支持本地目录，放进去重启即生效）。
+7. **提示**：技能/插件都会进系统提示词（清单 + always 正文，受 `skills.promptMaxChars` 限制），UI 可给一行说明「技能越多，提示词越长，必要时在聊天里让它用 list_skills/load_skill 按需查」。
+8. **错误**：`E_UNAVAILABLE`（skill/plugin 总开关关闭）→ 提示去 config.json 打开；`E_FORBIDDEN`（改插件技能）→ 灰置并提示「插件技能只读」；`E_CONFLICT`（重名）→ 就地提示换名；`E_NOT_FOUND` → 刷新列表。
+
+**验收**：建一个 always 技能 → 聊天里模型语气/行为有变化（或它主动 load_skill）→ 停用演示插件后技能列表里不再出现其技能 → 重启 petd 后工作区技能仍在、插件停用状态保留。截图贴 README。
 
 ## 9. 测试策略（省 token）
 

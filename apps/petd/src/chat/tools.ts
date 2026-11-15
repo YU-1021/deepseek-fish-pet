@@ -16,6 +16,7 @@ import type { BlobStore } from '../memory/blob.js';
 import { isTextMime } from '../memory/blob.js';
 import type { MemoryService } from '../memory/service.js';
 import type { ReminderStore } from '../reminders/store.js';
+import type { SkillStore } from '../skills/store.js';
 
 /** 声明给模型的工具（OpenAI function calling 格式） */
 export const MEMORY_TOOLS: LlmToolDefinition[] = [
@@ -285,6 +286,32 @@ export const AUTOMATION_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/** 技能：列出技能 / 按需读取技能正文（清单进系统提示词，正文用工具拉，避免撑爆上下文） */
+export const SKILL_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'load_skill',
+      description: '读取一个技能的完整说明（正文）。清单里只有名字和一句简介；真正要做之前先读正文，按里面的步骤与注意事项执行。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '技能键：工作区技能名，或「插件id/技能名」' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_skills',
+      description: '列出当前可用技能（工作区技能 + 启用插件贡献的技能）。',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+];
+
 /** 聊天里可用的全部工具（记忆 + 提醒 + 自动化） */
 export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
 
@@ -293,6 +320,7 @@ const ALL_TOOL_NAMES = new Set<string>([
   ...MEMORY_TOOLS,
   ...REMINDER_TOOLS,
   ...AUTOMATION_TOOLS,
+  ...SKILL_TOOLS,
 ].map((t) => t.function.name));
 
 export interface ToolExecutionResult {
@@ -309,6 +337,8 @@ export interface MemoryToolboxOptions {
   reminders?: ReminderStore;
   /** 自动化任务存储；不传 = 不启用自主任务工具 */
   automation?: AutomationStore;
+  /** 技能存储；不传 = 不启用技能工具 */
+  skills?: SkillStore;
   /** 每轮允许的写操作次数 */
   maxWrites: number;
   /** 单个工具结果回给模型的字符上限 */
@@ -348,6 +378,7 @@ export class MemoryToolbox {
   private readonly blobs?: BlobStore;
   private readonly reminders?: ReminderStore;
   private readonly automation?: AutomationStore;
+  private readonly skills?: SkillStore;
   private readonly maxWrites: number;
   private readonly maxResultChars: number;
   /** 本轮已用掉的写操作次数 */
@@ -358,16 +389,17 @@ export class MemoryToolbox {
     this.blobs = opts.blobs;
     this.reminders = opts.reminders;
     this.automation = opts.automation;
+    this.skills = opts.skills;
     this.maxWrites = opts.maxWrites;
     this.maxResultChars = opts.maxResultChars;
   }
 
   /** 声明给模型的工具列表（没配对应服务就不暴露那组工具） */
   definitions(): LlmToolDefinition[] {
-    const base = this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
-    const withAutomation =
-      this.automation !== undefined && this.automation.isEnabled() ? [...base, ...AUTOMATION_TOOLS] : base;
-    return withAutomation;
+    let tools = this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
+    if (this.automation !== undefined && this.automation.isEnabled()) tools = [...tools, ...AUTOMATION_TOOLS];
+    if (this.skills !== undefined) tools = [...tools, ...SKILL_TOOLS];
+    return tools;
   }
 
   /** 执行一个工具调用；永远返回文本结果，不抛错（错误也交给模型自己纠正）。 */
@@ -418,6 +450,15 @@ export class MemoryToolbox {
     };
 
     switch (name) {
+      case 'load_skill': {
+        const skill = this.requireSkills().get(str('name'));
+        return `技能 ${skill.key}（${skill.description || '无描述'}）的正文：\n\n${skill.body}`;
+      }
+      case 'list_skills': {
+        const skills = this.requireSkills().list();
+        if (skills.length === 0) return '现在还没有任何技能。';
+        return `可用技能（${skills.length} 个）：\n${skills.map((s) => `- ${s.key}：${s.description || '（无描述）'}`).join('\n')}`;
+      }
       case 'list_files': {
         const dir = optStr('dir') ?? '';
         const entries = this.service.list(dir);
@@ -597,6 +638,12 @@ export class MemoryToolbox {
     if (!this.automation) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用自动化');
     if (!this.automation.isEnabled()) throw new PetdError('E_UNAVAILABLE', '自动化已关闭（config.automation.enabled=false）');
     return this.automation;
+  }
+
+  /** 技能工具必须配了技能存储才能用 */
+  private requireSkills(): SkillStore {
+    if (!this.skills) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用技能');
+    return this.skills;
   }
 
   private truncate(text: string): string {

@@ -51,6 +51,10 @@ import { ReminderStore } from './reminders/store.js';
 import { registerReminderMethods } from './gateway/methods/reminder.js';
 import { AutomationStore } from './automation/store.js';
 import { registerAutomationMethods } from './gateway/methods/automation.js';
+import { SkillStore } from './skills/store.js';
+import { PluginStore } from './plugins/store.js';
+import { registerSkillMethods } from './gateway/methods/skill.js';
+import { registerPluginMethods } from './gateway/methods/plugin.js';
 
 interface CliArgs {
   home?: string;
@@ -240,6 +244,31 @@ async function main(): Promise<void> {
     enabled: config.reminders.enabled,
   });
 
+  // ── 技能与插件：技能 = home/skills/<name>/SKILL.md；插件 = home/plugins/<id>/plugin.json ──
+  // 插件是声明式的（只贡献技能与 prompt.md，不执行任意代码）；技能清单进系统提示词，正文按需 load_skill。
+  const pluginsDir = path.isAbsolute(config.plugins.dir) ? config.plugins.dir : path.join(paths.home, config.plugins.dir);
+  const skillsDir = path.isAbsolute(config.skills.dir) ? config.skills.dir : path.join(paths.home, config.skills.dir);
+  const pluginStore = new PluginStore({
+    dir: pluginsDir,
+    stateFile: path.join(paths.home, 'state', 'plugins.json'),
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+  });
+  pluginStore.ensure();
+  const skillStore = new SkillStore({
+    dir: skillsDir,
+    promptMaxChars: config.skills.promptMaxChars,
+    logger,
+    extraRoots: () => (config.plugins.enabled ? pluginStore.enabledSkillRoots() : []),
+  });
+  skillStore.ensure();
+  logger.info('技能与插件已就绪', {
+    skills: skillStore.list().length,
+    plugins: pluginStore.list().length,
+    skillsEnabled: config.skills.enabled,
+    pluginsEnabled: config.plugins.enabled,
+  });
+
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
@@ -259,6 +288,23 @@ async function main(): Promise<void> {
     systemPrompt: () => buildChatSystemPrompt(memory, personaStore.read().content),
     // 情绪只给「行为指导」，不把数字写进提示词；关闭注入时返回空串
     moodPrompt: () => (config.mood.enabled && config.mood.chatInjection ? mood.prompt() : ''),
+    // 技能清单/常驻技能正文 + 启用插件的 prompt.md；对应开关关闭时返回空串
+    skillsPrompt: () => {
+      const parts: string[] = [];
+      try {
+        if (config.plugins.enabled) {
+          const pluginPrompt = pluginStore.prompt();
+          if (pluginPrompt) parts.push(pluginPrompt);
+        }
+        if (config.skills.enabled) {
+          const skillPrompt = skillStore.prompt();
+          if (skillPrompt) parts.push(skillPrompt);
+        }
+      } catch {
+        return '';
+      }
+      return parts.join('\n\n');
+    },
     // 聊天后的小步互动：开心一点、更亲近一点、稍微耗点精力（都是很小的量，靠模型评估可另外跑 mood.evaluate）
     onTurnComplete: config.mood.enabled && config.mood.chatNudge
       ? () => {
@@ -281,6 +327,7 @@ async function main(): Promise<void> {
         blobs,
         reminders,
         ...(automation === undefined ? {} : { automation }),
+        ...(config.skills.enabled ? { skills: skillStore } : {}),
       }),
     blobs,
     voice,
@@ -404,6 +451,8 @@ async function main(): Promise<void> {
     store: automation,
     enabled: () => config.automation.enabled,
   });
+  registerSkillMethods(registry, { store: skillStore, enabled: () => config.skills.enabled });
+  registerPluginMethods(registry, { store: pluginStore, enabled: () => config.plugins.enabled });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

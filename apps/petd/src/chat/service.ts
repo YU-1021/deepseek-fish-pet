@@ -40,6 +40,8 @@ export interface ChatServiceOptions {
   systemPrompt: () => string;
   /** 每轮拼接的情绪状态文本（返回空串 = 不注入） */
   moodPrompt?: () => string;
+  /** 每轮拼接的技能清单/常驻技能/插件提示词段（返回空串 = 不注入） */
+  skillsPrompt?: () => string;
   /** 一轮聊天成功后的钩子（例如按互动微调情绪）；失败只记日志，不影响回复 */
   onTurnComplete?: (info: { sessionId: string; userText: string; assistantText: string }) => void | Promise<void>;
   /** 记忆工具工厂（每轮新建，写次数配额按轮重置）；不传 = 不启用工具 */
@@ -119,6 +121,7 @@ export class ChatService {
   private readonly publish: (event: string, data?: unknown) => void;
   private readonly systemPrompt: () => string;
   private readonly moodPrompt?: () => string;
+  private readonly skillsPrompt?: () => string;
   private readonly onTurnComplete?: ChatServiceOptions['onTurnComplete'];
   private readonly toolbox?: () => MemoryToolbox;
   private readonly handoffIo?: HandoffIo;
@@ -135,6 +138,7 @@ export class ChatService {
     this.publish = opts.publish;
     this.systemPrompt = opts.systemPrompt;
     this.moodPrompt = opts.moodPrompt;
+    this.skillsPrompt = opts.skillsPrompt;
     this.onTurnComplete = opts.onTurnComplete;
     this.toolbox = opts.toolbox;
     this.handoffIo = opts.handoffIo;
@@ -332,16 +336,20 @@ export class ChatService {
     return { session: finalMeta, userMessage, assistantMessage, reply: mergedReply, tools, attachments, handoff, speech };
   }
 
-  /** 系统提示词 = 人格 + 记忆前缀（调用方拼好） + 当前情绪行为指导 */
+  /** 系统提示词 = 人格 + 记忆前缀（调用方拼好） + 当前情绪行为指导 + 技能/插件段 */
   private composeSystemPrompt(): string {
     const base = this.systemPrompt();
-    let mood = '';
-    try {
-      mood = this.moodPrompt?.() ?? '';
-    } catch {
-      mood = '';
+    const extras: string[] = [];
+    for (const provider of [this.moodPrompt, this.skillsPrompt]) {
+      if (!provider) continue;
+      try {
+        const text = provider();
+        if (text.trim().length > 0) extras.push(text.trim());
+      } catch {
+        /* 提示词拼接失败不影响聊天 */
+      }
     }
-    return mood ? `${base}\n\n${mood}` : base;
+    return extras.length > 0 ? `${base}\n\n${extras.join('\n\n')}` : base;
   }
 
   /** 校验附件引用并取元数据：不存在的直接报错，不让模型瞎猜 */

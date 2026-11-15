@@ -13,6 +13,7 @@ import { MemoryService } from '../memory/service.js';
 import { BlobStore } from '../memory/blob.js';
 import { ReminderStore } from '../reminders/store.js';
 import { AutomationStore } from '../automation/store.js';
+import { SkillStore } from '../skills/store.js';
 import { MemoryToolbox } from './tools.js';
 import type { LlmToolCall } from '../llm/client.js';
 
@@ -260,4 +261,32 @@ test('schedule_task / list_tasks / cancel_task：模型能建自动化任务', a
   const off = await plain.execute(call('schedule_task', { prompt: 'x', every_minutes: 5 }));
   assert.equal(off.ok, false);
   assert.match(off.text, /没有启用自动化/);
+});
+
+test('load_skill / list_skills：模型能按需读取技能正文，不算写操作', async () => {
+  const service = tmpService();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-skill-tool-'));
+  const skills = new SkillStore({ dir, promptMaxChars: 2000, logger: { info() {}, warn() {} } });
+  skills.ensure();
+  skills.create({ name: 'morning', description: '早上问候', body: '先说早安，再问今天计划。' });
+  const box = new MemoryToolbox({ service, maxWrites: 3, maxResultChars: 4000, skills });
+
+  const list = await box.execute(call('list_skills', {}));
+  assert.equal(list.ok, true);
+  assert.match(list.text, /morning：早上问候/);
+
+  const load = await box.execute(call('load_skill', { name: 'morning' }));
+  assert.equal(load.ok, true);
+  assert.match(load.text, /先说早安/);
+  assert.equal(box.writes, 0, 'load_skill 不算写操作');
+
+  const missing = await box.execute(call('load_skill', { name: 'nope' }));
+  assert.equal(missing.ok, false);
+  assert.match(missing.text, /没有这个技能/);
+
+  // 没配 SkillStore 时给出明确说明
+  const plain = makeToolbox(service);
+  const off = await plain.execute(call('load_skill', { name: 'morning' }));
+  assert.equal(off.ok, false);
+  assert.match(off.text, /没有启用技能/);
 });
