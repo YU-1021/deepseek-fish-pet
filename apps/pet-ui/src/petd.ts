@@ -34,10 +34,11 @@ function connect() {
         else task.reject(Object.assign(new Error(frame.error?.message ?? 'petd 请求失败'), { code: frame.error?.code }));
       } else if (frame.type === 'event') events.forEach((listener) => listener(frame));
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       for (const task of pending.values()) { window.clearTimeout(task.timer); task.reject(new Error('petd 连接已断开')); }
       pending.clear();
-      scheduleReconnect('连接已断开');
+      const reason = event.reason ? `：${event.reason}` : '';
+      scheduleReconnect(`连接已断开（${event.code}${reason}）`);
     };
     socket.onerror = () => publish({ state: 'offline', error: '无法连接 petd，请检查服务是否启动' });
   }).catch((error: Error) => scheduleReconnect(error.message));
