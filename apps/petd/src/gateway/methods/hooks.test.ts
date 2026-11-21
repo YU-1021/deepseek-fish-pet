@@ -35,7 +35,13 @@ function harness(): {
     store,
     approval: broker,
     service,
-    config: () => ({ enabled: true, approvalEnabled: true, approvalTimeoutMs: 60_000 }),
+    config: () => ({
+      enabled: true,
+      mode: 'rules' as const,
+      approvalEnabled: true,
+      approvalTimeoutMs: 60_000,
+      riskEnabled: false,
+    }),
   });
   return { reg, store, broker, service };
 }
@@ -52,7 +58,7 @@ async function invoke(reg: MethodRegistry, name: string, params?: unknown): Prom
   return m.handler(params, ctx);
 }
 
-test('注册 9 个方法：hooks.* 7 + approval.* 2', () => {
+test('注册 10 个方法：hooks.* 8 + approval.* 2', () => {
   const { reg } = harness();
   const names = reg
     .names()
@@ -61,6 +67,7 @@ test('注册 9 个方法：hooks.* 7 + approval.* 2', () => {
   assert.deepEqual(names, [
     'approval.answer',
     'approval.list',
+    'hooks.assess',
     'hooks.create',
     'hooks.delete',
     'hooks.get',

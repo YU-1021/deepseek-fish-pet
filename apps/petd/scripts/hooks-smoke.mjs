@@ -37,7 +37,7 @@ fs.writeFileSync(
   JSON.stringify(
     {
       version: 1,
-      hooks: { enabled: true, approvalEnabled: true, approvalTimeoutMs: APPROVAL_TIMEOUT_MS },
+      hooks: { enabled: true, mode: 'rules', approvalEnabled: true, approvalTimeoutMs: APPROVAL_TIMEOUT_MS },
     },
     null,
     2
@@ -171,11 +171,13 @@ try {
 
   const cfg = await call(ws, client, 'config.get');
   check(cfg.data.hooks?.enabled === true, 'config.get 返回 hooks.enabled=true');
+  check(cfg.data.hooks?.mode === 'rules', "config.get 返回 hooks.mode='rules'");
   check(cfg.data.hooks?.approvalEnabled === true, 'config.get 返回 approvalEnabled=true');
   check(cfg.data.hooks?.approvalTimeoutMs === APPROVAL_TIMEOUT_MS, `approvalTimeoutMs=${APPROVAL_TIMEOUT_MS}`);
 
   const status = await call(ws, client, 'hooks.status');
   check(status.data.enabled === true, 'hooks.status enabled');
+  check(status.data.mode === 'rules', "hooks.status mode='rules'");
   check(status.data.ruleCount >= 9, `内置规则 ${status.data.ruleCount} 条`);
   check(status.data.pendingCount === 0, '初始没有待答审批');
 

@@ -180,8 +180,17 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         }),
         hooks: Type.Object({
           enabled: Type.Boolean(),
+          mode: Type.Union([Type.Literal('rules'), Type.Literal('smart')]),
           approvalEnabled: Type.Boolean(),
           approvalTimeoutMs: Type.Integer(),
+          risk: Type.Object({
+            enabled: Type.Boolean(),
+            timeoutMs: Type.Integer(),
+            cacheTtlSeconds: Type.Integer(),
+            maxCacheEntries: Type.Integer(),
+            maxArgsChars: Type.Integer(),
+            fallback: Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')]),
+          }),
         }),
       }),
     },
@@ -211,7 +220,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         skills: { ...cfg.skills },
         plugins: { ...cfg.plugins },
         cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
-        hooks: { ...cfg.hooks },
+        hooks: { ...cfg.hooks, risk: { ...cfg.hooks.risk } },
       };
     }
   );

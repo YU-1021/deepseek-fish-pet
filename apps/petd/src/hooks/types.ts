@@ -1,7 +1,8 @@
-/** 审批门/钩子：危险动作二次确认 + 可配置的 allow/ask/deny 规则。 */
+/** 审批门/钩子：危险动作二次确认 + allow/ask/deny 规则 + 模型风险评审。 */
 
 export type HookKind = 'tool' | 'method';
 export type HookAction = 'allow' | 'ask' | 'deny';
+export type HookMode = 'rules' | 'smart';
 
 export interface HookRule {
   /** 稳定 id（小写字母/数字/短横线） */
@@ -27,7 +28,9 @@ export interface HookRule {
 export interface HookContext {
   kind: HookKind;
   name: string;
-  /** 工具参数或方法参数（可选，用于 argContains） */
+  /** 网关方法的 scope；工具调用没有 scope */
+  scope?: 'read' | 'write' | 'system';
+  /** 工具参数或方法参数（可选，用于 argContains / 风险评审） */
   args?: Record<string, unknown>;
   meta?: {
     sessionId?: string;
@@ -48,6 +51,8 @@ export interface HookDecision {
   ruleId?: string;
   /** 是否经历过用户审批 */
   approved?: boolean;
+  /** 智能门给出的风险等级（仅 smart 模式） */
+  risk?: 'low' | 'medium' | 'high';
 }
 
 export interface ApprovalRequestInput {
@@ -58,6 +63,10 @@ export interface ApprovalRequestInput {
   detail?: string;
   /** 哪个连接触发的（方便 UI 对应到会话） */
   sessionId?: string;
+  /** 智能门风险等级（展示用） */
+  risk?: 'low' | 'medium' | 'high';
+  /** 模型给的风险原因 */
+  riskReason?: string;
 }
 
 export type ApprovalReason = 'answered' | 'timeout' | 'cancelled';
@@ -75,6 +84,8 @@ export interface PendingApproval {
   ruleId: string;
   title: string;
   detail?: string;
+  risk?: 'low' | 'medium' | 'high';
+  riskReason?: string;
   requestedAt: number;
   deadlineAt: number;
 }

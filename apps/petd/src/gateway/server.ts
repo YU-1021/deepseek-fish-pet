@@ -53,6 +53,7 @@ export interface GatewayOptions {
   guard?: (ctx: {
     kind: 'method';
     name: string;
+    scope?: 'read' | 'write' | 'system';
     params?: unknown;
     sessionId?: string;
     client?: ClientInfo;
@@ -254,6 +255,7 @@ export class Gateway {
             : await this.opts.guard({
                 kind: 'method',
                 name: method,
+                scope: reg.descriptor.scope,
                 params,
                 sessionId: state.id,
                 ...(state.client === null ? {} : { client: state.client }),
