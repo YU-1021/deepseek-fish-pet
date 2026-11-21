@@ -66,6 +66,8 @@ import { ApprovalBroker } from './hooks/approval.js';
 import { RiskAssessor } from './hooks/risk.js';
 import { HooksService } from './hooks/service.js';
 import { registerHooksMethods } from './gateway/methods/hooks.js';
+import { PresenceService } from './presence/service.js';
+import { registerPresenceMethods } from './gateway/methods/presence.js';
 
 interface CliArgs {
   home?: string;
@@ -338,6 +340,27 @@ async function main(): Promise<void> {
     riskEnabled: config.hooks.risk.enabled,
     rules: hookStore.list().length,
   });
+  // ── 静默活动：大部分时间自己安静待着，只广播 presence.activity 给前端做小动画 ──
+  const presence = new PresenceService({
+    file: path.join(paths.home, 'state', 'presence.json'),
+    config: () => config.presence,
+    publish: (event, data) => publishEvent(event, data),
+    logger: { debug: (msg, data) => logger.debug(msg, data) },
+    idleProvider: () => {
+      if (!cua.enabled) return -1;
+      try {
+        return cua.status().idleMs;
+      } catch {
+        return -1;
+      }
+    },
+  });
+  presence.ensure();
+  logger.info('静默活动已就绪', {
+    enabled: config.presence.enabled,
+    intervalMinutes: config.presence.intervalMinutes,
+    quiet: config.presence.quiet,
+  });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
@@ -570,6 +593,7 @@ async function main(): Promise<void> {
       riskEnabled: config.hooks.risk.enabled && config.hooks.mode === 'smart',
     }),
   });
+  registerPresenceMethods(registry, { presence });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {
@@ -623,6 +647,7 @@ async function main(): Promise<void> {
       cua.onTurnEnded();
       permissionBroker.cancelAll();
       approvalBroker.cancelAll();
+      presence.stop();
       automation?.stop();
       reminders.stop();
       await gateway.stop();
