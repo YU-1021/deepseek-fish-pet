@@ -45,6 +45,8 @@ export interface ChatServiceOptions {
   skillsPrompt?: () => string;
   /** 每轮拼接的电脑操作提示词段（返回空串 = 不注入） */
   cuaPrompt?: () => string;
+  /** 每轮拼接的已批准学习结果段（返回空串 = 不注入） */
+  learningPrompt?: () => string;
   /** 运行暂停门：暂停时聊天直接拒绝，不再花 token */
   pauseGate?: PauseGate;
   /** 电脑操作引擎（本轮结束负责松开按住的键鼠） */
@@ -132,6 +134,7 @@ export class ChatService {
   private readonly moodPrompt?: () => string;
   private readonly skillsPrompt?: () => string;
   private readonly cuaPrompt?: () => string;
+  private readonly learningPrompt?: () => string;
   private readonly pauseGate?: PauseGate;
   private readonly cua?: { enabled: boolean; onTurnEnded(): void };
   private readonly cuaIncludeImages: boolean;
@@ -153,6 +156,7 @@ export class ChatService {
     this.moodPrompt = opts.moodPrompt;
     this.skillsPrompt = opts.skillsPrompt;
     this.cuaPrompt = opts.cuaPrompt;
+    this.learningPrompt = opts.learningPrompt;
     this.pauseGate = opts.pauseGate;
     this.cua = opts.cua;
     this.cuaIncludeImages = opts.cuaIncludeImages === true;
@@ -378,7 +382,7 @@ export class ChatService {
   private composeSystemPrompt(): string {
     const base = this.systemPrompt();
     const extras: string[] = [];
-    for (const provider of [this.moodPrompt, this.skillsPrompt, this.cuaPrompt]) {
+    for (const provider of [this.moodPrompt, this.skillsPrompt, this.cuaPrompt, this.learningPrompt]) {
       if (!provider) continue;
       try {
         const text = provider();

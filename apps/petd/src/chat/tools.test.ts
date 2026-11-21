@@ -14,6 +14,7 @@ import { BlobStore } from '../memory/blob.js';
 import { ReminderStore } from '../reminders/store.js';
 import { AutomationStore } from '../automation/store.js';
 import { SkillStore } from '../skills/store.js';
+import { LearningService } from '../learning/service.js';
 import { MemoryToolbox } from './tools.js';
 import type { LlmToolCall } from '../llm/client.js';
 
@@ -289,6 +290,44 @@ test('load_skill / list_skills：模型能按需读取技能正文，不算写�
   const off = await plain.execute(call('load_skill', { name: 'morning' }));
   assert.equal(off.ok, false);
   assert.match(off.text, /没有启用技能/);
+});
+
+test('propose_learning：模型能写学习提案（计入写配额，不直接生效）', async () => {
+  const service = tmpService();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-learn-tool-'));
+  const learning = new LearningService({
+    home,
+    config: () => ({ enabled: true, requireApproval: true, grayPercent: 10, grayDays: 3, maxPending: 20, promptMaxChars: 2000 }),
+  });
+  learning.ensure();
+  const box = new MemoryToolbox({ service, maxWrites: 3, maxResultChars: 4000, learning });
+
+  const defs = box.definitions().map((d) => d.function.name);
+  assert.equal(defs.includes('propose_learning'), true);
+
+  const res = await box.execute(
+    call('propose_learning', {
+      kind: 'preference',
+      name: 'reply_style',
+      content: '回答尽量短一点。',
+      reason: '主人多次要求简短',
+    })
+  );
+  assert.equal(res.ok, true);
+  assert.match(res.text, /已写成学习提案/);
+  assert.match(res.text, /待主人审批/);
+  assert.equal(box.writes, 1, 'propose_learning 算写操作');
+  assert.equal(learning.list({ status: 'pending' }).length, 1);
+  // 未批准前不拼进提示词
+  assert.equal(learning.promptAdditions(), '');
+
+  const bad = await box.execute(call('propose_learning', { kind: 'nope', name: 'x', content: 'y', reason: 'z' }));
+  assert.equal(bad.ok, false);
+  assert.match(bad.text, /kind 只能是/);
+
+  const off = await makeToolbox(service).execute(call('propose_learning', { kind: 'preference', name: 'x', content: 'y', reason: 'z' }));
+  assert.equal(off.ok, false);
+  assert.match(off.text, /没有启用学习闭环/);
 });
 
 test('审批门 guard：拒绝时工具不执行，放行时正常，异常变成错误文本', async () => {

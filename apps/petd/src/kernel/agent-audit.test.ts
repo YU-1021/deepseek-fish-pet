@@ -86,6 +86,32 @@ test('append：目标不在写盘白名单时拒绝', () => {
   );
 });
 
+test('append：人的动作可落在正式技能等 AI 不可写文件上，记 zone=human', () => {
+  const home = tmpHome();
+  const log = makeLog(home);
+  const abs = writeFile(home, 'skills/daily_report/SKILL.md', '# 日报\n');
+  const meta = log.append({
+    path: abs,
+    actor: 'user',
+    action: 'write',
+    reason: '主人批准技能',
+    beforeText: null,
+    afterText: '# 日报\n',
+  });
+  assert.equal(meta.zone, 'human');
+  assert.equal(meta.path, 'skills/daily_report/SKILL.md');
+  // AI 仍然不能对正式技能留「自己写的」账：白名单外一律拒绝
+  assert.throws(
+    () => log.append({ path: abs, actor: 'agent', action: 'write', beforeText: null, afterText: '# 日报\n' }),
+    /不在允许范围/
+  );
+  // home 之外（含 ..）仍然拒绝，人的动作也不例外
+  assert.throws(
+    () => log.append({ path: path.join(home, '..', 'outside.txt'), actor: 'user', action: 'write', beforeText: null, afterText: 'x' }),
+    /不在允许范围/
+  );
+});
+
 test('rollback：恢复旧内容并追加一条回滚记录', () => {
   const home = tmpHome();
   const log = makeLog(home);

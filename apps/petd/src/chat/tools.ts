@@ -17,6 +17,7 @@ import { isTextMime } from '../memory/blob.js';
 import type { MemoryService } from '../memory/service.js';
 import type { ReminderStore } from '../reminders/store.js';
 import type { SkillStore } from '../skills/store.js';
+import type { LearningService } from '../learning/service.js';
 import type { CuaEngine } from '../cua/engine.js';
 import { CUA_TOOL_NAMES, CUA_TOOLS, executeCuaTool } from './cua-tools.js';
 
@@ -314,6 +315,33 @@ export const SKILL_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/** 学习：把观察到的偏好/经验/技能改进写成提案（只写候选，等主人批准；approve/reject/rollback 不暴露给 AI） */
+export const LEARNING_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'propose_learning',
+      description:
+        '把一条值得记住的偏好/经验/技能改进写成学习提案。只写候选文件，主人批准后才生效；不要试图自己批准，也不要写敏感内容。',
+      parameters: {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['skill', 'prompt', 'params', 'preference'],
+            description: '提案类型：skill=候选技能，prompt=提示词调整，params=参数建议，preference=主人偏好',
+          },
+          name: { type: 'string', description: '短名字，如 reply_style、morning_greeting' },
+          content: { type: 'string', description: '提案正文：技能写技能正文；偏好写一句或几条规则' },
+          reason: { type: 'string', description: '为什么建议这样改（主人看这个决定批不批）' },
+          diff: { type: 'string', description: '可选：改动前后的简要说明' },
+        },
+        required: ['kind', 'name', 'content', 'reason'],
+      },
+    },
+  },
+];
+
 /** 聊天里可用的全部工具（记忆 + 提醒 + 自动化） */
 export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
 
@@ -323,6 +351,7 @@ const ALL_TOOL_NAMES = new Set<string>([
   ...REMINDER_TOOLS,
   ...AUTOMATION_TOOLS,
   ...SKILL_TOOLS,
+  ...LEARNING_TOOLS,
   ...CUA_TOOLS,
 ].map((t) => t.function.name));
 
@@ -344,6 +373,8 @@ export interface MemoryToolboxOptions {
   automation?: AutomationStore;
   /** 技能存储；不传 = 不启用技能工具 */
   skills?: SkillStore;
+  /** 学习闭环；不传 = 不暴露学习提案工具 */
+  learning?: LearningService;
   /** 电脑操作引擎；不传/未启用 = 不暴露 CUA 工具 */
   cua?: CuaEngine;
   /** 截图是否作为图片一起回给模型（config.cua.includeImages） */
@@ -371,6 +402,7 @@ const WRITE_TOOLS = new Set([
   'save_blob',
   'schedule_task',
   'cancel_task',
+  'propose_learning',
 ]);
 
 /** 本地时间（给模型看的，形如 2026-11-15 20:30） */
@@ -395,6 +427,7 @@ export class MemoryToolbox {
   private readonly reminders?: ReminderStore;
   private readonly automation?: AutomationStore;
   private readonly skills?: SkillStore;
+  private readonly learning?: LearningService;
   private readonly cua?: CuaEngine;
   private readonly cuaIncludeImages: boolean;
   private readonly maxWrites: number;
@@ -409,6 +442,7 @@ export class MemoryToolbox {
     this.reminders = opts.reminders;
     this.automation = opts.automation;
     this.skills = opts.skills;
+    this.learning = opts.learning;
     this.cua = opts.cua;
     this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.maxWrites = opts.maxWrites;
@@ -421,6 +455,7 @@ export class MemoryToolbox {
     let tools = this.reminders ? CHAT_TOOLS : MEMORY_TOOLS;
     if (this.automation !== undefined && this.automation.isEnabled()) tools = [...tools, ...AUTOMATION_TOOLS];
     if (this.skills !== undefined) tools = [...tools, ...SKILL_TOOLS];
+    if (this.learning !== undefined) tools = [...tools, ...LEARNING_TOOLS];
     if (this.cua !== undefined && this.cua.enabled) tools = [...tools, ...CUA_TOOLS];
     return tools;
   }
@@ -684,6 +719,21 @@ export class MemoryToolbox {
         this.requireAutomation().delete(id);
         return `已删除自主任务 ${id}。`;
       }
+      case 'propose_learning': {
+        const kindRaw = str('kind');
+        if (!(kindRaw === 'skill' || kindRaw === 'prompt' || kindRaw === 'params' || kindRaw === 'preference')) {
+          throw new PetdError('E_BAD_PARAMS', 'kind 只能是 skill / prompt / params / preference');
+        }
+        const diff = optStr('diff');
+        const item = this.requireLearning().propose({
+          kind: kindRaw,
+          name: str('name'),
+          content: str('content'),
+          reason: str('reason'),
+          ...(diff === undefined ? {} : { diff }),
+        });
+        return `已写成学习提案 ${item.id}（${item.kind}，${item.name}，状态：待主人审批）。主人批准后才生效；可以在提案列表里查看正文。`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
@@ -712,6 +762,12 @@ export class MemoryToolbox {
   private requireSkills(): SkillStore {
     if (!this.skills) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用技能');
     return this.skills;
+  }
+
+  /** 学习提案工具必须配了学习服务才能用 */
+  private requireLearning(): LearningService {
+    if (!this.learning) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用学习闭环');
+    return this.learning;
   }
 
   private truncate(text: string): string {

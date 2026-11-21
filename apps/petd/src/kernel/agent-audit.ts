@@ -26,7 +26,7 @@ const MAX_LCS_CELLS = 40_000;
 
 export type AuditActor = 'user' | 'agent' | 'system';
 export type AuditAction = 'write' | 'delete' | 'rollback';
-export type AuditZone = 'agent-file' | 'memory';
+export type AuditZone = 'agent-file' | 'memory' | 'human';
 
 export interface AuditContent {
   hash: string;
@@ -192,16 +192,31 @@ export class AgentAuditLog {
   append(input: AuditAppendInput): AuditMeta {
     const ts = this.now();
     const policy = agentWritePolicy(this.home, input.path);
-    if (!policy.ok || policy.zone === null) {
+    let rel: string;
+    let zone: AuditZone;
+    if (policy.ok && policy.zone !== null) {
+      rel = policy.rel;
+      zone = policy.zone;
+    } else if (input.actor !== 'agent') {
+      // 人的动作可能落在正式技能/配置等 AI 不可写的文件上（INV-9：人的改动同样留痕）；
+      // 这里只要求目标仍在 petd home 内，绝不因此放宽 AI 的写入白名单。
+      const abs = path.isAbsolute(input.path) ? path.resolve(input.path) : path.resolve(this.home, input.path);
+      const relCandidate = path.relative(this.home, abs);
+      if (relCandidate === '' || relCandidate.startsWith('..') || path.isAbsolute(relCandidate)) {
+        throw new PetdError('E_FORBIDDEN', `审计目标不在允许范围：${policy.rel || input.path}`);
+      }
+      rel = relCandidate.split(path.sep).join('/');
+      zone = 'human';
+    } else {
       throw new PetdError('E_FORBIDDEN', `审计目标不在允许范围：${policy.rel || input.path}`);
     }
     const entry: AuditEntry = {
-      id: crypto.createHash('sha256').update(`${ts}|${policy.rel}|${input.action}|${input.afterText === null ? '' : sha256(input.afterText)}|${Math.random()}`).digest('hex').slice(0, 16),
+      id: crypto.createHash('sha256').update(`${ts}|${rel}|${input.action}|${input.afterText === null ? '' : sha256(input.afterText)}|${Math.random()}`).digest('hex').slice(0, 16),
       ts,
       actor: input.actor,
       action: input.action,
-      path: policy.rel,
-      zone: policy.zone,
+      path: rel,
+      zone,
       reason: (input.reason ?? '').trim(),
       before: makeContent(input.beforeText),
       after: makeContent(input.afterText),

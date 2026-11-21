@@ -283,6 +283,64 @@ test('输入：文本分块打全、组合键、拖拽松开、轮末释放', as
   assert.equal(driver.releases, 1);
 });
 
+test('自我保护：前台是自己的窗口时额外确认；拒绝就不执行', async () => {
+  const accept = makeEngine({ over: { permission: 'never-ask' } });
+  accept.driver.foregroundTitle = '大肥鱼 - pet-ui';
+  await accept.engine.screenshot();
+  const r = await accept.engine.click({ x: 5, y: 5 });
+  assert.equal(r.ok, true);
+  assert.equal(accept.asks.length, 1);
+  assert.match(accept.asks[0]?.question ?? '', /自我保护/);
+  assert.match(accept.asks[0]?.question ?? '', /大肥鱼/);
+  assert.equal(accept.driver.clicks.length, 1);
+
+  const deny = makeEngine({ over: { permission: 'never-ask' }, ask: async () => false });
+  deny.driver.foregroundTitle = '大肥鱼 - pet-ui';
+  await deny.engine.screenshot();
+  await assert.rejects(deny.engine.click({ x: 5, y: 5 }), /用户没有允许操作我自己的窗口/);
+  assert.equal(deny.driver.clicks.length, 0);
+
+  // 自我保护不缓存：两次点击要问两次
+  const twice = makeEngine({ over: { permission: 'never-ask' } });
+  twice.driver.foregroundTitle = '大肥鱼 - pet-ui';
+  await twice.engine.screenshot();
+  await twice.engine.click({ x: 1, y: 1 });
+  await twice.engine.click({ x: 2, y: 2 });
+  assert.equal(twice.asks.length, 2);
+});
+
+test('自我保护：要输入的文字含配置/密钥/自我迭代文件名时警告', async () => {
+  const { engine, asks, driver } = makeEngine({ over: { permission: 'never-ask' } });
+  await engine.screenshot();
+  const r = await engine.type({ text: 'type secrets.json' });
+  assert.equal(r.ok, true);
+  assert.equal(asks.length, 1);
+  assert.match(asks[0]?.question ?? '', /secrets\.json/);
+  assert.equal(driver.typed, 'type secrets.json');
+
+  const dangerous = makeEngine({ over: { permission: 'never-ask' }, ask: async () => false });
+  await dangerous.engine.screenshot();
+  await assert.rejects(dangerous.engine.type({ text: 'echo hi > SOUL.md' }), /用户没有允许操作我自己的窗口/);
+  assert.equal(dangerous.driver.typed, '');
+});
+
+test('自我保护：普通窗口不额外打扰；可配置关闭', async () => {
+  const plain = makeEngine({ over: { permission: 'never-ask' } });
+  plain.driver.foregroundTitle = '无标题 - 记事本';
+  plain.driver.foregroundApp = 'notepad.exe';
+  await plain.engine.screenshot();
+  await plain.engine.type({ text: 'hello' });
+  assert.equal(plain.asks.length, 0);
+
+  const off = makeEngine({
+    over: { permission: 'never-ask', selfProtect: { ...DEFAULT_CONFIG.cua.selfProtect, enabled: false } },
+  });
+  off.driver.foregroundTitle = '大肥鱼 - pet-ui';
+  await off.engine.screenshot();
+  await off.engine.type({ text: 'hi' });
+  assert.equal(off.asks.length, 0);
+});
+
 test('scroll 全零 / zoom 区域 / 窗口切换参数校验', async () => {
   const { engine, driver } = makeEngine();
   await engine.screenshot();
