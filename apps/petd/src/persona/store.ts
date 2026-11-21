@@ -1,28 +1,32 @@
 /**
- * 人格自编辑存储：SOUL.md（唯一事实源）+ persona-state.json（版本 / 锁 / 历史）。
+ * 人格自编辑存储：SOUL.md（内核，只有人能改）+ SOUL.agent.md（外圈，AI 可改）
+ * + persona-state.json（版本 / 锁 / 历史）。
  *
- * 为什么不用旧的 persona.json 字段模型：
- *   - 聊天系统已经以 SOUL.md 为系统提示词，人也直接可读可改；
- *   - 自编辑只需要「按小节改」，不需要把人格拆成一堆字段；
- *   - 版本/锁/回滚放在旁边的小 JSON 里，SOUL.md 被手改也能检测出来。
+ * 自我迭代安全边界（docs/自我迭代-安全边界.md）：
+ *   - SOUL.md 是人格内核，AI 只读；用户（或人直接改文件）才能写；
+ *   - SOUL.agent.md 是可演化外圈（口头禅、相处细节、说话方式等），AI 的 patch 只写它；
+ *   - 读取时合并两份（agent 覆盖 core），聊天/UI 看到的是合并结果；
+ *   - 用户改某个小节时，同一小节的 agent 覆盖会被清掉，让用户的值生效；
+ *   - 版本/锁/历史/回滚语义不变；外部手改任一份文件都能被检测到。
  *
  * 小节 key 由标题映射：身份/世界观/性格/口头禅/隐藏设定/说话方式；未知标题归 custom:*。
  * - AI（persona.evolve）只能改 AI_EDITABLE_KEYS 且未上锁的小节；
  * - 世界观永远只有用户能改（USER_ONLY_KEYS），不能上锁；
  * - 用户（persona.patch）可改任何小节，锁只约束 AI。
- *
- * 并发：所有写操作都是 tmp+rename 原子写；patch 用 expectedVersion 做乐观并发。
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PetdError } from '@petd/protocol';
 import { buildSoul, type LegacyPersona } from '../chat/persona.js';
+import { assertAgentWritable } from '../kernel/agent-files.js';
 
 export const PERSONA_STATE_VERSION = 1;
 export const MAX_SOUL_CHARS = 20_000;
 export const MAX_SECTION_CHARS = 4_000;
 export const MAX_HISTORY = 50;
+/** AI 可写的人格外圈文件名（相对 home，或与 SOUL 同目录） */
+export const SOUL_AGENT_FILE = 'SOUL.agent.md';
 
 export type PersonaActor = 'user' | 'agent' | 'system';
 
@@ -36,6 +40,8 @@ export interface PersonaSectionView extends PersonaSection {
   locked: boolean;
   aiEditable: boolean;
   userOnly: boolean;
+  /** 该小节来自 SOUL.agent.md（外圈覆盖）还是内核 */
+  source?: 'core' | 'agent';
 }
 
 export interface PersonaRevision {
@@ -43,7 +49,7 @@ export interface PersonaRevision {
   ts: string;
   actor: PersonaActor;
   reason: string;
-  /** 该版本写入后的 SOUL.md 全文（回滚直接用它，避免重放差分的坑） */
+  /** 该版本写入后的合并全文（回滚直接用它，避免重放差分的坑） */
   snapshot: string;
   changedKeys: string[];
 }
@@ -65,6 +71,11 @@ export interface PersonaSnapshot {
   preamble: string;
   sections: PersonaSectionView[];
   locks: Record<string, boolean>;
+  /** 内核文件绝对路径（只有人能改） */
+  coreFile: string;
+  /** 外圈文件绝对路径（AI 可改） */
+  agentFile: string;
+  hasAgentOverrides: boolean;
 }
 
 export interface PersonaPatchInput {
@@ -119,6 +130,11 @@ export function hashSoul(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+/** 合并 hash：内核 + 外圈，任何一份被外部改都能看出来 */
+function hashLayers(core: string, agent: string): string {
+  return hashSoul(core + '\n/*agent*/\n' + agent);
+}
+
 function normalizeNewlines(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
@@ -162,13 +178,32 @@ export function parseSoul(text: string): ParsedSoul {
   return { title, preamble: preambleLines.join('\n').trim(), sections };
 }
 
-/** 小节列表 → SOUL.md 文本 */
+/** 小节列表 → SOUL 文本 */
 export function renderSoul(parsed: ParsedSoul): string {
   const parts: string[] = [];
   if (parsed.title) parts.push('# ' + parsed.title);
   if (parsed.preamble) parts.push(parsed.preamble);
   for (const s of parsed.sections) parts.push('## ' + s.heading + '\n' + s.content.trim());
   return parts.join('\n\n').trim() + '\n';
+}
+
+/** 合并内核与外圈：同 key 外圈覆盖内核，外圈独有小节追加在后 */
+export function mergeSoulLayers(core: ParsedSoul, agent: ParsedSoul): ParsedSoul {
+  const byKey = new Map<string, PersonaSection>();
+  const order: string[] = [];
+  for (const s of core.sections) {
+    if (!byKey.has(s.key)) order.push(s.key);
+    byKey.set(s.key, { ...s, source: 'core' } as PersonaSection);
+  }
+  for (const s of agent.sections) {
+    if (!byKey.has(s.key)) order.push(s.key);
+    byKey.set(s.key, { ...s, source: 'agent' } as PersonaSection);
+  }
+  return {
+    title: core.title || agent.title,
+    preamble: agent.preamble || core.preamble,
+    sections: order.map((k) => byKey.get(k) as PersonaSection),
+  };
 }
 
 export interface PersonaLogger {
@@ -180,6 +215,8 @@ export interface PersonaStoreOptions {
   home: string;
   /** SOUL.md 文件名（相对 home）或绝对路径 */
   file: string;
+  /** SOUL.agent.md 文件名（相对 home）或绝对路径；默认与 file 同目录的 SOUL.agent.md */
+  agentFile?: string;
   /** 首次播种用：旧 persona.json 字段 */
   legacy?: LegacyPersona | null;
   now?: () => string;
@@ -188,6 +225,18 @@ export interface PersonaStoreOptions {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function resolvePath(home: string, file: string): string {
+  return path.isAbsolute(file) ? file : path.join(home, file);
+}
+
+function readTextIfExists(file: string): string {
+  try {
+    return normalizeNewlines(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return '';
+  }
 }
 
 function readStateFile(file: string): PersonaState | null {
@@ -237,6 +286,7 @@ function readStateFile(file: string): PersonaState | null {
 export class PersonaStore {
   private readonly home: string;
   private readonly file: string;
+  private readonly agentFile: string;
   private readonly legacy: LegacyPersona | null;
   private readonly now: () => string;
   private readonly logger?: PersonaLogger;
@@ -244,37 +294,53 @@ export class PersonaStore {
   constructor(opts: PersonaStoreOptions) {
     this.home = opts.home;
     this.file = opts.file;
+    const defaultAgent = path.join(path.dirname(resolvePath(opts.home, opts.file)), SOUL_AGENT_FILE);
+    this.agentFile = opts.agentFile ? resolvePath(opts.home, opts.agentFile) : defaultAgent;
     this.legacy = opts.legacy ?? null;
     this.now = opts.now ?? (() => new Date().toISOString());
     this.logger = opts.logger;
   }
 
+  /** 内核文件（只有人能写） */
   get soulFile(): string {
-    return path.isAbsolute(this.file) ? this.file : path.join(this.home, this.file);
+    return resolvePath(this.home, this.file);
+  }
+
+  /** 外圈文件（AI 可写） */
+  get agentSoulFile(): string {
+    return this.agentFile;
   }
 
   get stateFile(): string {
     return path.join(this.home, 'persona-state.json');
   }
 
-  /** 首次启动：播种 SOUL.md、补齐 persona-state.json。返回是否新建 */
-  ensure(): { createdSoul: boolean; createdState: boolean } {
+  /** 首次启动：播种 SOUL.md / SOUL.agent.md、补齐 persona-state.json */
+  ensure(): { createdSoul: boolean; createdState: boolean; createdAgent: boolean } {
     let createdSoul = false;
     if (!fs.existsSync(this.soulFile)) {
       fs.mkdirSync(path.dirname(this.soulFile), { recursive: true });
       fs.writeFileSync(this.soulFile, buildSoul(this.legacy), 'utf8');
       createdSoul = true;
     }
-    const content = normalizeNewlines(fs.readFileSync(this.soulFile, 'utf8'));
+    let createdAgent = false;
+    if (!fs.existsSync(this.agentSoulFile)) {
+      fs.mkdirSync(path.dirname(this.agentSoulFile), { recursive: true });
+      fs.writeFileSync(this.agentSoulFile, '', 'utf8');
+      createdAgent = true;
+    }
+    const core = readTextIfExists(this.soulFile);
+    const agent = readTextIfExists(this.agentSoulFile);
+    const merged = mergeSoulLayers(parseSoul(core), parseSoul(agent));
+    const content = renderSoul(merged);
     let createdState = false;
     if (!readStateFile(this.stateFile)) {
       const ts = this.now();
       const state: PersonaState = {
         version: 1,
         updatedAt: ts,
-        soulHash: hashSoul(content),
+        soulHash: hashLayers(core, agent),
         locks: {},
-        // 保留初始版本，用户才能回滚到第一次启动时的样子
         history: [
           {
             version: 1,
@@ -289,17 +355,20 @@ export class PersonaStore {
       writeJsonAtomic(this.stateFile, state);
       createdState = true;
     }
-    return { createdSoul, createdState };
+    return { createdSoul, createdState, createdAgent };
   }
 
-  /** 读当前人格快照；检测到外部手改 SOUL.md 时会记一条历史并升版本 */
+  /** 读当前人格快照（内核 + 外圈合并）；任一份被外部手改都会升版本 */
   read(): PersonaSnapshot {
     if (!fs.existsSync(this.soulFile)) {
       throw new PetdError('E_INTERNAL', `人格文件不存在：${this.soulFile}`);
     }
-    const content = normalizeNewlines(fs.readFileSync(this.soulFile, 'utf8'));
+    const core = readTextIfExists(this.soulFile);
+    const agent = readTextIfExists(this.agentSoulFile);
+    const mergedParsed = mergeSoulLayers(parseSoul(core), parseSoul(agent));
+    const content = renderSoul(mergedParsed);
+    const hash = hashLayers(core, agent);
     let state = readStateFile(this.stateFile);
-    const hash = hashSoul(content);
     if (!state) {
       state = { version: 1, updatedAt: this.now(), soulHash: hash, locks: {}, history: [] };
       writeJsonAtomic(this.stateFile, state);
@@ -310,7 +379,7 @@ export class PersonaStore {
         version,
         ts,
         actor: 'user',
-        reason: '检测到 SOUL.md 被外部编辑',
+        reason: '检测到人格文件被外部编辑',
         snapshot: content,
         changedKeys: [],
       };
@@ -324,14 +393,14 @@ export class PersonaStore {
       writeJsonAtomic(this.stateFile, state);
       this.logger?.info('检测到人格文件外部修改', { version });
     }
-    const parsed = parseSoul(content);
-    const sections: PersonaSectionView[] = parsed.sections.map((s) => {
+    const sections: PersonaSectionView[] = mergedParsed.sections.map((s) => {
       const userOnly = USER_ONLY_KEYS.includes(s.key);
       return {
         ...s,
         locked: Boolean(state.locks[s.key]),
         aiEditable: !userOnly && AI_EDITABLE_KEYS.includes(s.key),
         userOnly,
+        source: (s as PersonaSectionView).source ?? 'core',
       };
     });
     return {
@@ -339,17 +408,20 @@ export class PersonaStore {
       hash,
       version: state.version,
       updatedAt: state.updatedAt,
-      title: parsed.title,
-      preamble: parsed.preamble,
+      title: mergedParsed.title,
+      preamble: mergedParsed.preamble,
       sections,
       locks: { ...state.locks },
+      coreFile: this.soulFile,
+      agentFile: this.agentSoulFile,
+      hasAgentOverrides: parseSoul(agent).sections.length > 0,
     };
   }
 
   /**
    * 按小节改写人格。
-   * - actor='user'：可改任何小节，忽略锁；
-   * - actor='agent'：只能改 AI_EDITABLE_KEYS 且未上锁的小节；世界观直接拒绝。
+   * - actor='user'：写内核 SOUL.md，并清掉同小节的 agent 覆盖；
+   * - actor='agent'：只写外圈 SOUL.agent.md，只能改 AI_EDITABLE_KEYS 且未上锁的小节。
    */
   patch(input: PersonaPatchInput): PersonaPatchResult {
     const snapshot = this.read();
@@ -360,8 +432,7 @@ export class PersonaStore {
     const applied: string[] = [];
     const skipped: string[] = [];
     const rejected: PersonaRejected[] = [];
-    const parsed = parseSoul(snapshot.content);
-    const byKey = new Map(parsed.sections.map((s) => [s.key, s]));
+    const byKey = new Map(snapshot.sections.map((s) => [s.key, s]));
     const next = new Map<string, string>();
 
     for (const [key, rawValue] of Object.entries(input.sections ?? {})) {
@@ -409,18 +480,37 @@ export class PersonaStore {
       return { changed: false, version: snapshot.version, applied: [], skipped, rejected };
     }
 
-    const updatedParsed: ParsedSoul = {
-      ...parsed,
-      sections: parsed.sections.map((s) => {
-        const value = next.get(s.key);
-        return value === undefined ? s : { ...s, content: value };
-      }),
-    };
-    const newContent = renderSoul(updatedParsed);
-    if (newContent.length > MAX_SOUL_CHARS) {
+    const coreParsed = parseSoul(readTextIfExists(this.soulFile));
+    const agentParsed = parseSoul(readTextIfExists(this.agentSoulFile));
+    let newCore = coreParsed;
+    let newAgent = agentParsed;
+
+    if (actor === 'agent') {
+      const agentSections = new Map(agentParsed.sections.map((s) => [s.key, s]));
+      for (const [key, value] of next) {
+        const existing = agentSections.get(key);
+        const heading = existing?.heading ?? byKey.get(key)?.heading ?? key;
+        agentSections.set(key, { key, heading, content: value });
+      }
+      newAgent = { ...agentParsed, sections: Array.from(agentSections.values()) };
+    } else {
+      newCore = {
+        ...coreParsed,
+        sections: coreParsed.sections.map((s) => {
+          const value = next.get(s.key);
+          return value === undefined ? s : { ...s, content: value };
+        }),
+      };
+      const agentSections = agentParsed.sections.filter((s) => !next.has(s.key));
+      newAgent = { ...agentParsed, sections: agentSections };
+    }
+
+    const mergedPreview = renderSoul(mergeSoulLayers(newCore, newAgent));
+    if (mergedPreview.length > MAX_SOUL_CHARS) {
       throw new PetdError('E_BAD_PARAMS', `人格总长度超限（上限 ${MAX_SOUL_CHARS} 字）`);
     }
-    writeTextAtomic(this.soulFile, newContent);
+    const newCoreText = renderSoul(newCore);
+    const newAgentText = renderSoul(newAgent);
     const ts = this.now();
     const state = readStateFile(this.stateFile) ?? {
       version: snapshot.version,
@@ -434,14 +524,20 @@ export class PersonaStore {
       ts,
       actor,
       reason: (input.reason ?? '').trim() || '未注明原因',
-      snapshot: newContent,
+      snapshot: mergedPreview,
       changedKeys: applied,
     };
+    // 先写内核再写外圈；状态最后写，保证 hash 与文件一致。
+    // 外圈是 AI 唯一能写的人格文件，写前再过一次白名单守卫（INV-1/7）。
+    if (mergedPreview.length > MAX_SOUL_CHARS) throw new PetdError('E_BAD_PARAMS', '人格总长度超限');
+    if (actor === 'agent') assertAgentWritable(this.home, this.agentSoulFile);
+    writeTextAtomic(this.soulFile, newCoreText);
+    writeTextAtomic(this.agentSoulFile, newAgentText);
     const nextState: PersonaState = {
       ...state,
       version: revision.version,
       updatedAt: ts,
-      soulHash: hashSoul(newContent),
+      soulHash: hashLayers(newCoreText, newAgentText),
       history: [revision, ...state.history].slice(0, MAX_HISTORY),
     };
     writeJsonAtomic(this.stateFile, nextState);
@@ -474,7 +570,7 @@ export class PersonaStore {
     return state.history.slice(0, n).map(({ snapshot: _snapshot, ...rest }) => rest);
   }
 
-  /** 回滚到某个历史版本（内容取该版本完整快照） */
+  /** 回滚到某个历史版本：快照写回内核，外圈清空（合并结果即该版本） */
   rollback(version: number): PersonaPatchResult {
     const state = readStateFile(this.stateFile);
     if (!state) throw new PetdError('E_INTERNAL', '人格状态文件缺失，无法回滚');
@@ -482,6 +578,7 @@ export class PersonaStore {
     if (!target) throw new PetdError('E_NOT_FOUND', `没有 v${version} 的历史版本`);
     const content = normalizeNewlines(target.snapshot);
     writeTextAtomic(this.soulFile, content);
+    writeTextAtomic(this.agentSoulFile, '');
     const ts = this.now();
     const revision: PersonaRevision = {
       version: state.version + 1,
@@ -495,7 +592,7 @@ export class PersonaStore {
       ...state,
       version: revision.version,
       updatedAt: ts,
-      soulHash: hashSoul(content),
+      soulHash: hashLayers(content, ''),
       history: [revision, ...state.history].slice(0, MAX_HISTORY),
     };
     writeJsonAtomic(this.stateFile, nextState);
