@@ -236,6 +236,34 @@ export interface PetdConfig {
       end: string;
     };
   };
+  dsh: {
+    /** DSH 桥总开关（默认开：只读观察不花钱，需要问 DSH 时才懒启动 runtime） */
+    enabled: boolean;
+    /** 观察桌面 GUI 正在用的会话（只读尾读 v4 日志，不打扰、不花钱） */
+    observe: boolean;
+    /** DeepSeek Harness.exe 路径；空 = 自动探测 */
+    exePath: string;
+    /** DSH CLI 入口（app.asar 里的 cli.js）；空 = 从 exePath 推导 */
+    cliPath: string;
+    /** SDK runtime 的工作目录（它跑工具时的 cwd）；空 = <home>/dsh-workspace */
+    cwd: string;
+    /** 模型提供方（SDK initialize 用） */
+    provider: string;
+    /** 模型名 */
+    model: string;
+    /** 推理档位（'' = 不传，用 DSH 默认） */
+    reasoningEffort: 'low' | 'medium' | 'high' | '';
+    /** 单次回复的输出预算 */
+    maxTokens: number;
+    /** 审批策略：reject=一律拒绝（安全默认）；ask=广播给前端等人批 */
+    approvalPolicy: 'reject' | 'ask';
+    /** 一次 dsh.ask 最长等多久（毫秒） */
+    askTimeoutMs: number;
+    /** 观察轮询间隔（毫秒） */
+    observeIntervalMs: number;
+    /** 会话日志多久没更新算不活跃（毫秒） */
+    activeMs: number;
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -371,6 +399,22 @@ export const DEFAULT_CONFIG: PetdConfig = {
       start: '23:00',
       end: '07:00',
     },
+  },
+  dsh: {
+    // DSH 桥：观察桌面 GUI 的会话（只读），需要问 DSH 时再懒启动自己的 SDK runtime
+    enabled: true,
+    observe: true,
+    exePath: '',
+    cliPath: '',
+    cwd: '',
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    reasoningEffort: 'high',
+    maxTokens: 16_000,
+    approvalPolicy: 'reject',
+    askTimeoutMs: 180_000,
+    observeIntervalMs: 1500,
+    activeMs: 15_000,
   },
 };
 
@@ -767,6 +811,50 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
         } else warnings.push('presence.nightQuiet 必须是对象，回默认');
       }
     } else warnings.push('presence 段必须是对象，回默认');
+  }
+  const dshRaw = raw['dsh'];
+  if (dshRaw !== undefined) {
+    if (isObject(dshRaw)) {
+      const de = dshRaw['enabled'];
+      if (typeof de === 'boolean') out.dsh.enabled = de;
+      else if (de !== undefined) warnings.push('dsh.enabled 非法，回默认 true');
+      const dob = dshRaw['observe'];
+      if (typeof dob === 'boolean') out.dsh.observe = dob;
+      else if (dob !== undefined) warnings.push('dsh.observe 非法，回默认 true');
+      const ep = dshRaw['exePath'];
+      if (typeof ep === 'string') out.dsh.exePath = ep.trim();
+      else if (ep !== undefined) warnings.push('dsh.exePath 非法，回默认空（自动探测）');
+      const cp = dshRaw['cliPath'];
+      if (typeof cp === 'string') out.dsh.cliPath = cp.trim();
+      else if (cp !== undefined) warnings.push('dsh.cliPath 非法，回默认空（自动推导）');
+      const cw = dshRaw['cwd'];
+      if (typeof cw === 'string') out.dsh.cwd = cw.trim();
+      else if (cw !== undefined) warnings.push('dsh.cwd 非法，回默认空（home/dsh-workspace）');
+      const pv = dshRaw['provider'];
+      if (typeof pv === 'string' && pv.trim()) out.dsh.provider = pv.trim();
+      else if (pv !== undefined) warnings.push('dsh.provider 非法，回默认 deepseek-official');
+      const md = dshRaw['model'];
+      if (typeof md === 'string' && md.trim()) out.dsh.model = md.trim();
+      else if (md !== undefined) warnings.push('dsh.model 非法，回默认 deepseek-flash');
+      const re = dshRaw['reasoningEffort'];
+      if (re === '' || re === 'low' || re === 'medium' || re === 'high') out.dsh.reasoningEffort = re;
+      else if (re !== undefined) warnings.push('dsh.reasoningEffort 非法，回默认 high');
+      const mt = dshRaw['maxTokens'];
+      if (typeof mt === 'number' && Number.isInteger(mt) && mt >= 1 && mt <= 200_000) out.dsh.maxTokens = mt;
+      else if (mt !== undefined) warnings.push('dsh.maxTokens 非法，回默认 16000');
+      const ap = dshRaw['approvalPolicy'];
+      if (ap === 'reject' || ap === 'ask') out.dsh.approvalPolicy = ap;
+      else if (ap !== undefined) warnings.push('dsh.approvalPolicy 非法，回默认 reject');
+      const at = dshRaw['askTimeoutMs'];
+      if (typeof at === 'number' && Number.isInteger(at) && at >= 10_000 && at <= 600_000) out.dsh.askTimeoutMs = at;
+      else if (at !== undefined) warnings.push('dsh.askTimeoutMs 非法，回默认 180000');
+      const oi = dshRaw['observeIntervalMs'];
+      if (typeof oi === 'number' && Number.isInteger(oi) && oi >= 200 && oi <= 60_000) out.dsh.observeIntervalMs = oi;
+      else if (oi !== undefined) warnings.push('dsh.observeIntervalMs 非法，回默认 1500');
+      const am = dshRaw['activeMs'];
+      if (typeof am === 'number' && Number.isInteger(am) && am >= 1000 && am <= 300_000) out.dsh.activeMs = am;
+      else if (am !== undefined) warnings.push('dsh.activeMs 非法，回默认 15000');
+    } else warnings.push('dsh 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

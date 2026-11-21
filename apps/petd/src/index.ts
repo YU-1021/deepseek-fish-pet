@@ -70,6 +70,8 @@ import { PresenceService } from './presence/service.js';
 import { registerPresenceMethods } from './gateway/methods/presence.js';
 import { AgentAuditLog } from './kernel/agent-audit.js';
 import { registerAgentMethods } from './gateway/methods/agent.js';
+import { DshBridge } from './dsh/bridge.js';
+import { registerDshMethods } from './gateway/methods/dsh.js';
 
 interface CliArgs {
   home?: string;
@@ -367,6 +369,20 @@ async function main(): Promise<void> {
     intervalMinutes: config.presence.intervalMinutes,
     quiet: config.presence.quiet,
   });
+  // ── DSH 桥：读方向观察桌面 GUI 会话（只读、不花钱）；写方向懒启动私有 SDK runtime ──
+  const dsh = new DshBridge({
+    config: () => config.dsh,
+    home: paths.home,
+    logger: {
+      debug: (msg, data) => logger.debug(msg, data),
+      info: (msg, data) => logger.info(msg, data),
+      warn: (msg, data) => logger.warn(msg, data),
+      error: (msg, data) => logger.error(msg, data),
+    },
+    publish: (event, data) => publishEvent(event, data),
+  });
+  if (config.dsh.enabled && config.dsh.observe) dsh.start();
+  logger.info('DSH 桥已就绪', { enabled: config.dsh.enabled, observe: config.dsh.observe });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
@@ -604,6 +620,7 @@ async function main(): Promise<void> {
     audit: agentAudit,
     publish: (event, data) => publishEvent(event, data),
   });
+  registerDshMethods(registry, { bridge: dsh });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {
@@ -658,6 +675,7 @@ async function main(): Promise<void> {
       permissionBroker.cancelAll();
       approvalBroker.cancelAll();
       presence.stop();
+      await dsh.stop();
       automation?.stop();
       reminders.stop();
       await gateway.stop();

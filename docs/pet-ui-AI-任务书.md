@@ -103,13 +103,13 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 108 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 115 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
 | `health.ping` | `{}` | `{pong, ts}` |
 | `health.status` | `{}` | `{server{version,pid,startedAt,uptimeMs}, gateway{port,clients}, methods[]}` |
-| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation, skills, plugins, cua}`（只读、不含任何密钥） |
+| `config.get` | `{}` | `{version, gateway, log, llm, chat, voice, asr, mood, reminders, automation, skills, plugins, cua, hooks, presence, dsh}`（只读、不含任何密钥） |
 | `session.create` | `{title?}` | `SessionMeta` |
 | `session.list` | `{}` | `{sessions: SessionMeta[]}`（最近更新倒序） |
 | `session.get` | `{sessionId}` | `{session: {...meta, messages: [{role,content,ts}]}}` |
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`、`dsh.status`、`dsh.activity`、`dsh.event`、`dsh.approval`、`dsh.approval.resolved`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -387,6 +387,22 @@ AI 会自我演化（`persona.evolve` 改 `SOUL.agent.md` 外圈），但每次�
 4. **不硬编码清单**：方法清单以 `health.status.methods` 为准；`AuditMeta` 新增字段时忽略未知字段即可。
 5. **不要做**：不要给 AI 暴露「调用 agent.rollback」的聊天入口（这是人的撤销动作，后端也没有对应聊天工具）；不要自动回滚；不要把审计正文缓存进前端持久化存储（正文只在 `agent.audit.get` 里按需取）。
 6. **验收**：让 AI 演化一次人格（或手动写 `SOUL.agent.md` 后让用户改同名小节）→ 审计页出现一条记录 → 查看 diff → 点撤销 → 外圈恢复成改动前、收到 `agent.rollback` 事件、人格页 `source` 徽标相应变化；再把文件手改一次后撤销 → 出现 `E_CONFLICT` 确认框。
+
+## 8.16 M15：DSH 双向桥 UI 规格（petd 后端已就绪）
+
+桌宠和 DeepSeek Harness（DSH）已经能用：读方向是只读观察你桌面 GUI 的会话（空闲/思考中/正在用工具，不花 token）；写方向是起一个私有 SDK runtime，把任务交给 DSH 并等它回答（花 token）。UI 的职责是让这两件事**看得见、可控**，不要把 DSH 的会话内容全量搬过来。
+
+- 方法：`dsh.status`（`{enabled, observe, started, runtime{running,pid,provider,model,cwd,serverInfo,startedAt}, observer{...}, paths{exePath,cliPath,cwd,sessionsDir}, counters{prompts,asks,errors}, lastError, lastPromptAt, pendingApprovals}`）、`dsh.observe`（立刻扫一次，返回观察快照 `{workspace, sessionId, file, state: 'idle'|'thinking'|'working', active, turn, step, tool, lastText, lastEventType, agoMs}`）、`dsh.start` / `dsh.stop`（手动起停私有 runtime）、`dsh.prompt {text, sessionId?}`（只入队，返回 `{sessionId, messageId}`）、`dsh.ask {text, timeoutMs?}`（等这一回合结束，返回 `{text, sessionId, turn, durationMs}`）、`dsh.approval.answer {id, outcome: 'allowed-once'|'rejected'|'cancelled'}`。
+- 事件：`dsh.status {status}`、`dsh.activity {snapshot}`（有变化才发，最多每 1.5 秒一次）、`dsh.event {sessionId, type, at, turn?, step?, tool?, text?}`（私有会话的事件摘要，text≤500）、`dsh.approval {id, sessionId, toolName, reason, at}`（仅 `dsh.approvalPolicy='ask'`）、`dsh.approval.resolved {id, accepted}`。
+- 配置：`config.get.dsh {enabled, observe, exePath, cliPath, cwd, provider, model, reasoningEffort, maxTokens, approvalPolicy, askTimeoutMs, observeIntervalMs, activeMs}`；**不要**做密钥编辑（DSH 用自己的凭证）。
+
+1. **状态小组件（必做，轻量）**：宠物面板/设置页放一行「DSH」状态——`enabled`、观察中、私有 runtime 是否在跑、`state`（空闲/思考中/working + 工具名）。优先用 `dsh.activity` 事件更新，断线重连后拉一次 `dsh.observe`；不要高频轮询。
+2. **只读观察（必做）**：展示当前观察到的 workspace 与会话 id，并写明「只读、不花 token、不上传」；`state='working'` 时小字显示工具名（如「正在用 edit」）。
+3. **把任务交给 DSH（可选，花 token）**：输入框 + 「交给 DSH」按钮（`dsh.ask`，显示 loading 与超时；`E_UNAVAILABLE` 给中文提示与「去配置 exePath」引导）；回答区展示 `text` 与 `turn/durationMs`；**不要**自动连续追问。
+4. **审批气泡复用（若 approvalPolicy='ask'）**：`dsh.approval` 与 CUA 权限/审批门共用同一个置顶气泡组件，来源标签写「DSH」；显示 `toolName` 与 `reason`，按钮「允许一次」「拒绝」，调 `dsh.approval.answer`；120 秒没人答后端按拒绝，UI 显示「没来得及回答，已拒绝」。
+5. **不硬编码**：方法清单以 `health.status.methods` 为准；事件 data 形状以后端代码为准（只会加字段，未知字段忽略）。
+6. **不要做**：不要把 DSH 会话日志/全文读进前端；不要在 UI 里存 DSH 的 key/凭证；不要默认打开「自动交给 DSH」（默认只观察）。
+7. **验收**：桌面 DSH 正在干活时桌宠 UI 显示 working/工具名（读方向）；`dsh.status` 显示私有 runtime 未起；点「交给 DSH」真拿到回答（花一点 token）；`approvalPolicy='ask'` 触发一次审批 → 气泡出现、允许后继续、拒绝则结束；关掉 `dsh.enabled` → 界面显示已关闭且 `dsh.ask` 报中文错误。
 
 ## 9. 测试策略（省 token）
 

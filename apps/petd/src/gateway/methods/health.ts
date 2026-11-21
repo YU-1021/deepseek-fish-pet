@@ -204,6 +204,21 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
             end: Type.String(),
           }),
         }),
+        dsh: Type.Object({
+          enabled: Type.Boolean(),
+          observe: Type.Boolean(),
+          exePath: Type.String(),
+          cliPath: Type.String(),
+          cwd: Type.String(),
+          provider: Type.String(),
+          model: Type.String(),
+          reasoningEffort: Type.String(),
+          maxTokens: Type.Integer(),
+          approvalPolicy: Type.Union([Type.Literal('reject'), Type.Literal('ask')]),
+          askTimeoutMs: Type.Integer(),
+          observeIntervalMs: Type.Integer(),
+          activeMs: Type.Integer(),
+        }),
       }),
     },
     () => {
@@ -234,6 +249,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
         hooks: { ...cfg.hooks, risk: { ...cfg.hooks.risk } },
         presence: { ...cfg.presence, nightQuiet: { ...cfg.presence.nightQuiet } },
+        dsh: { ...cfg.dsh },
       };
     }
   );
