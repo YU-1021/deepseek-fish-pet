@@ -2,7 +2,7 @@
  * 审批经纪人：把一个危险操作变成「问用户是/否」的一次异步等待。
  *
  * 事件（广播给 UI）：
- *   - approval.requested {id,kind,name,ruleId,title,detail,requestedAt,deadlineAt,sessionId?}
+ *   - approval.requested {id,kind,name,ruleId,title,detail,risk?,riskReason?,requestedAt,deadlineAt,sessionId?}
  *   - approval.resolved  {id,accepted,reason,remember}
  *
  * UI 用 approval.list 拉当前待答，用 approval.answer 回答；超时无人答 = 拒绝。
@@ -57,6 +57,8 @@ export class ApprovalBroker {
         title: input.title,
         ...(input.detail === undefined ? {} : { detail: input.detail }),
         ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+        ...(input.risk === undefined ? {} : { risk: input.risk }),
+        ...(input.riskReason === undefined ? {} : { riskReason: input.riskReason }),
         requestedAt,
         deadlineAt,
       });
@@ -85,6 +87,8 @@ export class ApprovalBroker {
         ruleId: e.input.ruleId,
         title: e.input.title,
         ...(e.input.detail === undefined ? {} : { detail: e.input.detail }),
+        ...(e.input.risk === undefined ? {} : { risk: e.input.risk }),
+        ...(e.input.riskReason === undefined ? {} : { riskReason: e.input.riskReason }),
         requestedAt: e.requestedAt,
         deadlineAt: e.deadlineAt,
       }));

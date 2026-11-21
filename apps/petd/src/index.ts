@@ -63,6 +63,7 @@ import { registerCuaMethods } from './gateway/methods/cua.js';
 import { registerRunMethods } from './gateway/methods/run.js';
 import { HookStore } from './hooks/store.js';
 import { ApprovalBroker } from './hooks/approval.js';
+import { RiskAssessor } from './hooks/risk.js';
 import { HooksService } from './hooks/service.js';
 import { registerHooksMethods } from './gateway/methods/hooks.js';
 
@@ -315,17 +316,26 @@ async function main(): Promise<void> {
     publish: (event, data) => publishEvent(event, data),
   });
   hookStore.ensure();
+  const riskAssessor = new RiskAssessor({
+    llm,
+    config: () => config.hooks.risk,
+    logger: (msg, data) => logger.info(msg, data),
+  });
   const hooksService = new HooksService({
     store: hookStore,
     approval: approvalBroker,
     publish: (event, data) => publishEvent(event, data),
     enabled: () => config.hooks.enabled,
+    mode: () => config.hooks.mode,
     approvalEnabled: () => config.hooks.approvalEnabled,
+    risk: riskAssessor,
     logger: (msg, data) => logger.info(msg, data),
   });
   logger.info('审批门已就绪', {
     enabled: config.hooks.enabled,
+    mode: config.hooks.mode,
     approvalEnabled: config.hooks.approvalEnabled,
+    riskEnabled: config.hooks.risk.enabled,
     rules: hookStore.list().length,
   });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
@@ -554,8 +564,10 @@ async function main(): Promise<void> {
     service: hooksService,
     config: () => ({
       enabled: config.hooks.enabled,
+      mode: config.hooks.mode,
       approvalEnabled: config.hooks.approvalEnabled,
       approvalTimeoutMs: config.hooks.approvalTimeoutMs,
+      riskEnabled: config.hooks.risk.enabled && config.hooks.mode === 'smart',
     }),
   });
 

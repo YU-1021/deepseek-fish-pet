@@ -196,10 +196,26 @@ export interface PetdConfig {
   hooks: {
     /** 钩子/审批门总开关：关闭后所有规则不生效（危险动作直接执行） */
     enabled: boolean;
+    /** 审批门模式：rules=只看规则；smart=规则优先 + 模型风险评审（只让人确认高风险） */
+    mode: 'rules' | 'smart';
     /** 审批门开关：关闭后 ask 规则一律按拒绝处理（不弹出询问） */
     approvalEnabled: boolean;
     /** 单个审批最多等多久（毫秒），超时按拒绝 */
     approvalTimeoutMs: number;
+    /** smart 模式下的风险评审参数（模型判断 low/medium/high） */
+    risk: {
+      enabled: boolean;
+      /** 单次评审超时（毫秒） */
+      timeoutMs: number;
+      /** 同一操作的风险结论缓存多久（秒） */
+      cacheTtlSeconds: number;
+      /** 缓存条数上限 */
+      maxCacheEntries: number;
+      /** 传给模型的参数最多截取多少字符 */
+      maxArgsChars: number;
+      /** 模型失败/输出不合法时按哪个等级处理（high = 问人） */
+      fallback: 'low' | 'medium' | 'high';
+    };
   };
 }
 
@@ -311,8 +327,18 @@ export const DEFAULT_CONFIG: PetdConfig = {
   hooks: {
     // 危险动作二次确认默认开：删文件/删会话之类的操作会先问一次
     enabled: true,
+    // smart：规则优先，其余敏感操作让模型评风险；只有高风险才打扰人
+    mode: 'smart',
     approvalEnabled: true,
     approvalTimeoutMs: 60_000,
+    risk: {
+      enabled: true,
+      timeoutMs: 8000,
+      cacheTtlSeconds: 600,
+      maxCacheEntries: 200,
+      maxArgsChars: 1200,
+      fallback: 'high',
+    },
   },
 };
 
@@ -648,6 +674,32 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       const ht = hooksRaw['approvalTimeoutMs'];
       if (typeof ht === 'number' && Number.isInteger(ht) && ht >= 5000 && ht <= 600_000) out.hooks.approvalTimeoutMs = ht;
       else if (ht !== undefined) warnings.push('hooks.approvalTimeoutMs 非法，回默认 60000');
+      const hm = hooksRaw['mode'];
+      if (hm === 'rules' || hm === 'smart') out.hooks.mode = hm;
+      else if (hm !== undefined) warnings.push('hooks.mode 非法，回默认 smart');
+      const riskRaw = hooksRaw['risk'];
+      if (riskRaw !== undefined) {
+        if (isObject(riskRaw)) {
+          const re = riskRaw['enabled'];
+          if (typeof re === 'boolean') out.hooks.risk.enabled = re;
+          else if (re !== undefined) warnings.push('hooks.risk.enabled 非法，回默认 true');
+          const rt = riskRaw['timeoutMs'];
+          if (typeof rt === 'number' && Number.isInteger(rt) && rt >= 1000 && rt <= 60_000) out.hooks.risk.timeoutMs = rt;
+          else if (rt !== undefined) warnings.push('hooks.risk.timeoutMs 非法，回默认 8000');
+          const rc = riskRaw['cacheTtlSeconds'];
+          if (typeof rc === 'number' && Number.isInteger(rc) && rc >= 0 && rc <= 86_400) out.hooks.risk.cacheTtlSeconds = rc;
+          else if (rc !== undefined) warnings.push('hooks.risk.cacheTtlSeconds 非法，回默认 600');
+          const rm = riskRaw['maxCacheEntries'];
+          if (typeof rm === 'number' && Number.isInteger(rm) && rm >= 1 && rm <= 5000) out.hooks.risk.maxCacheEntries = rm;
+          else if (rm !== undefined) warnings.push('hooks.risk.maxCacheEntries 非法，回默认 200');
+          const ra = riskRaw['maxArgsChars'];
+          if (typeof ra === 'number' && Number.isInteger(ra) && ra >= 100 && ra <= 8000) out.hooks.risk.maxArgsChars = ra;
+          else if (ra !== undefined) warnings.push('hooks.risk.maxArgsChars 非法，回默认 1200');
+          const rf = riskRaw['fallback'];
+          if (rf === 'low' || rf === 'medium' || rf === 'high') out.hooks.risk.fallback = rf;
+          else if (rf !== undefined) warnings.push('hooks.risk.fallback 非法，回默认 high');
+        } else warnings.push('hooks.risk 必须是对象，回默认');
+      }
     } else warnings.push('hooks 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;

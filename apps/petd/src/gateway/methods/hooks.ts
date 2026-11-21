@@ -56,7 +56,13 @@ export interface HooksMethodDeps {
   store: HookStore;
   approval: ApprovalBroker;
   service: HooksService;
-  config: () => { enabled: boolean; approvalEnabled: boolean; approvalTimeoutMs: number };
+  config: () => {
+    enabled: boolean;
+    mode: 'rules' | 'smart';
+    approvalEnabled: boolean;
+    approvalTimeoutMs: number;
+    riskEnabled: boolean;
+  };
 }
 
 export function registerHooksMethods(reg: MethodRegistry, deps: HooksMethodDeps): void {
@@ -66,23 +72,27 @@ export function registerHooksMethods(reg: MethodRegistry, deps: HooksMethodDeps)
     {
       name: 'hooks.status',
       scope: 'read',
-      description: '审批门状态：开关/规则数/本次允许数/待答数',
+      description: '审批门状态：开关/模式/规则数/本次允许数/待答数/风险评审状态',
       result: Type.Object({
         enabled: Type.Boolean(),
+        mode: Type.Union([Type.Literal('rules'), Type.Literal('smart')]),
         approvalEnabled: Type.Boolean(),
         approvalTimeoutMs: Type.Integer(),
         ruleCount: Type.Integer(),
         sessionAllowedCount: Type.Integer(),
         pendingCount: Type.Integer(),
+        riskEnabled: Type.Boolean(),
       }),
     },
     () => ({
       enabled: cfg().enabled,
+      mode: cfg().mode,
       approvalEnabled: cfg().approvalEnabled,
       approvalTimeoutMs: cfg().approvalTimeoutMs,
       ruleCount: deps.store.list().length,
       sessionAllowedCount: deps.service.sessionAllowedCount(),
       pendingCount: deps.approval.count(),
+      riskEnabled: cfg().riskEnabled,
     })
   );
 
@@ -191,6 +201,35 @@ export function registerHooksMethods(reg: MethodRegistry, deps: HooksMethodDeps)
 
   reg.register(
     {
+      name: 'hooks.assess',
+      scope: 'read',
+      description: '让模型评估一次操作的风险等级（只评估，不执行；UI 可用来预览）',
+      params: Type.Object({
+        kind: KindSchema,
+        name: Type.String({ minLength: 1, maxLength: 120 }),
+        args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      }),
+      result: Type.Object({
+        level: Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')]),
+        reason: Type.String(),
+        cached: Type.Boolean(),
+        fallback: Type.Boolean(),
+      }),
+      timeoutMs: 30_000,
+    },
+    async (params) => {
+      const p = params as { kind: 'tool' | 'method'; name: string; args?: Record<string, unknown> };
+      const verdict = await deps.service.assess({
+        kind: p.kind,
+        name: p.name,
+        ...(p.args === undefined ? {} : { args: p.args }),
+      });
+      return { level: verdict.level, reason: verdict.reason, cached: verdict.cached, fallback: verdict.fallback };
+    }
+  );
+
+  reg.register(
+    {
       name: 'approval.list',
       scope: 'read',
       description: '当前还在等用户回答的审批请求',
@@ -203,6 +242,8 @@ export function registerHooksMethods(reg: MethodRegistry, deps: HooksMethodDeps)
             ruleId: Type.String(),
             title: Type.String(),
             detail: Type.Optional(Type.String()),
+            risk: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')])),
+            riskReason: Type.Optional(Type.String()),
             requestedAt: Type.Integer(),
             deadlineAt: Type.Integer(),
           })
