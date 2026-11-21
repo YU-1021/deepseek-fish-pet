@@ -192,6 +192,18 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
             fallback: Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high')]),
           }),
         }),
+        presence: Type.Object({
+          enabled: Type.Boolean(),
+          quiet: Type.Boolean(),
+          intervalMinutes: Type.Integer(),
+          idleMinutes: Type.Integer(),
+          maxPerDay: Type.Integer(),
+          nightQuiet: Type.Object({
+            enabled: Type.Boolean(),
+            start: Type.String(),
+            end: Type.String(),
+          }),
+        }),
       }),
     },
     () => {
@@ -221,6 +233,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         plugins: { ...cfg.plugins },
         cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
         hooks: { ...cfg.hooks, risk: { ...cfg.hooks.risk } },
+        presence: { ...cfg.presence, nightQuiet: { ...cfg.presence.nightQuiet } },
       };
     }
   );

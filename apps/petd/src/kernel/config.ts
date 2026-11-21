@@ -217,6 +217,25 @@ export interface PetdConfig {
       fallback: 'low' | 'medium' | 'high';
     };
   };
+  presence: {
+    /** 静默活动总开关（默认开：只在后台广播 presence.activity，不聊天、不朗读） */
+    enabled: boolean;
+    /** 静默：不主动弹消息/不朗读（保留字段，供前端声明式读取） */
+    quiet: boolean;
+    /** 两次静默活动的最小间隔（分钟） */
+    intervalMinutes: number;
+    /** 用户至少闲置多久才活动（分钟；0 = 不检查） */
+    idleMinutes: number;
+    /** 每天最多活动几次（0 = 不限） */
+    maxPerDay: number;
+    /** 夜间安静时段（该时段内不活动） */
+    nightQuiet: {
+      enabled: boolean;
+      /** HH:MM（本地） */
+      start: string;
+      end: string;
+    };
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -338,6 +357,19 @@ export const DEFAULT_CONFIG: PetdConfig = {
       maxCacheEntries: 200,
       maxArgsChars: 1200,
       fallback: 'high',
+    },
+  },
+  presence: {
+    // 静默活动：大部分时间自己安安静静地待着，只发 presence.activity 事件给前端做小动画
+    enabled: true,
+    quiet: true,
+    intervalMinutes: 45,
+    idleMinutes: 10,
+    maxPerDay: 12,
+    nightQuiet: {
+      enabled: true,
+      start: '23:00',
+      end: '07:00',
     },
   },
 };
@@ -701,6 +733,40 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
         } else warnings.push('hooks.risk 必须是对象，回默认');
       }
     } else warnings.push('hooks 段必须是对象，回默认');
+  }
+  const presenceRaw = raw['presence'];
+  if (presenceRaw !== undefined) {
+    if (isObject(presenceRaw)) {
+      const pe = presenceRaw['enabled'];
+      if (typeof pe === 'boolean') out.presence.enabled = pe;
+      else if (pe !== undefined) warnings.push('presence.enabled 非法，回默认 true');
+      const pq = presenceRaw['quiet'];
+      if (typeof pq === 'boolean') out.presence.quiet = pq;
+      else if (pq !== undefined) warnings.push('presence.quiet 非法，回默认 true');
+      const pi = presenceRaw['intervalMinutes'];
+      if (typeof pi === 'number' && Number.isInteger(pi) && pi >= 5 && pi <= 720) out.presence.intervalMinutes = pi;
+      else if (pi !== undefined) warnings.push('presence.intervalMinutes 非法，回默认 45');
+      const pidle = presenceRaw['idleMinutes'];
+      if (typeof pidle === 'number' && Number.isInteger(pidle) && pidle >= 0 && pidle <= 240) out.presence.idleMinutes = pidle;
+      else if (pidle !== undefined) warnings.push('presence.idleMinutes 非法，回默认 10');
+      const pm = presenceRaw['maxPerDay'];
+      if (typeof pm === 'number' && Number.isInteger(pm) && pm >= 0 && pm <= 200) out.presence.maxPerDay = pm;
+      else if (pm !== undefined) warnings.push('presence.maxPerDay 非法，回默认 12');
+      const nqRaw = presenceRaw['nightQuiet'];
+      if (nqRaw !== undefined) {
+        if (isObject(nqRaw)) {
+          const ne = nqRaw['enabled'];
+          if (typeof ne === 'boolean') out.presence.nightQuiet.enabled = ne;
+          else if (ne !== undefined) warnings.push('presence.nightQuiet.enabled 非法，回默认 true');
+          const nst = nqRaw['start'];
+          if (typeof nst === 'string' && /^\d{1,2}:\d{2}$/.test(nst)) out.presence.nightQuiet.start = nst;
+          else if (nst !== undefined) warnings.push('presence.nightQuiet.start 非法，回默认 23:00');
+          const nen = nqRaw['end'];
+          if (typeof nen === 'string' && /^\d{1,2}:\d{2}$/.test(nen)) out.presence.nightQuiet.end = nen;
+          else if (nen !== undefined) warnings.push('presence.nightQuiet.end 非法，回默认 07:00');
+        } else warnings.push('presence.nightQuiet 必须是对象，回默认');
+      }
+    } else warnings.push('presence 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

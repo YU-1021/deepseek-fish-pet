@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 101 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 104 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -335,6 +335,21 @@ petd 已上线**智能审批门**：先过规则网；没命中规则的敏感�
 6. **与 CUA 权限气泡复用**：审批门和 CUA 权限是两套事件、两套回答方法（`approval.answer` vs `cua.answer`），可共用同一个气泡组件，用来源标签区分。
 7. **不要做**：不要把「记住本次」做成全局永久放行（remember 只在当前连接/进程内）；不要自动允许任何 ask/高风险；不要无提示地驳回；不要把 smart 评审做成同步阻塞 UI 的请求（它已经在后端异步完成，UI 只需要展示）。
 8. **验收**：在 UI 里删一条工作区记忆文件 → 弹审批（带 risk 徽标/原因）→ 点「拒绝」→ 看到「你拒绝了这次操作」；再删一次点「允许+记住」→ 成功且同一规则不再弹；把 `hooks.approvalTimeoutMs` 设小 → 不回答时自动拒绝并有提示；用 `hooks.create` 建 deny 规则（如 `cua_type` + argContains `rm -rf /`）→ 被拒并广播 `hooks.blocked`；对一条普通写操作观察 `hooks.assessed`（低/中风险自动放行，不弹窗）。
+
+## 8.14 M13：静默活动（presence）UI 规格（petd 后端已就绪）
+
+桌宠大部分时间是**安静**的：不主动聊天、不自动朗读、不弹消息；后端每隔一段时间（默认 45 分钟）在合适时机（非深夜、用户闲置、今天没活动太多次）挑一个小动作，只广播 `presence.activity` 事件。UI 的职责是**把它演出来，但不要打扰**。
+
+- 方法：`presence.status`（返回 enabled/quiet/intervalMinutes/idleMinutes/maxPerDay/nightQuiet/countToday/lastAt/nextAt）、`presence.list {limit?}`（新→旧活动记录）、`presence.run_once`（手动来一次，设置页调试用）。
+- 事件：`presence.activity {id, kind: 'groom'|'stretch'|'window'|'nap'|'tidy'|'idle', label: 中文（整理羽毛/伸懒腰/看窗外/打盹/归置东西/发呆）, at, quiet: true}`。
+- `config.get` 的 `presence` 段：enabled/quiet/intervalMinutes/idleMinutes/maxPerDay/nightQuiet。
+
+1. **只做小动画（必做）**：收到 `presence.activity` 时，根据 `kind` 播一段轻量动作/表情（或换一张立绘帧），**不弹气泡、不发声、不放到聊天记录**；`quiet=true` 时尤其只允许动画。
+2. **状态与设置**：设置页「静默活动」分组展示 `presence.status`：开关、间隔、闲置门槛、每日上限、夜间时段；`presence.run_once` 做成「现在来一个」调试按钮。
+3. **不打断当前交互**：用户正在聊天/拖拽立绘时不演动作（可以推迟到下一次事件）；夜间安静时段由后端保证不发事件，UI 不需要自己判断。
+4. **与情绪/时间联动（可选）**：如果同时订阅了 `mood.changed`，可以据此挑语气/动作幅度；但不要为了动画去轮询后端。
+5. **不要做**：不要在静默活动时让模型说话/调 `chat.send`；不要每秒轮询 `presence.status`；不要把活动记录塞进聊天历史。
+6. **验收**：开界面等一次 `presence.activity`（或点「现在来一个」）→ 立绘只播小动作、无气泡无声音、聊天记录不变；把 `presence.intervalMinutes` 调小观察频率；把 `presence.enabled` 关掉后不再有事件。
 
 ## 9. 测试策略（省 token）
 

@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型）。
 
 ## 现在有什么
 
@@ -26,12 +26,13 @@
     - 感知与输入（CUA）：`cua.status` / `cua.screenshot` / `cua.zoom` / `cua.windows` / `cua.focus` / `cua.click` / `cua.move` / `cua.drag` / `cua.mouse_down` / `cua.mouse_up` / `cua.scroll` / `cua.type` / `cua.key` / `cua.wait` / `cua.answer`（照 Coo 形状：GDI 截屏 + 窗口/前台 + SendInput 操作；带权限门、用户让位、终端保护、只读开关；聊天里对应 13 个工具）
     - 运行控制：`run.status` / `run.pause` / `run.resume`（暂停后聊天、自动化、电脑操作都会被挡住；恢复后继续）
     - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` / `hooks.assess`（预览一次操作的风险等级）+ `approval.list` / `approval.answer`（危险动作先问；默认 smart 模式：规则优先，其余敏感操作让模型评 low/medium/high，低/中自动放行、高风险才问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆/键鼠工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.assessed` / `hooks.blocked` / `hooks.changed`）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+  - 静默活动：`presence.status` / `presence.list` / `presence.run_once`（大部分时间自己安静待着；按间隔/夜间安静/用户闲置/每日上限挑小动作，只发 `presence.activity` 事件，不聊天不朗读）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks 十三段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks/presence 十四段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -42,6 +43,7 @@
 9. 技能与插件：`home/skills/` 不存在时创建；`home/plugins/` 下的每个插件目录读 `plugin.json`（缺字段/坏清单跳过并记 warn），启停状态存 `home/state/plugins.json`（默认启用）
 10. 电脑操作（CUA）：只检查平台与显示器，不截屏、不申请权限；`config.cua.enabled=false`（默认）时聊天里没有 CUA 工具，只有 `cua.status` 之类能看
 11. 审批门：`home/state/hooks.json` 不存在时播种 9 条内置 ask 规则（删记忆/删会话/删文件/移文件/关插件/删自动化/移动文件等）；用户规则与停用状态从这里读，坏文件按内置规则启动且不覆盖原文件
+12. 静默活动：`home/state/presence.json` 记录最近活动与今日计数；不存在就空启动，第一次活动时写入（默认每 45 分钟最多一次、夜间 23:00–07:00 安静、用户闲置 10 分钟才动）
 12. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
@@ -147,6 +149,14 @@
       "maxArgsChars": 1200,
       "fallback": "high"
     }
+  },
+  "presence": {
+    "enabled": true,
+    "quiet": true,
+    "intervalMinutes": 45,
+    "idleMinutes": 10,
+    "maxPerDay": 12,
+    "nightQuiet": { "enabled": true, "start": "23:00", "end": "07:00" }
   }
 }
 ```
@@ -213,6 +223,12 @@
 - `hooks.approvalEnabled`：是否允许「问用户」这一档（默认 true；关掉后命中 ask 或高风险的动作直接拒绝并说明审批门已关闭）。
 - `hooks.approvalTimeoutMs`：等待用户确认的超时（5000–600000，默认 60000）；超时按拒绝处理，动作不会执行。
 - `hooks.risk.enabled`：smart 模式下是否启用模型风险评审（默认 true）；`timeoutMs` 单次评审超时、`cacheTtlSeconds` 同一操作结论缓存秒数、`maxCacheEntries` 缓存条数、`maxArgsChars` 传给模型的参数截断长度、`fallback` 模型失败/输出不合法时按哪档处理（默认 high = 问人）。
+- `presence.enabled`：静默活动总开关（默认 true）。它只做安静的小动作并发 `presence.activity` 事件，不会聊天/朗读/调模型。
+- `presence.quiet`：静默标记（默认 true），前端可据此决定只用小动画、不弹消息。
+- `presence.intervalMinutes`：两次活动的最小间隔（默认 45 分钟）。
+- `presence.idleMinutes`：你至少闲置多久它才来一下（默认 10 分钟；CUA 关闭时拿不到闲置时长就按时活动）。
+- `presence.maxPerDay`：每天最多几次（默认 12；0 = 不限）。
+- `presence.nightQuiet`：夜间安静时段（默认 23:00–07:00 不活动）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 按小节改）
@@ -384,6 +400,17 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 - **超时**：`hooks.approvalTimeoutMs` 内没人答按拒绝处理（`reason: 'timeout'`），动作不执行。
 - **确认方式**：`node apps/petd/scripts/hooks-smoke.mjs`（`mode:'rules'`，不花 token：内置 ask 拒绝/允许/记住、超时、自定义 deny 规则、toggle 放行、删除规则、优雅退出；smart 分支由单测覆盖）。
 
+## 静默活动（presence）
+
+桌宠大部分时间是**安静**的：它不主动找你聊天、不自动朗读、不弹消息；只有到了合适的时机（隔了足够久、你在忙自己的事、不是深夜、今天还没活动太多次），才悄悄做个小动作——整理羽毛、伸懒腰、看窗外、打盹、归置东西、发呆——然后**只广播一个 `presence.activity` 事件**给前端做小动画。
+
+- **不会打扰你**：不写聊天、不朗读、不调模型（零 token）；`quiet` 字段告诉前端「这次只用小动画」。
+- **什么时候动**：默认每 45 分钟最多一次；你至少闲置 10 分钟（CUA 开启时用 `cua.status().idleMs` 判断）；23:00–07:00 完全安静；每天最多 12 次。任何一条不满足就跳过，等下一次检查（每 60 秒看一次）。
+- **记录**：`home/state/presence.json` 存最近 200 条活动与「今天几次」；重启后接着算，编号不重来。
+- **事件**：`presence.activity {id, kind: 'groom'|'stretch'|'window'|'nap'|'tidy'|'idle', label, at, quiet}`。
+- **方法**：`presence.status`（开关/间隔/闲置门槛/每日上限/夜间段/nextAt/今天次数/最后一条）、`presence.list {limit?}`（新→旧）、`presence.run_once`（手动来一次，忽略间隔/夜间/闲置，仍受开关与每日上限限制）。
+- **确认方式**：`node apps/petd/scripts/presence-smoke.mjs`（不花 token：状态、手动活动、事件、列表、落盘、重启后编号与计数、优雅退出）。
+
 ## 跑起来
 
 ```bat
@@ -437,6 +464,9 @@ node apps/petd/scripts/cua-smoke.mjs
 
 :: 冒烟：审批门（不花 token；内置 ask 拒绝/允许/记住、超时、自定义 deny、toggle、删除规则）
 node apps/petd/scripts/hooks-smoke.mjs
+
+:: 冒烟：静默活动（不花 token；活动事件、列表、落盘、重启续号）
+node apps/petd/scripts/presence-smoke.mjs
 ```
 
 READY 行示例：
@@ -465,7 +495,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 291/291（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 303/303（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -481,6 +511,7 @@ cd apps/petd && node scripts/automation-smoke.mjs --home D:\x  :: 自动化端�
 cd apps/petd && node scripts/skills-plugins-smoke.mjs --home D:\x :: 技能/插件端到端（不花 token；技能 CRUD/插件技能只读/启停持久/重启保留；37 项）
 cd apps/petd && node scripts/cua-smoke.mjs --home D:\x        :: 感知/输入端到端（真截屏/真窗口/权限拒绝/暂停/只读；不移动真实鼠标键盘；34 项）
 cd apps/petd && node scripts/hooks-smoke.mjs --home D:\x      :: 审批门端到端（rules 模式不花 token；内置 ask 允许/拒绝/记住/超时、自定义 deny、toggle、删除；33 项）
+cd apps/petd && node scripts/presence-smoke.mjs --home D:\x   :: 静默活动端到端（不花 token；活动事件/列表/落盘/重启续号；29 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -510,6 +541,7 @@ ASR 冒烟覆盖（43 项，本机 SAPI 合成 + whisper.cpp 真识别，不花 
 CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）：`config.get` 的 cua 段、`cua.status`（引擎 win32/显示器/前台）、`cua.screenshot`（800×450、scale 换算、JPEG base64 真能解码）、`cua.windows` 能列出可见窗口（标题/进程）、`cua.permission` 事件 → `cua.answer` 拒绝 → 点击返回 `E_FORBIDDEN`、未知权限 id 返 `found=false`、`run.pause` 后截图/聊天被挡且 `run.paused` 事件、`run.resume` 恢复、只读模式（`control=false`）能看不能动、两次优雅退出。
 
 审批门冒烟覆盖（33 项，`mode:'rules'` 不花 token）：`config.get` 的 hooks 段（enabled/mode/approvalEnabled/approvalTimeoutMs）、`hooks.status` 含 mode、`hooks.list` 内置 9 条规则、删除文件前真的弹 `approval.requested`（kind/name/ruleId/id 正确）、`approval.answer` 拒绝 → `E_FORBIDDEN`「你拒绝了这次操作」、允许后删除成功、`remember=true` 后同连接不再问、不回答 → 超时自动拒绝（`approval.resolved.reason=timeout`）、自定义 deny 规则生效并广播 `hooks.blocked`、`toggle` 关闭后落到内置 ask、`hooks.delete` 删除规则、`hooks.changed` 广播、优雅退出。smart 模式（模型风险评审 low/medium 放行、high 弹审批、fallback、缓存、规则优先）由 `hooks/risk.test.ts` 与 `hooks/smart.test.ts` 覆盖。
+静默活动冒烟覆盖（29 项，不花 token）：`config.get` 的 presence 段、`presence.status` 初始、`presence.run_once` 返回活动 id/合法 kind/中文 label、`presence.activity` 事件（`quiet=true`）、`presence.list` 新→旧、今日计数、聊天记录不受影响（不会出现 `chat.assistant_message`）、`state/presence.json` 落盘（version/entries）、优雅退出、重启后累积计数且编号续上（p-0003）、两次退出干净。
 
 ## 刻意没做（等需求逐个说）
 
