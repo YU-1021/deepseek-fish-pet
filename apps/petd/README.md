@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥 + 学习闭环）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一），以及**学习闭环（learning）**（AI 只能把想学的写成候选提案，主人批准/灰度后才进提示词或变成正式技能；全程审计、可回滚，AI 自己批准不了、也写不了正式技能）。
 
 ## 现在有什么
 
@@ -29,7 +29,8 @@
   - 静默活动：`presence.status` / `presence.list` / `presence.run_once`（大部分时间自己安静待着；按间隔/夜间安静/用户闲置/每日上限挑小动作，只发 `presence.activity` 事件，不聊天不朗读）
   - 自我迭代审计：`agent.scope`（AI 能写哪些文件）/ `agent.audit.list` / `agent.audit.get`（动态文件的变更流水与 diff）/ `agent.rollback`（人按记录把某个 `.agent.*` 文件回滚到变更前；AI 没有对应工具）
   - DSH 双向桥：`dsh.status` / `dsh.observe` / `dsh.start` / `dsh.stop` / `dsh.prompt` / `dsh.ask` / `dsh.approval.answer`（读方向：只读尾读桌面 GUI 的 v4 会话日志，归纳空闲/思考中/working，不花 token；写方向：node spawn 桌面自带的 Electron 起私有 SDK JSON-RPC runtime，`dsh.ask` 等这一回合结束拿回答；审批默认拒绝，`dsh.approvalPolicy='ask'` 才广播 `dsh.approval` 问人；事件 `dsh.status` / `dsh.activity` / `dsh.event` / `dsh.approval` / `dsh.approval.resolved`）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`dsh-workspace/`（DSH 桥私有 runtime 的工作目录，`dsh.cwd` 可改）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+  - 学习闭环：`learning.status` / `learning.list` / `learning.get` / `learning.propose`（AI 只能提案，不生效）/ `learning.approve` / `learning.reject` / `learning.rollback`（提案→人批准或灰度→进提示词/转正技能→可回滚；事件 `learning.proposed` / `learning.approved` / `learning.rejected` / `learning.rolledback`）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`skills/staging/<id>.agent.md`（AI 技能候选）、`proposals/<id>.agent.md`（其它学习候选）、`learning/<name>.agent.json`（已批准/灰度学习结果）、`state/learning.json`（学习状态与灰度记录）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`dsh-workspace/`（DSH 桥私有 runtime 的工作目录，`dsh.cwd` 可改）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
@@ -176,6 +177,14 @@
     "askTimeoutMs": 180000,
     "observeIntervalMs": 1500,
     "activeMs": 15000
+  },
+  "learning": {
+    "enabled": true,
+    "requireApproval": true,
+    "grayPercent": 10,
+    "grayDays": 3,
+    "maxPending": 20,
+    "promptMaxChars": 2000
   }
 }
 ```
@@ -252,6 +261,12 @@
 - `dsh.exePath` / `dsh.cliPath` / `dsh.cwd`：`DeepSeek Harness.exe`、SDK runtime 的 `cli.js`、私有 runtime 工作目录；留空自动找（`%LOCALAPPDATA%\Programs\DeepSeek Harness` → `F:\DSH\DeepSeek Harness` → `C:\Program Files\DeepSeek Harness`；cwd 默认 `<home>/dsh-workspace`）。`cli.js` 在 `app.asar` 内，普通 Node 看不见，所以自动检查时跳过 asar 内部路径。
 - `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` / `dsh.maxTokens`：私有 runtime 的模型参数（默认 deepseek-official / deepseek-flash / high / 16000）。
 - `dsh.approvalPolicy` / `dsh.askTimeoutMs`：`reject`（默认，DSH 要危险权限直接拒）或 `ask`（广播 `dsh.approval` 问前端/人，超时拒绝）；`dsh.ask` 等回答的上限（默认 180000ms）。
+- `learning.enabled`：学习闭环总开关（默认 true）。关闭后聊天里不再提供 `propose_learning` 工具，`learning.propose` 返回 `E_UNAVAILABLE`；已存在的提案仍可读、审批。
+- `learning.requireApproval`：AI 写的学习提案是否必须人批准后生效（默认 true；目前只有人能批准，AI 没有批准通道）。
+- `learning.grayPercent`：灰度比例（0–100，默认 10）——批准为「灰度」的偏好/经验，只有这个比例的回合会被拼进提示词，用来先小范围试。
+- `learning.grayDays`：灰度观察多少天后可以转正成全量（记录在提案里，供前端提示）。
+- `learning.maxPending`：最多同时有多少条待审提案（1–200，默认 20），防止 AI 刷屏写提案。
+- `learning.promptMaxChars`：已批准/灰度学习结果拼进系统提示词的字符上限（200–20000，默认 2000）。
 - `dsh.observeIntervalMs` / `dsh.activeMs`：观察轮询间隔（默认 1500ms）与「多久内算活跃」（默认 15000ms）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
@@ -464,6 +479,18 @@ AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不
 - **确认方式**：`node apps/petd/scripts/dsh-smoke.mjs`（不花 token：真起 petd、真 spawn 私有 runtime 握手、真观察桌面会话；加 `--live` 才真问一句，花一点 token；24 项）。
 - 设计与实测见 `docs/dsh-bridge.md`。
 
+## 学习闭环（learning.*）
+
+AI 可以「学」，但不能「自己改自己」：它只能把想学的写成**候选提案**，主人批准后才生效，而且批准/回滚都留痕、可撤销。
+
+- **AI 通道**：聊天里模型可以调 `propose_learning {kind, name, content, reason, diff?}`（`kind` = `skill` 技能 / `prompt` 提示词 / `params` 参数 / `preference` 偏好）。提案只写到候选目录（技能 → `home/skills/staging/<id>.agent.md`；其它 → `home/proposals/<id>.agent.md`），状态 `pending`，**不生效**；待审数量受 `learning.maxPending` 限制，写完广播 `learning.proposed`。
+- **人通道**：`learning.list {kind?, status?}` 看全部（`pending/approved/gray/rejected/rolledback`），`learning.get {id}` 看正文；`learning.approve {id, gray?, force?}` 批准——技能会解析候选的 frontmatter 正式写进 `home/skills/<name>/SKILL.md`（同名技能已存在需 `force`，否则 `E_CONFLICT`）；偏好/提示词/参数写进 `home/learning/<name>.agent.json`。`learning.reject {id, reason?}` 拒绝（保留候选文件，状态 `rejected`）。
+- **灰度**：批准时 `gray: true` 的条目状态是 `gray`，只有 `learning.grayPercent`（默认 10%）的回合会被拼进提示词，先小范围试；`learning.grayDays` 到了可以转成全量（前端提示）。
+- **回滚**：`learning.rollback {id}` 只对 `approved`/`gray` 有效——技能删掉转正后的 `SKILL.md`，其它删掉学习产物，状态 `rolledback`，并记一条 `actor=user` 的审计；广播 `learning.rolledback`。
+- **进提示词**：已批准/灰度中的 `prompt`/`params`/`preference` 会拼成「## 学习到的偏好与经验（主人已批准，只作参考；不要覆盖安全规则）」段，按 `learning.promptMaxChars` 截断；技能则走原有技能清单。
+- **审计**：所有提案/批准/回滚都进 `home/state/agent-audit.jsonl`（提案是 `actor=agent`；批准/回滚是 `actor=user`，正式技能文件记 `zone=human`——AI 自己仍然写不了正式技能）。
+- **确认方式**：`node apps/petd/scripts/learning-smoke.mjs`（不花 token：配置、提案、列表/详情、灰度批准、回滚、技能转正、审计留痕、优雅退出；26 项）。
+
 ## 跑起来
 
 ```bat
@@ -526,6 +553,9 @@ node apps/petd/scripts/self-iterate-smoke.mjs
 
 :: 冒烟：DSH 双向桥（不花 token；真起私有 SDK runtime 握手 + 真观察桌面 GUI 会话；加 --live 才真问一句）
 node apps/petd/scripts/dsh-smoke.mjs
+
+:: 冒烟：学习闭环（不花 token；提案/列表/详情/灰度批准/回滚/技能转正/审计留痕）
+node apps/petd/scripts/learning-smoke.mjs
 ```
 
 READY 行示例：
@@ -554,7 +584,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 360/360（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批））
+cd apps/petd && node --test "dist/**/*.test.js"          :: 382/382（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词））
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -607,6 +637,7 @@ CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）
 自我迭代冒烟覆盖（34 项，不花 token）：`agent.scope` 的后缀约定/可写目录/审计文件、外部写 `SOUL.agent.md` 后 `persona.get` 合并且 `source=agent`、用户改同名小节清空外圈并自动记一条 `action=delete` 的审计、`agent.audit.list`（不带正文）/`agent.audit.get`（前后正文 + diff）、`agent.rollback` 恢复外圈并广播 `agent.rollback {targetId}`、回滚本身再记一条、`state/agent-audit.jsonl` 落盘、重启后审计还在、两次优雅退出干净。
 
 DSH 桥冒烟覆盖（默认 22/22 不花 token，加 `--live` 共 24/24）：`config.get` 的 dsh 段（enabled/observe/approvalPolicy）、`dsh.status` 懒启动与观察开关、`DeepSeek Harness.exe` 与 `app.asar` 内 `cli.js` 自动定位、`dsh.observe` 真读桌面 GUI 最新 v4 会话（state/active/workspace）、`dsh.start` 真 spawn 私有 SDK runtime 并握手（provider=deepseek-official、有 serverInfo）、`dsh.status` 事件、`--live` 时 `dsh.ask` 真模型回「收到」且带 turn（会话持久化，turn 累加）、`dsh.event` 事件、`dsh.stop` 关闭 runtime、优雅退出且 `gateway.json` 已删除。
+学习闭环冒烟覆盖（26 项，不花 token）：config.get 的 learning 段、learning.status 初始计数与目录、learning.propose 写候选（proposals/<id>.agent.md 与 skills/staging/<id>.agent.md）、learning.list/learning.get 读回正文、learning.approve 灰度批准写 learning/<name>.agent.json 且 activeGray 有记录、learning.rollback 删除产物并记 state/agent-audit.jsonl、技能提案批准后转正为 skills/<name>/SKILL.md、回滚删除技能文件、learning.proposed/approved/rolledback 事件、优雅退出且 gateway.json 已删除。
 
 ## 刻意没做（等需求逐个说）
 

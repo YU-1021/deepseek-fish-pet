@@ -192,6 +192,17 @@ export interface PetdConfig {
     typeChunkDelayMs: number;
     /** 截图是否作为图片发给模型（模型支持看图才开；默认只给文字描述） */
     includeImages: boolean;
+    /**
+     * 自我保护（INV-8）：前台是桌宠自己/编辑器窗口，或要输入的文字里带
+     * 配置/密钥/自我迭代目录名时，强制再问一次；拒绝就不执行。
+     */
+    selfProtect: {
+      enabled: boolean;
+      /** 窗口标题或进程名里命中这些词，就当作「自己的窗口」 */
+      hints: string[];
+      /** 前台是这些进程时也当作「自己的窗口」（默认只有 Electron，即 pet-ui） */
+      apps: string[];
+    };
   };
   hooks: {
     /** 钩子/审批门总开关：关闭后所有规则不生效（危险动作直接执行） */
@@ -263,6 +274,20 @@ export interface PetdConfig {
     observeIntervalMs: number;
     /** 会话日志多久没更新算不活跃（毫秒） */
     activeMs: number;
+  };
+  learning: {
+    /** 学习/提案总开关（关闭后连 AI 写候选都拒绝） */
+    enabled: boolean;
+    /** 是否必须人工批准（true = 所有提案都等主人点批准；默认 true） */
+    requireApproval: boolean;
+    /** 灰度百分比（0–100）：批准为灰度时，只有这么多比例的轮次会带上这条学习结果 */
+    grayPercent: number;
+    /** 灰度观察天数（到期后可一键回滚；观察期内一直带） */
+    grayDays: number;
+    /** 待审提案上限（防止刷爆） */
+    maxPending: number;
+    /** 拼进系统提示词的学习结果最多多少字 */
+    promptMaxChars: number;
   };
 }
 
@@ -370,6 +395,11 @@ export const DEFAULT_CONFIG: PetdConfig = {
     maxYieldWaitMs: 15_000,
     typeChunkDelayMs: 20,
     includeImages: false,
+    selfProtect: {
+      enabled: true,
+      hints: ['petd', 'pet-ui', '大肥鱼', '桌宠', 'deepseek harness'],
+      apps: ['electron.exe'],
+    },
   },
   hooks: {
     // 危险动作二次确认默认开：删文件/删会话之类的操作会先问一次
@@ -415,6 +445,15 @@ export const DEFAULT_CONFIG: PetdConfig = {
     askTimeoutMs: 180_000,
     observeIntervalMs: 1500,
     activeMs: 15_000,
+  },
+  learning: {
+    // 学习闭环：AI 只能写候选（proposals / skills/staging / learning），批准与转正由主人来
+    enabled: true,
+    requireApproval: true,
+    grayPercent: 10,
+    grayDays: 3,
+    maxPending: 20,
+    promptMaxChars: 2000,
   },
 };
 
@@ -736,6 +775,26 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       const ii = cuaRaw['includeImages'];
       if (typeof ii === 'boolean') out.cua.includeImages = ii;
       else if (ii !== undefined) warnings.push('cua.includeImages 非法，回默认 false');
+      const spRaw = cuaRaw['selfProtect'];
+      if (spRaw !== undefined) {
+        if (isObject(spRaw)) {
+          const spEnabled = spRaw['enabled'];
+          if (typeof spEnabled === 'boolean') out.cua.selfProtect.enabled = spEnabled;
+          else if (spEnabled !== undefined) warnings.push('cua.selfProtect.enabled 非法，回默认 true');
+          const spHints = spRaw['hints'];
+          if (Array.isArray(spHints)) {
+            out.cua.selfProtect.hints = spHints
+              .filter((h): h is string => typeof h === 'string' && h.trim().length > 0 && h.length <= 80)
+              .map((h) => h.trim());
+          } else if (spHints !== undefined) warnings.push('cua.selfProtect.hints 非法，回默认');
+          const spApps = spRaw['apps'];
+          if (Array.isArray(spApps)) {
+            out.cua.selfProtect.apps = spApps
+              .filter((a): a is string => typeof a === 'string' && a.trim().length > 0 && a.length <= 120)
+              .map((a) => a.trim().toLowerCase());
+          } else if (spApps !== undefined) warnings.push('cua.selfProtect.apps 非法，回默认');
+        } else warnings.push('cua.selfProtect 非法，回默认');
+      }
     } else warnings.push('cua 段必须是对象，回默认');
   }
   const hooksRaw = raw['hooks'];
@@ -855,6 +914,29 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof am === 'number' && Number.isInteger(am) && am >= 1000 && am <= 300_000) out.dsh.activeMs = am;
       else if (am !== undefined) warnings.push('dsh.activeMs 非法，回默认 15000');
     } else warnings.push('dsh 段必须是对象，回默认');
+  }
+  const learningRaw = raw['learning'];
+  if (learningRaw !== undefined) {
+    if (isObject(learningRaw)) {
+      const le = learningRaw['enabled'];
+      if (typeof le === 'boolean') out.learning.enabled = le;
+      else if (le !== undefined) warnings.push('learning.enabled 非法，回默认 true');
+      const lr = learningRaw['requireApproval'];
+      if (typeof lr === 'boolean') out.learning.requireApproval = lr;
+      else if (lr !== undefined) warnings.push('learning.requireApproval 非法，回默认 true');
+      const gp = learningRaw['grayPercent'];
+      if (typeof gp === 'number' && Number.isInteger(gp) && gp >= 0 && gp <= 100) out.learning.grayPercent = gp;
+      else if (gp !== undefined) warnings.push('learning.grayPercent 非法，回默认 10');
+      const gd = learningRaw['grayDays'];
+      if (typeof gd === 'number' && Number.isInteger(gd) && gd >= 0 && gd <= 90) out.learning.grayDays = gd;
+      else if (gd !== undefined) warnings.push('learning.grayDays 非法，回默认 3');
+      const mp = learningRaw['maxPending'];
+      if (typeof mp === 'number' && Number.isInteger(mp) && mp >= 1 && mp <= 500) out.learning.maxPending = mp;
+      else if (mp !== undefined) warnings.push('learning.maxPending 非法，回默认 20');
+      const pm = learningRaw['promptMaxChars'];
+      if (typeof pm === 'number' && Number.isInteger(pm) && pm >= 0 && pm <= 20_000) out.learning.promptMaxChars = pm;
+      else if (pm !== undefined) warnings.push('learning.promptMaxChars 非法，回默认 2000');
+    } else warnings.push('learning 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };

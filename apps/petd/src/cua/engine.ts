@@ -92,6 +92,9 @@ const TERMINAL_APPS = new Set([
 
 const TERMINAL_HINT = '当前前台是终端（命令窗口），在终端里执行操作风险更高。';
 
+/** 输入内容里出现这些词，说明可能是在改我自己的配置/密钥/自我迭代文件（INV-8）。 */
+const SELF_SENSITIVE_TOKENS = ['secrets.json', 'token.json', 'config.json', 'soul.md', '.agent.', 'agent-audit', 'dayu-pet', '.dsh'];
+
 export interface CuaInputResult {
   ok: boolean;
   text: string;
@@ -272,6 +275,7 @@ export class CuaEngine {
     const button = opts.button ?? 'left';
     const clicks = Math.max(1, Math.min(3, Math.round(opts.clicks ?? 1)));
     await this.permit('act', `点击屏幕 (${opts.x}, ${opts.y})（${button} 键）`, opts.signal);
+    await this.guardSensitive(opts.signal, {});
     const at = this.toScreen(opts.x, opts.y);
     const yieldResult = await this.waitForIdle(opts.signal);
     if (yieldResult.yielded) return this.yieldedResult(yieldResult);
@@ -285,6 +289,7 @@ export class CuaEngine {
     this.assertActive();
     this.assertControl();
     await this.permit('act', `把东西从 (${opts.from.x}, ${opts.from.y}) 拖到 (${opts.to.x}, ${opts.to.y})`, opts.signal);
+    await this.guardSensitive(opts.signal, {});
     const a = this.toScreen(opts.from.x, opts.from.y);
     const b = this.toScreen(opts.to.x, opts.to.y);
     const yieldResult = await this.waitForIdle(opts.signal);
@@ -309,6 +314,7 @@ export class CuaEngine {
     this.assertControl();
     const button = opts.button ?? 'left';
     await this.permit('act', `按住的鼠标${button === 'left' ? '左' : button === 'right' ? '右' : '中'}键`, opts.signal);
+    await this.guardSensitive(opts.signal, {});
     let x: number;
     let y: number;
     if (opts.x !== undefined && opts.y !== undefined) {
@@ -346,6 +352,7 @@ export class CuaEngine {
     const right = Math.max(-30, Math.min(30, Math.round(opts.right ?? 0)));
     if (down === 0 && right === 0) throw new CuaError('E_BAD_PARAMS', 'down 和 right 不能都是 0');
     await this.permit('act', `在 (${opts.x}, ${opts.y}) 滚动`, opts.signal);
+    await this.guardSensitive(opts.signal, {});
     const at = this.toScreen(opts.x, opts.y);
     const yieldResult = await this.waitForIdle(opts.signal);
     if (yieldResult.yielded) return this.yieldedResult(yieldResult);
@@ -361,7 +368,7 @@ export class CuaEngine {
     const text = String(opts.text ?? '');
     if (!text) throw new CuaError('E_BAD_PARAMS', 'text 不能为空');
     await this.permit('act', '在光标处输入文字', opts.signal);
-    await this.guardTerminal(opts.signal, { text });
+    await this.guardSensitive(opts.signal, { text });
     const yieldResult = await this.waitForIdle(opts.signal);
     if (yieldResult.yielded) return this.yieldedResult(yieldResult);
     let typed = 0;
@@ -392,7 +399,7 @@ export class CuaEngine {
       chordList = parseChords(keys).chords;
     }
     await this.permit('act', `按 ${keys}`, opts.signal);
-    await this.guardTerminal(opts.signal, { chords: holdVk ? [[holdVk]] : chordList });
+    await this.guardSensitive(opts.signal, { chords: holdVk ? [[holdVk]] : chordList });
     const yieldResult = await this.waitForIdle(opts.signal);
     if (yieldResult.yielded) return this.yieldedResult(yieldResult);
     if (holdVk !== null) {
@@ -433,6 +440,7 @@ export class CuaEngine {
     this.assertActive();
     this.assertControl();
     await this.permit('act', `把窗口切到前台：${opts.window}`, opts.signal);
+    await this.guardSensitive(opts.signal, { windowTitle: opts.window });
     const wanted = String(opts.window ?? '').trim().toLowerCase();
     if (!wanted) throw new CuaError('E_BAD_PARAMS', 'window 不能为空');
     const entries = this.driver.windows();
@@ -475,22 +483,63 @@ export class CuaEngine {
     }
   }
 
-  /** 终端保护：终端窗口/运行框里的输入，按档位单独问一次。 */
-  private async guardTerminal(signal: AbortSignal | undefined, ctx: { text?: string; chords?: number[][] }): Promise<void> {
-    if (this.options.config.skipTerminalAsk) return;
+  /**
+   * 敏感保护（INV-8 + 终端保护）：命中就强制再问一次，拒绝就不执行。
+   * - 自我保护：前台是自己的窗口（petd/pet-ui/编辑器），或输入的文字带配置/密钥/自我迭代目录名；
+   * - 终端保护：前台是终端（命令窗口）或要按 Win+R，按档位额外问一次。
+   * 自我保护不缓存授权（每次都要问）；终端保护沿用 grantMinutes 缓存。
+   */
+  private async guardSensitive(
+    signal: AbortSignal | undefined,
+    ctx: { text?: string; chords?: number[][]; windowTitle?: string },
+  ): Promise<void> {
+    const cfg = this.options.config;
     const displays = this.driver.listDisplays();
     const fg = this.driver.foreground(displays);
-    const terminal = TERMINAL_APPS.has(fg.app);
-    const runBox = Boolean(ctx.chords?.some((chord) => chord.length === 2 && chord.includes(0x5b) && chord.includes(0x52)));
-    if (!terminal && !runBox) return;
-    if (this.terminalGrantedUntil > this.now()) return;
+    const reasons: string[] = [];
+    const selfCfg = cfg.selfProtect;
+    let selfHit = false;
+    if (selfCfg.enabled) {
+      const haystack = `${fg.title} ${fg.app}`.toLowerCase();
+      const appHit = selfCfg.apps.some((app) => fg.app.toLowerCase() === app.toLowerCase());
+      const hintHit = selfCfg.hints.some((hint) => haystack.includes(hint.toLowerCase()));
+      if (appHit || hintHit) {
+        selfHit = true;
+        reasons.push(`前台窗口「${fg.title}」(${fg.app}) 看着是我自己的界面（petd/pet-ui/编辑器）。`);
+      }
+      if (ctx.windowTitle && selfCfg.hints.some((hint) => String(ctx.windowTitle).toLowerCase().includes(hint.toLowerCase()))) {
+        selfHit = true;
+        reasons.push(`要切换的窗口「${ctx.windowTitle}」看着是我自己的窗口。`);
+      }
+      const text = typeof ctx.text === 'string' ? ctx.text.toLowerCase() : '';
+      if (text) {
+        const token = SELF_SENSITIVE_TOKENS.find((t) => text.includes(t));
+        if (token) {
+          selfHit = true;
+          reasons.push(`要输入的文字里包含「${token}」，可能是在改我自己的配置/密钥/自我迭代文件。`);
+        }
+      }
+    }
+    let terminalHit = false;
+    if (!cfg.skipTerminalAsk) {
+      terminalHit = TERMINAL_APPS.has(fg.app);
+      const runBox = Boolean(ctx.chords?.some((chord) => chord.length === 2 && chord.includes(0x5b) && chord.includes(0x52)));
+      if (terminalHit) reasons.push(TERMINAL_HINT);
+      if (runBox) reasons.push('目标键里有 Win+R 运行框组合键，风险更高。');
+      terminalHit = terminalHit || runBox;
+    }
+    if (!terminalHit && !selfHit) return;
+    // 终端授权的旧缓存只在「不是自我保护」时生效
+    if (terminalHit && !selfHit && this.terminalGrantedUntil > this.now()) return;
     const ask = this.options.ask;
-    if (!ask) throw new CuaError('E_FORBIDDEN', '当前在终端里操作，需要授权但没有可用的界面');
-    const detail = ctx.text !== undefined ? `要输入的文字：「${ctx.text.slice(0, 120)}」` : '要按的键';
-    const accepted = await ask('act', `${TERMINAL_HINT}\n前台窗口：「${fg.title}」(${fg.app})\n${detail}\n允许吗？`);
+    if (!ask) throw new CuaError('E_FORBIDDEN', '这次操作需要确认，但没有可用的界面，已拒绝');
+    const detail = ctx.text !== undefined ? `要输入的文字：「${ctx.text.slice(0, 120)}」` : ctx.windowTitle ? `要切换的窗口：「${ctx.windowTitle}」` : '要执行的动作';
+    const accepted = await ask('act', `${reasons.join('\n')}\n${detail}\n允许吗？（自我保护，默认拒绝）`);
     this.throwIfAborted(signal);
-    if (accepted !== true) throw new CuaError('E_FORBIDDEN', '用户没有允许在终端里操作');
-    this.terminalGrantedUntil = this.now() + this.options.config.grantMinutes * 60_000;
+    if (accepted !== true) {
+      throw new CuaError('E_FORBIDDEN', selfHit ? '用户没有允许操作我自己的窗口/配置' : '用户没有允许在终端里操作');
+    }
+    if (!selfHit) this.terminalGrantedUntil = this.now() + cfg.grantMinutes * 60_000;
   }
 
   // ------------------------------------------------------------ 内部

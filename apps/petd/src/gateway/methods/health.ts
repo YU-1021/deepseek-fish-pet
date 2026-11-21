@@ -177,6 +177,11 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           maxYieldWaitMs: Type.Integer(),
           typeChunkDelayMs: Type.Integer(),
           includeImages: Type.Boolean(),
+          selfProtect: Type.Object({
+            enabled: Type.Boolean(),
+            hints: Type.Array(Type.String()),
+            apps: Type.Array(Type.String()),
+          }),
         }),
         hooks: Type.Object({
           enabled: Type.Boolean(),
@@ -219,6 +224,14 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           observeIntervalMs: Type.Integer(),
           activeMs: Type.Integer(),
         }),
+        learning: Type.Object({
+          enabled: Type.Boolean(),
+          requireApproval: Type.Boolean(),
+          grayPercent: Type.Integer(),
+          grayDays: Type.Integer(),
+          maxPending: Type.Integer(),
+          promptMaxChars: Type.Integer(),
+        }),
       }),
     },
     () => {
@@ -246,10 +259,19 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         automation: { ...cfg.automation },
         skills: { ...cfg.skills },
         plugins: { ...cfg.plugins },
-        cua: { ...cfg.cua, screenshot: { ...cfg.cua.screenshot } },
+        cua: {
+          ...cfg.cua,
+          screenshot: { ...cfg.cua.screenshot },
+          selfProtect: {
+            ...cfg.cua.selfProtect,
+            hints: [...cfg.cua.selfProtect.hints],
+            apps: [...cfg.cua.selfProtect.apps],
+          },
+        },
         hooks: { ...cfg.hooks, risk: { ...cfg.hooks.risk } },
         presence: { ...cfg.presence, nightQuiet: { ...cfg.presence.nightQuiet } },
         dsh: { ...cfg.dsh },
+        learning: { ...cfg.learning },
       };
     }
   );

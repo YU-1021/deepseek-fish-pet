@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 115 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 122 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`、`dsh.status`、`dsh.activity`、`dsh.event`、`dsh.approval`、`dsh.approval.resolved`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`、`dsh.status`、`dsh.activity`、`dsh.event`、`dsh.approval`、`dsh.approval.resolved`、`learning.proposed`、`learning.approved`、`learning.rejected`、`learning.rolledback`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -403,6 +403,23 @@ AI 会自我演化（`persona.evolve` 改 `SOUL.agent.md` 外圈），但每次�
 5. **不硬编码**：方法清单以 `health.status.methods` 为准；事件 data 形状以后端代码为准（只会加字段，未知字段忽略）。
 6. **不要做**：不要把 DSH 会话日志/全文读进前端；不要在 UI 里存 DSH 的 key/凭证；不要默认打开「自动交给 DSH」（默认只观察）。
 7. **验收**：桌面 DSH 正在干活时桌宠 UI 显示 working/工具名（读方向）；`dsh.status` 显示私有 runtime 未起；点「交给 DSH」真拿到回答（花一点 token）；`approvalPolicy='ask'` 触发一次审批 → 气泡出现、允许后继续、拒绝则结束；关掉 `dsh.enabled` → 界面显示已关闭且 `dsh.ask` 报中文错误。
+
+## 8.17 M16：学习闭环 UI 规格（petd 后端已就绪）
+
+AI 想学什么，只能写成**候选提案**；主人批准/灰度后才进提示词或转成正式技能，而且每一步都有审计、可回滚。UI 的职责是把这条「提案 → 审批 → 灰度 → 回滚」的链条摆出来，让主人能一眼看懂、一键控制。
+
+- 方法：`learning.status`（`{enabled, requireApproval, grayPercent, grayDays, maxPending, counts{pending,approved,gray,rejected,rolledback}, pending[], activeGray[], dirs{proposals,staging,learning,state}, stateFile}`）、`learning.list {kind?, status?}`（新→旧，带 `{id, kind, name, status, reason, createdAt, approvedAt?, gray?}`）、`learning.get {id}`（带 `body` 正文与 diff）、`learning.propose`（AI 用，UI 一般不直接调）、`learning.approve {id, gray?, force?}`、`learning.reject {id, reason?}`、`learning.rollback {id}`。
+- 事件：`learning.proposed {item}`、`learning.approved {item, gray}`、`learning.rejected {item, reason}`、`learning.rolledback {item}`。
+- 配置：`config.get.learning {enabled, requireApproval, grayPercent, grayDays, maxPending, promptMaxChars}`。
+- 状态色：`pending` 待审（黄）、`gray` 灰度中（蓝）、`approved` 已生效（绿）、`rejected` 已拒绝（灰）、`rolledback` 已回滚（灰）。
+
+1. **提案列表（必做）**：设置页「它想学的东西」——按状态分组的列表（待审/灰度中/已生效/已拒绝/已回滚），每条显示 `kind` 徽标（技能/提示词/参数/偏好）、`name`、`reason`、时间；待审条目给「批准」「拒绝」两个按钮；批准时默认 `gray:true`，旁边可切「直接全量」。
+2. **详情与 diff（必做）**：点条目看正文（技能看候选全文，偏好/提示词看 JSON 里的 `content`）；若提案带 `diff` 就展示 diff；`learning.get` 的正文只在详情页按需加载，不要进列表缓存。
+3. **灰度提示**：`gray` 条目显示「灰度中：约 N% 的回合会参考它」，并显示 `gray.startedAt`/`rollbackAfterDays`；到 `grayDays` 后提示「可以转正了」（后端暂无自动转正方法，先只提示）。
+4. **回滚**：`approved`/`gray` 条目给「撤销」按钮（`learning.rollback`）；撤销后状态变 `rolledback`、产物删除、审计留痕；技能撤销会从 `skills/<name>/SKILL.md` 删除，UI 说明「技能文件会被删除」。
+5. **不要做**：不要给 AI 暴露「批准/拒绝/回滚」的聊天入口（这几步只能人做）；不要自动批准；不要把提案正文写进前端持久化存储；不要把 `learning/` 产物当成配置文件编辑（它归 AI 写、人只审批）。
+6. **不硬编码**：方法清单以 `health.status.methods` 为准；事件 data 形状以后端代码为准（只会加字段，未知字段忽略）。
+7. **验收**：让聊天里模型调一次 `propose_learning`（或直接调 `learning.propose`）→ 列表出现待审条目 → 批准（灰度）→ 状态变 `gray` 且 `learning.status.activeGray` 有它 → 撤销 → 状态 `rolledback` 且产物删除；技能提案批准后能在技能页看到转正后的技能；`learning.proposed`/`learning.approved`/`learning.rolledback` 事件都能驱动界面刷新；被拒绝的提案仍能查看，但不生效。
 
 ## 9. 测试策略（省 token）
 
