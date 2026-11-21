@@ -231,10 +231,15 @@
 - `presence.nightQuiet`：夜间安静时段（默认 23:00–07:00 不活动）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
-## 人格自编辑（SOUL.md 按小节改）
+## 人格自编辑（SOUL.md 内核 + SOUL.agent.md 外圈）
 
-人格的唯一事实源是 `SOUL.md`，旁边 `persona-state.json` 只存元数据：
+人格分两层，旁边 `persona-state.json` 只存元数据：
 
+- **内核 `SOUL.md`**：人写的稳定人格（身份/世界观/说话方式），**AI 不能直接写**；直接改它，下一轮聊天即生效。
+- **外圈 `SOUL.agent.md`**：AI 的自演化区（`persona.evolve` 和 `persona.patch` 的 actor=agent 都写这里），人也可以手动改。
+- **合并读取**：加载时「内核 + 外圈」按小节合并（同 `## 标题` 外圈覆盖内核，外圈独有标题追加在后面）；每轮提示词用合并结果。`persona.get` 的每个小节带 `source: 'core' | 'agent'`，UI 可以标「AI 改过」的徽标；`hasAgentOverrides` 表示外圈当前有没有覆盖。
+- **写盘守卫**：AI 侧写盘必须走白名单（`workspace/**` 记忆区，或 `.agent.md` / `.agent.json` 后缀 + 允许目录 `SOUL.agent.md`、`learning/`、`proposals/`、`skills/staging/`），否则 `E_FORBIDDEN`；代码/配置/密钥目录永远拒绝（见 `docs/自我迭代-安全边界.md`）。
+- **回滚**：`persona.rollback` 把快照写回内核，并清空外圈覆盖（外圈内容还在历史里可查）。
 - **按小节编辑**：`## 性格`、`## 说话方式`、`## 口头禅`、`## 隐藏设定`、`## 身份` 等；未知标题归 `custom:<标题>`，不会丢。
 - **谁能改**：`persona.patch` 默认用户（可改任何小节、忽略锁）；`persona.evolve` 是 AI（只能改 `identity/character/catchphrase/hidden/speaking` 且未上锁）。`## 世界观` 永远只有用户能改。
 - **锁**：`persona.lock {key, locked}` 只对 AI 生效——上锁后 AI 不能改，用户仍可改。
@@ -495,7 +500,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 303/303（网关/聊天/工具循环/交接/人格/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 317/317（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）

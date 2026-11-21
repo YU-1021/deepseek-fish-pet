@@ -169,6 +169,27 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 **证据**：每个里程碑给 1–2 张截图 + 一条 `pnpm --filter @petd/pet-ui build` 输出，贴在 `apps/pet-ui/README.md`。
 
+## 8.2 M2b：人格页规格（petd 后端已就绪）
+
+目标：能看到/改桌宠的人格，并区分「内核（人写的）」和「AI 改过的外圈」。
+
+**数据来源**
+- `persona.get` → `{version, locked, sections, history, coreFile, agentFile, hasAgentOverrides}`；`sections` 每项 `{key, title, content, source}`，`source` 为 `'core'`（`SOUL.md`）或 `'agent'`（`SOUL.agent.md` 覆盖）。
+- `persona.sections`（只读目录）、`persona.status`（版本/锁/历史）。
+- 写：`persona.patch {key, content, expectedVersion?}` → 用户编辑写回内核 `SOUL.md`，并清掉同小节的 AI 覆盖；带 `expectedVersion` 版本不符返回 `E_CONFLICT`。
+- 锁：`persona.lock {key, locked}` 只限制 AI；用户始终能改。后台 AI 自演化可手动点 `persona.evolve`。
+- 历史/回滚：`persona.history`、`persona.rollback {version}`（回滚会清空外圈覆盖）。
+- 事件：`persona.changed {version, actor, applied, reason}`。
+
+**关键交互**
+1. **来源标记**：每节标题旁标 `source`（`agent` 显示「AI 改过」小徽标）；顶部显示 `hasAgentOverrides` 与两个文件名（`coreFile`/`agentFile`）。
+2. **保存冲突**：保存时把当前 `version` 作为 `expectedVersion`；`E_CONFLICT`（`details.currentVersion`）→ 提示「人格被另一端改过」，给「载入最新 / 覆盖」两选项，不静默覆盖。
+3. **内核小节**：`source=core` 的小节用户可以直接编辑（后端写 `SOUL.md`）；`## 世界观` 只允许用户改，AI 永远不能碰（UI 不用特殊处理，后端已保证）。
+4. **AI 外圈**：给「让 AI 复盘并微调」一个按钮（`persona.evolve`），展示 `reason` 与改了哪几节；失败/未改要有明确提示。
+5. **刷新**：订阅 `persona.changed` 自动重载；本地有未保存修改时先提示冲突。
+
+**验收**：能读/改人格小节、来源徽标正确、冲突有双按钮、历史可回滚、`persona.evolve` 后能看到 AI 改过的小节。截图贴 README。
+
 ## 8.5 M4：Memory 面板规格（petd 后端已就绪）
 
 目标：让用户能看到、编辑、回滚桌宠的工作区记忆（`workspace/`，就是它的长期记忆），并管附件。
