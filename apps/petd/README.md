@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一）。
 
 ## 现在有什么
 
@@ -28,12 +28,13 @@
     - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` / `hooks.assess`（预览一次操作的风险等级）+ `approval.list` / `approval.answer`（危险动作先问；默认 smart 模式：规则优先，其余敏感操作让模型评 low/medium/high，低/中自动放行、高风险才问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆/键鼠工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.assessed` / `hooks.blocked` / `hooks.changed`）
   - 静默活动：`presence.status` / `presence.list` / `presence.run_once`（大部分时间自己安静待着；按间隔/夜间安静/用户闲置/每日上限挑小动作，只发 `presence.activity` 事件，不聊天不朗读）
   - 自我迭代审计：`agent.scope`（AI 能写哪些文件）/ `agent.audit.list` / `agent.audit.get`（动态文件的变更流水与 diff）/ `agent.rollback`（人按记录把某个 `.agent.*` 文件回滚到变更前；AI 没有对应工具）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+  - DSH 双向桥：`dsh.status` / `dsh.observe` / `dsh.start` / `dsh.stop` / `dsh.prompt` / `dsh.ask` / `dsh.approval.answer`（读方向：只读尾读桌面 GUI 的 v4 会话日志，归纳空闲/思考中/working，不花 token；写方向：node spawn 桌面自带的 Electron 起私有 SDK JSON-RPC runtime，`dsh.ask` 等这一回合结束拿回答；审批默认拒绝，`dsh.approvalPolicy='ask'` 才广播 `dsh.approval` 问人；事件 `dsh.status` / `dsh.activity` / `dsh.event` / `dsh.approval` / `dsh.approval.resolved`）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`dsh-workspace/`（DSH 桥私有 runtime 的工作目录，`dsh.cwd` 可改）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks/presence 十四段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks/presence/dsh 十五段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -46,7 +47,8 @@
 11. 审批门：`home/state/hooks.json` 不存在时播种 9 条内置 ask 规则（删记忆/删会话/删文件/移文件/关插件/删自动化/移动文件等）；用户规则与停用状态从这里读，坏文件按内置规则启动且不覆盖原文件
 12. 静默活动：`home/state/presence.json` 记录最近活动与今日计数；不存在就空启动，第一次活动时写入（默认每 45 分钟最多一次、夜间 23:00–07:00 安静、用户闲置 10 分钟才动）
 13. 自我迭代：`home/SOUL.agent.md` 不存在时创建空外圈；`home/state/agent-audit.jsonl` 不存在时由第一次动态文件变更创建（只追加，超过 4MB 轮转到 `.1`）
-14. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+14. DSH 桥：`home/dsh-workspace/` 不存在时按需创建；`config.dsh.enabled=true` 且 `observe=true` 时自动开只读观察（只尾读桌面 GUI 会话，不 spawn runtime、不花 token）；第一次 `dsh.ask`/`dsh.prompt`/`dsh.start` 才 spawn 私有 SDK runtime（约 2 秒）
+15. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -159,6 +161,21 @@
     "idleMinutes": 10,
     "maxPerDay": 12,
     "nightQuiet": { "enabled": true, "start": "23:00", "end": "07:00" }
+  },
+  "dsh": {
+    "enabled": true,
+    "observe": true,
+    "exePath": "",
+    "cliPath": "",
+    "cwd": "",
+    "provider": "deepseek-official",
+    "model": "deepseek-flash",
+    "reasoningEffort": "high",
+    "maxTokens": 16000,
+    "approvalPolicy": "reject",
+    "askTimeoutMs": 180000,
+    "observeIntervalMs": 1500,
+    "activeMs": 15000
   }
 }
 ```
@@ -231,6 +248,11 @@
 - `presence.idleMinutes`：你至少闲置多久它才来一下（默认 10 分钟；CUA 关闭时拿不到闲置时长就按时活动）。
 - `presence.maxPerDay`：每天最多几次（默认 12；0 = 不限）。
 - `presence.nightQuiet`：夜间安静时段（默认 23:00–07:00 不活动）。
+- `dsh.enabled` / `dsh.observe`：DSH 双向桥总开关与「自动只读观察」（默认都 true；观察只尾读桌面 GUI 会话，不 spawn runtime、不花 token；关掉后 `dsh.prompt/ask` 返回 `E_UNAVAILABLE`）。
+- `dsh.exePath` / `dsh.cliPath` / `dsh.cwd`：`DeepSeek Harness.exe`、SDK runtime 的 `cli.js`、私有 runtime 工作目录；留空自动找（`%LOCALAPPDATA%\Programs\DeepSeek Harness` → `F:\DSH\DeepSeek Harness` → `C:\Program Files\DeepSeek Harness`；cwd 默认 `<home>/dsh-workspace`）。`cli.js` 在 `app.asar` 内，普通 Node 看不见，所以自动检查时跳过 asar 内部路径。
+- `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` / `dsh.maxTokens`：私有 runtime 的模型参数（默认 deepseek-official / deepseek-flash / high / 16000）。
+- `dsh.approvalPolicy` / `dsh.askTimeoutMs`：`reject`（默认，DSH 要危险权限直接拒）或 `ask`（广播 `dsh.approval` 问前端/人，超时拒绝）；`dsh.ask` 等回答的上限（默认 180000ms）。
+- `dsh.observeIntervalMs` / `dsh.activeMs`：观察轮询间隔（默认 1500ms）与「多久内算活跃」（默认 15000ms）。
 - 人格：直接改 `SOUL.md`，下一轮聊天即生效（无需重启）。
 
 ## 人格自编辑（SOUL.md 内核 + SOUL.agent.md 外圈）
@@ -430,6 +452,18 @@ AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不
 - **回滚内容写哪**：`rollback` 把记录里的 `before` 原样写回文件（不是 git checkout）；`persona.rollback` 走的是人格快照（内核 + 清外圈），两者互补。
 - **确认方式**：`node apps/petd/scripts/self-iterate-smoke.mjs`（不花 token：外部写外圈→persona 合并→用户改同名小节→自动审计→列表/详情→回滚→外圈恢复→重启后审计还在→优雅退出；34 项）。
 
+## DSH 双向桥（dsh.*）
+
+把桌宠和 DeepSeek Harness（DSH）接起来，两个方向：
+
+- **DSH → 桌宠（只读观察，默认开）**：尾读 `$DSH_HOME/sessions/<workspace>/<sessionId>/session.v4.jsonl.zstd`（zstd 分帧，Node 24 自带解压），取最后若干事件归纳 `state`（`idle` / `thinking` / `working`）、`turn/step`、当前工具名、最后一段回答文字、`active`（15 秒内更新过）；每 1.5 秒扫一次，只广播 `dsh.activity`，**不 spawn runtime、不花 token**。`dsh.observe` 立刻扫一次并返回快照。
+- **桌宠 → DSH（写方向，懒启动）**：用桌面自带的 Electron 当 Node 起一个私有 runtime（`node spawn "DeepSeek Harness.exe" --expose-internals <app.asar 里的 cli.js> --profile sdk`，env `ELECTRON_RUN_AS_NODE=1`），走 stdio 上的 newline-delimited JSON-RPC 2.0：`initialize` → `session/prompt`，事件走 `session.event` / `session.status`。`dsh.prompt` 立刻返回 `messageId`；`dsh.ask` 等这一回合 `turn/end` 再返回最终文字。凭证复用 DSH 已存的（不需要 `DEEPSEEK_API_KEY`；只有 headless profile 才需要）。
+- **为什么不直接连桌面 GUI**：desktop profile 不挂 SDK stdio 服务；`session/resume` 只能恢复没被占用的会话，无法同时附着到 GUI 正在用的会话。私有 runtime 的会话仍落在同一个 `$DSH_HOME/sessions` 里，GUI 之后能 resume。
+- **持久会话**：写方向默认固定 `sessionId='petd-bridge'`（回合数会累加）；对已存在的 id，DSH 的 `session/prompt` 会报 `session "x" already exists`，桥会自动先 `session/resume` 再重试一次。
+- **审批**：`dsh.approvalPolicy='reject'`（默认）时 DSH 要危险权限直接拒；`'ask'` 时广播 `dsh.approval {id, sessionId, toolName, reason, at}`，等前端 `dsh.approval.answer {id, outcome}`（120 秒没人答按 `rejected`）。
+- **确认方式**：`node apps/petd/scripts/dsh-smoke.mjs`（不花 token：真起 petd、真 spawn 私有 runtime 握手、真观察桌面会话；加 `--live` 才真问一句，花一点 token；24 项）。
+- 设计与实测见 `docs/dsh-bridge.md`。
+
 ## 跑起来
 
 ```bat
@@ -489,6 +523,9 @@ node apps/petd/scripts/presence-smoke.mjs
 
 :: 冒烟：自我迭代审计（不花 token；外圈合并/自动审计/详情/按条回滚/重启后还在）
 node apps/petd/scripts/self-iterate-smoke.mjs
+
+:: 冒烟：DSH 双向桥（不花 token；真起私有 SDK runtime 握手 + 真观察桌面 GUI 会话；加 --live 才真问一句）
+node apps/petd/scripts/dsh-smoke.mjs
 ```
 
 READY 行示例：
@@ -517,7 +554,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 333/333（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 360/360（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批））
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -535,6 +572,7 @@ cd apps/petd && node scripts/cua-smoke.mjs --home D:\x        :: 感知/输入�
 cd apps/petd && node scripts/hooks-smoke.mjs --home D:\x      :: 审批门端到端（rules 模式不花 token；内置 ask 允许/拒绝/记住/超时、自定义 deny、toggle、删除；33 项）
 cd apps/petd && node scripts/presence-smoke.mjs --home D:\x   :: 静默活动端到端（不花 token；活动事件/列表/落盘/重启续号；29 项）
 cd apps/petd && node scripts/self-iterate-smoke.mjs --home D:\x :: 自我迭代端到端（不花 token；外圈合并/自动审计/详情 diff/按条回滚/重启后还在；34 项）
+cd apps/petd && node scripts/dsh-smoke.mjs --home D:\x        :: DSH 桥端到端（不花 token：真起私有 runtime 握手 + 真观察桌面会话；加 --live 花一点 token 真问一句；24 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -567,6 +605,8 @@ CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）
 静默活动冒烟覆盖（29 项，不花 token）：`config.get` 的 presence 段、`presence.status` 初始、`presence.run_once` 返回活动 id/合法 kind/中文 label、`presence.activity` 事件（`quiet=true`）、`presence.list` 新→旧、今日计数、聊天记录不受影响（不会出现 `chat.assistant_message`）、`state/presence.json` 落盘（version/entries）、优雅退出、重启后累积计数且编号续上（p-0003）、两次退出干净。
 
 自我迭代冒烟覆盖（34 项，不花 token）：`agent.scope` 的后缀约定/可写目录/审计文件、外部写 `SOUL.agent.md` 后 `persona.get` 合并且 `source=agent`、用户改同名小节清空外圈并自动记一条 `action=delete` 的审计、`agent.audit.list`（不带正文）/`agent.audit.get`（前后正文 + diff）、`agent.rollback` 恢复外圈并广播 `agent.rollback {targetId}`、回滚本身再记一条、`state/agent-audit.jsonl` 落盘、重启后审计还在、两次优雅退出干净。
+
+DSH 桥冒烟覆盖（默认 22/22 不花 token，加 `--live` 共 24/24）：`config.get` 的 dsh 段（enabled/observe/approvalPolicy）、`dsh.status` 懒启动与观察开关、`DeepSeek Harness.exe` 与 `app.asar` 内 `cli.js` 自动定位、`dsh.observe` 真读桌面 GUI 最新 v4 会话（state/active/workspace）、`dsh.start` 真 spawn 私有 SDK runtime 并握手（provider=deepseek-official、有 serverInfo）、`dsh.status` 事件、`--live` 时 `dsh.ask` 真模型回「收到」且带 turn（会话持久化，turn 累加）、`dsh.event` 事件、`dsh.stop` 关闭 runtime、优雅退出且 `gateway.json` 已删除。
 
 ## 刻意没做（等需求逐个说）
 
