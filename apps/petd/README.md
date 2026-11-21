@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝）。
 
 ## 现在有什么
 
@@ -27,7 +27,8 @@
     - 运行控制：`run.status` / `run.pause` / `run.resume`（暂停后聊天、自动化、电脑操作都会被挡住；恢复后继续）
     - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` / `hooks.assess`（预览一次操作的风险等级）+ `approval.list` / `approval.answer`（危险动作先问；默认 smart 模式：规则优先，其余敏感操作让模型评 low/medium/high，低/中自动放行、高风险才问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆/键鼠工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.assessed` / `hooks.blocked` / `hooks.changed`）
   - 静默活动：`presence.status` / `presence.list` / `presence.run_once`（大部分时间自己安静待着；按间隔/夜间安静/用户闲置/每日上限挑小动作，只发 `presence.activity` 事件，不聊天不朗读）
-  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格主文件）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
+  - 自我迭代审计：`agent.scope`（AI 能写哪些文件）/ `agent.audit.list` / `agent.audit.get`（动态文件的变更流水与 diff）/ `agent.rollback`（人按记录把某个 `.agent.*` 文件回滚到变更前；AI 没有对应工具）
+  - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
   - 退出：SIGINT/SIGTERM/ipc `{type:'shutdown'}` 优雅关闭
 
 ## 首次启动会做什么
@@ -44,7 +45,8 @@
 10. 电脑操作（CUA）：只检查平台与显示器，不截屏、不申请权限；`config.cua.enabled=false`（默认）时聊天里没有 CUA 工具，只有 `cua.status` 之类能看
 11. 审批门：`home/state/hooks.json` 不存在时播种 9 条内置 ask 规则（删记忆/删会话/删文件/移文件/关插件/删自动化/移动文件等）；用户规则与停用状态从这里读，坏文件按内置规则启动且不覆盖原文件
 12. 静默活动：`home/state/presence.json` 记录最近活动与今日计数；不存在就空启动，第一次活动时写入（默认每 45 分钟最多一次、夜间 23:00–07:00 安静、用户闲置 10 分钟才动）
-12. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
+13. 自我迭代：`home/SOUL.agent.md` 不存在时创建空外圈；`home/state/agent-audit.jsonl` 不存在时由第一次动态文件变更创建（只追加，超过 4MB 轮转到 `.1`）
+14. 没配 Key 也能起，但聊天会返回 `E_LLM_AUTH`，提示去写 `secrets.json` 或设 `PETD_LLM_API_KEY`
 
 ## 配置（config.json）
 
@@ -240,6 +242,7 @@
 - **合并读取**：加载时「内核 + 外圈」按小节合并（同 `## 标题` 外圈覆盖内核，外圈独有标题追加在后面）；每轮提示词用合并结果。`persona.get` 的每个小节带 `source: 'core' | 'agent'`，UI 可以标「AI 改过」的徽标；`hasAgentOverrides` 表示外圈当前有没有覆盖。
 - **写盘守卫**：AI 侧写盘必须走白名单（`workspace/**` 记忆区，或 `.agent.md` / `.agent.json` 后缀 + 允许目录 `SOUL.agent.md`、`learning/`、`proposals/`、`skills/staging/`），否则 `E_FORBIDDEN`；代码/配置/密钥目录永远拒绝（见 `docs/自我迭代-安全边界.md`）。
 - **回滚**：`persona.rollback` 把快照写回内核，并清空外圈覆盖（外圈内容还在历史里可查）。
+- **审计**：写外圈的每次变更（AI 演化、用户改同小节清掉覆盖、以及回滚清空）都追加一条 `state/agent-audit.jsonl` 记录（前后 hash/字节数、逐行 diff、谁改的、为什么）；`agent.audit.list/get` 可查，`agent.rollback {id}` 可按记录把某个文件恢复到那次变更之前（文件在那之后又被改过时需 `force`）。
 - **按小节编辑**：`## 性格`、`## 说话方式`、`## 口头禅`、`## 隐藏设定`、`## 身份` 等；未知标题归 `custom:<标题>`，不会丢。
 - **谁能改**：`persona.patch` 默认用户（可改任何小节、忽略锁）；`persona.evolve` 是 AI（只能改 `identity/character/catchphrase/hidden/speaking` 且未上锁）。`## 世界观` 永远只有用户能改。
 - **锁**：`persona.lock {key, locked}` 只对 AI 生效——上锁后 AI 不能改，用户仍可改。
@@ -416,6 +419,17 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 - **方法**：`presence.status`（开关/间隔/闲置门槛/每日上限/夜间段/nextAt/今天次数/最后一条）、`presence.list {limit?}`（新→旧）、`presence.run_once`（手动来一次，忽略间隔/夜间/闲置，仍受开关与每日上限限制）。
 - **确认方式**：`node apps/petd/scripts/presence-smoke.mjs`（不花 token：状态、手动活动、事件、列表、落盘、重启后编号与计数、优雅退出）。
 
+## 自我迭代审计（agent.*）
+
+AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不让 AI 改；记忆和带 `.agent.*` 后缀的动态文件才允许改，而且每次改都留痕、可按条回滚**（完整约束见 `docs/自我迭代-安全边界.md`）。
+
+- **可写范围**：`agent.scope` 返回约定——记忆区 `workspace/**`；动态文件必须带 `.agent.md` / `.agent.json` 后缀，且落在 `SOUL.agent.md`、`learning/`、`proposals/`、`skills/staging/` 里；其它路径一律 `E_FORBIDDEN`。
+- **审计流水**：`home/state/agent-audit.jsonl` 只追加（无修改/删除方法）；每条记录 `{id, ts, path, actor, action, zone, reason, before, after, diffChars}`，正文只在 `agent.audit.get` 里按需展开（单条上限 20000 字、diff 最多 400 行）。
+- **列表与详情**：`agent.audit.list {path?, actor?, limit?}` 新→旧（默认 50、最多 200），不带正文；`agent.audit.get {id}` 带前后正文与逐行 diff。
+- **按文件回滚**：`agent.rollback {id, force?, reason?}` 只允许回滚 `zone='agent-file'` 的记录（workspace 记忆走 Git 回滚）；文件在那条记录之后又被改过 → `E_CONFLICT`（带 `currentHash`/`expectedHash`），确认要覆盖再传 `force`；原内容为空表示「那次是新建」，回滚就删掉文件。回滚本身也记一条（actor=user），并广播 `agent.rollback {id, targetId, path, restored}`。
+- **回滚内容写哪**：`rollback` 把记录里的 `before` 原样写回文件（不是 git checkout）；`persona.rollback` 走的是人格快照（内核 + 清外圈），两者互补。
+- **确认方式**：`node apps/petd/scripts/self-iterate-smoke.mjs`（不花 token：外部写外圈→persona 合并→用户改同名小节→自动审计→列表/详情→回滚→外圈恢复→重启后审计还在→优雅退出；34 项）。
+
 ## 跑起来
 
 ```bat
@@ -472,6 +486,9 @@ node apps/petd/scripts/hooks-smoke.mjs
 
 :: 冒烟：静默活动（不花 token；活动事件、列表、落盘、重启续号）
 node apps/petd/scripts/presence-smoke.mjs
+
+:: 冒烟：自我迭代审计（不花 token；外圈合并/自动审计/详情/按条回滚/重启后还在）
+node apps/petd/scripts/self-iterate-smoke.mjs
 ```
 
 READY 行示例：
@@ -500,7 +517,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 317/317（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 333/333（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -517,6 +534,7 @@ cd apps/petd && node scripts/skills-plugins-smoke.mjs --home D:\x :: 技能/插�
 cd apps/petd && node scripts/cua-smoke.mjs --home D:\x        :: 感知/输入端到端（真截屏/真窗口/权限拒绝/暂停/只读；不移动真实鼠标键盘；34 项）
 cd apps/petd && node scripts/hooks-smoke.mjs --home D:\x      :: 审批门端到端（rules 模式不花 token；内置 ask 允许/拒绝/记住/超时、自定义 deny、toggle、删除；33 项）
 cd apps/petd && node scripts/presence-smoke.mjs --home D:\x   :: 静默活动端到端（不花 token；活动事件/列表/落盘/重启续号；29 项）
+cd apps/petd && node scripts/self-iterate-smoke.mjs --home D:\x :: 自我迭代端到端（不花 token；外圈合并/自动审计/详情 diff/按条回滚/重启后还在；34 项）
 ```
 
 聊天冒烟覆盖：迁移与播种、握手、`chat.send` 真实回复、会话 JSONL 落盘、`chat.*` 事件、第二轮带历史、`session.get/rename/list/delete`、优雅退出。
@@ -547,6 +565,8 @@ CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）
 
 审批门冒烟覆盖（33 项，`mode:'rules'` 不花 token）：`config.get` 的 hooks 段（enabled/mode/approvalEnabled/approvalTimeoutMs）、`hooks.status` 含 mode、`hooks.list` 内置 9 条规则、删除文件前真的弹 `approval.requested`（kind/name/ruleId/id 正确）、`approval.answer` 拒绝 → `E_FORBIDDEN`「你拒绝了这次操作」、允许后删除成功、`remember=true` 后同连接不再问、不回答 → 超时自动拒绝（`approval.resolved.reason=timeout`）、自定义 deny 规则生效并广播 `hooks.blocked`、`toggle` 关闭后落到内置 ask、`hooks.delete` 删除规则、`hooks.changed` 广播、优雅退出。smart 模式（模型风险评审 low/medium 放行、high 弹审批、fallback、缓存、规则优先）由 `hooks/risk.test.ts` 与 `hooks/smart.test.ts` 覆盖。
 静默活动冒烟覆盖（29 项，不花 token）：`config.get` 的 presence 段、`presence.status` 初始、`presence.run_once` 返回活动 id/合法 kind/中文 label、`presence.activity` 事件（`quiet=true`）、`presence.list` 新→旧、今日计数、聊天记录不受影响（不会出现 `chat.assistant_message`）、`state/presence.json` 落盘（version/entries）、优雅退出、重启后累积计数且编号续上（p-0003）、两次退出干净。
+
+自我迭代冒烟覆盖（34 项，不花 token）：`agent.scope` 的后缀约定/可写目录/审计文件、外部写 `SOUL.agent.md` 后 `persona.get` 合并且 `source=agent`、用户改同名小节清空外圈并自动记一条 `action=delete` 的审计、`agent.audit.list`（不带正文）/`agent.audit.get`（前后正文 + diff）、`agent.rollback` 恢复外圈并广播 `agent.rollback {targetId}`、回滚本身再记一条、`state/agent-audit.jsonl` 落盘、重启后审计还在、两次优雅退出干净。
 
 ## 刻意没做（等需求逐个说）
 

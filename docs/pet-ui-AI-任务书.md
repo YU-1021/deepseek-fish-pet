@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 104 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 108 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -371,6 +371,22 @@ petd 已上线**智能审批门**：先过规则网；没命中规则的敏感�
 4. **与情绪/时间联动（可选）**：如果同时订阅了 `mood.changed`，可以据此挑语气/动作幅度；但不要为了动画去轮询后端。
 5. **不要做**：不要在静默活动时让模型说话/调 `chat.send`；不要每秒轮询 `presence.status`；不要把活动记录塞进聊天历史。
 6. **验收**：开界面等一次 `presence.activity`（或点「现在来一个」）→ 立绘只播小动作、无气泡无声音、聊天记录不变；把 `presence.intervalMinutes` 调小观察频率；把 `presence.enabled` 关掉后不再有事件。
+
+## 8.15 M14：自我迭代审计 UI 规格（petd 后端已就绪）
+
+AI 会自我演化（`persona.evolve` 改 `SOUL.agent.md` 外圈），但每次改动都留痕、可按条回滚。UI 的职责是**让人看得见 AI 改了什么、能一键撤销**，而不是让 AI 改代码/配置。
+
+- 方法：`agent.scope`（`{scope, memoryZone, zones[], auditFile}`——AI 能写哪些文件的后缀约定与目录）、`agent.audit.list {path?, actor?, limit?}`（`{entries: AuditMeta[], total}`，新→旧，**不含正文**）、`agent.audit.get {id}`（`{entry: {…, before, after, diff}}` 前后正文 + 逐行 diff）、`agent.rollback {id, force?, reason?}`（`{path, restored: 'content'|'deleted', entry}`；文件在那之后被改过 → `E_CONFLICT` 且 `details.currentHash/expectedHash`，需 `force`）。
+- `AuditMeta = {id, ts, actor: 'user'|'agent'|'system', action: 'write'|'delete'|'rollback', path, zone: 'agent-file'|'memory', reason, before: {hash,bytes}|null, after: {hash,bytes}|null, diffChars, sessionId?}`。
+- 事件：`agent.rollback {id, targetId, path, restored}`（回滚成功后广播，UI 刷新列表与人格页）。
+- 和人格页（§8.2）联动：`persona.get` 的 `source: 'agent'` 小节旁放「改动记录」，点进某条审计看 diff；回滚某条后重拉 `persona.get`。
+
+1. **审计页（必做）**：设置页新增「AI 改动记录」分组——默认按时间倒序列出 `agent.audit.list`（路径/谁改的/动作/时间），可按文件与 actor 过滤、分页（limit≤200）；点一条打开抽屉/详情，展示 `before/after` 正文和 diff（加/删行高亮，过长的正文给折叠）。
+2. **回滚按钮（必做，危险动作）**：详情里「撤销这次改动」调 `agent.rollback {id}`；回滚前二次确认（写清楚会恢复成哪个版本）；收到 `E_CONFLICT` 时提示「这个文件之后又被改过」并给「仍然覆盖（force）」二次确认。
+3. **写盘范围说明（必做）**：用 `agent.scope` 的结果在「AI 能改什么」说明里展示：记忆区、`.agent.md`/`.agent.json` 后缀、允许目录；明确写「代码、配置、密钥 AI 改不了」。
+4. **不硬编码清单**：方法清单以 `health.status.methods` 为准；`AuditMeta` 新增字段时忽略未知字段即可。
+5. **不要做**：不要给 AI 暴露「调用 agent.rollback」的聊天入口（这是人的撤销动作，后端也没有对应聊天工具）；不要自动回滚；不要把审计正文缓存进前端持久化存储（正文只在 `agent.audit.get` 里按需取）。
+6. **验收**：让 AI 演化一次人格（或手动写 `SOUL.agent.md` 后让用户改同名小节）→ 审计页出现一条记录 → 查看 diff → 点撤销 → 外圈恢复成改动前、收到 `agent.rollback` 事件、人格页 `source` 徽标相应变化；再把文件手改一次后撤销 → 出现 `E_CONFLICT` 确认框。
 
 ## 9. 测试策略（省 token）
 

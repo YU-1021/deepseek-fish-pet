@@ -68,6 +68,8 @@ import { HooksService } from './hooks/service.js';
 import { registerHooksMethods } from './gateway/methods/hooks.js';
 import { PresenceService } from './presence/service.js';
 import { registerPresenceMethods } from './gateway/methods/presence.js';
+import { AgentAuditLog } from './kernel/agent-audit.js';
+import { registerAgentMethods } from './gateway/methods/agent.js';
 
 interface CliArgs {
   home?: string;
@@ -189,11 +191,15 @@ async function main(): Promise<void> {
     logger.info('已从旧版 config.json 迁移 API Key 到 secrets.json（不打印密钥）');
   }
   if (!secrets.llm.apiKey) logger.warn('尚未配置模型 API Key：聊天会返回 E_LLM_AUTH（写入 secrets.json 或设 PETD_LLM_API_KEY）');
+  // ── 自我迭代审计：AI 动态文件（.agent.*）的变更流水；只追加，不在写盘白名单里 ──
+  const agentAudit = new AgentAuditLog({ home: paths.home, logger });
+
   const personaStore = new PersonaStore({
     home: paths.home,
     file: config.chat.systemPromptFile,
     legacy: legacy.persona,
     logger,
+    audit: agentAudit,
   });
   const seeded = personaStore.ensure();
   if (seeded.createdSoul) {
@@ -594,6 +600,10 @@ async function main(): Promise<void> {
     }),
   });
   registerPresenceMethods(registry, { presence });
+  registerAgentMethods(registry, {
+    audit: agentAudit,
+    publish: (event, data) => publishEvent(event, data),
+  });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条
   const recentMessagesFor = (sessionId?: string) => {

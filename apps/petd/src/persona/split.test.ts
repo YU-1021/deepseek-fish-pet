@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { PersonaStore, SOUL_AGENT_FILE, type PersonaStoreOptions } from './store.js';
+import type { AuditAppendInput } from '../kernel/agent-audit.js';
 
 function tmpHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'petd-persona-split-'));
@@ -16,6 +17,24 @@ function makeStore(home = tmpHome(), legacy: PersonaStoreOptions['legacy'] = nul
   const store = new PersonaStore({ home, file: 'SOUL.md', legacy });
   store.ensure();
   return store;
+}
+
+/** 带审计桩的人格存储：记录所有交给审计的写入 */
+function makeAuditedStore(): { store: PersonaStore; audits: AuditAppendInput[] } {
+  const audits: AuditAppendInput[] = [];
+  const store = new PersonaStore({
+    home: tmpHome(),
+    file: 'SOUL.md',
+    legacy: null,
+    audit: {
+      append: (input) => {
+        audits.push(input);
+        return { id: 'audit-' + audits.length };
+      },
+    },
+  });
+  store.ensure();
+  return { store, audits };
 }
 
 const SPEAKING = '## 说话方式\n简短、带一点嘴硬。\n';
@@ -99,4 +118,26 @@ test('锁与世界观：锁只约束 AI，世界观仍拒绝 agent', () => {
   store.setLock('speaking', false);
   const denied = store.patch({ actor: 'agent', sections: { worldview: 'AI 想改世界观' } });
   assert.ok(denied.rejected.some((x) => x.key === 'worldview'));
+});
+
+test('审计：AI 改外圈记一条 agent 记录（含前后正文），用户改别的小节不记', () => {
+  const { store, audits } = makeAuditedStore();
+  store.patch({ actor: 'agent', sections: { speaking: '更简短' }, reason: '相处久了' });
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0]?.actor, 'agent');
+  assert.equal(audits[0]?.action, 'write');
+  assert.equal(audits[0]?.reason, '相处久了');
+  assert.equal(audits[0]?.afterText?.includes('更简短'), true);
+  store.patch({ actor: 'user', sections: { character: '用户改的性格' } });
+  assert.equal(audits.length, 1, '用户改内核且外圈没变时不记审计');
+});
+
+test('审计：用户改同小节清掉外圈覆盖时也算一次外圈变更', () => {
+  const { store, audits } = makeAuditedStore();
+  store.patch({ actor: 'agent', sections: { speaking: 'agent 版本' } });
+  store.patch({ actor: 'user', sections: { speaking: '用户版本' } });
+  assert.equal(audits.length, 2);
+  assert.equal(audits[1]?.actor, 'user');
+  assert.equal(audits[1]?.action, 'delete', '外圈被清空');
+  assert.equal(audits[1]?.afterText?.trim(), '');
 });
