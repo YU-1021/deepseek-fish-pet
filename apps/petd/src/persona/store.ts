@@ -20,6 +20,7 @@ import path from 'node:path';
 import { PetdError } from '@petd/protocol';
 import { buildSoul, type LegacyPersona } from '../chat/persona.js';
 import { assertAgentWritable } from '../kernel/agent-files.js';
+import type { AuditAppendInput } from '../kernel/agent-audit.js';
 
 export const PERSONA_STATE_VERSION = 1;
 export const MAX_SOUL_CHARS = 20_000;
@@ -219,6 +220,8 @@ export interface PersonaStoreOptions {
   agentFile?: string;
   /** 首次播种用：旧 persona.json 字段 */
   legacy?: LegacyPersona | null;
+  /** 审计流水（AI 写外圈时记一笔，INV-9）；不传就只写文件不审计 */
+  audit?: { append(input: AuditAppendInput): unknown };
   now?: () => string;
   logger?: PersonaLogger;
 }
@@ -288,6 +291,7 @@ export class PersonaStore {
   private readonly file: string;
   private readonly agentFile: string;
   private readonly legacy: LegacyPersona | null;
+  private readonly audit?: { append(input: AuditAppendInput): unknown };
   private readonly now: () => string;
   private readonly logger?: PersonaLogger;
 
@@ -297,6 +301,7 @@ export class PersonaStore {
     const defaultAgent = path.join(path.dirname(resolvePath(opts.home, opts.file)), SOUL_AGENT_FILE);
     this.agentFile = opts.agentFile ? resolvePath(opts.home, opts.agentFile) : defaultAgent;
     this.legacy = opts.legacy ?? null;
+    this.audit = opts.audit;
     this.now = opts.now ?? (() => new Date().toISOString());
     this.logger = opts.logger;
   }
@@ -511,6 +516,9 @@ export class PersonaStore {
     }
     const newCoreText = renderSoul(newCore);
     const newAgentText = renderSoul(newAgent);
+    // 只有外圈（AI 动态文件）真的变了才记审计：AI 写、或用户改内核时清掉了外圈覆盖
+    const agentChanged = actor === 'agent' || agentParsed.sections.length !== newAgent.sections.length;
+    const agentBefore = readTextIfExists(this.agentSoulFile);
     const ts = this.now();
     const state = readStateFile(this.stateFile) ?? {
       version: snapshot.version,
@@ -533,6 +541,20 @@ export class PersonaStore {
     if (actor === 'agent') assertAgentWritable(this.home, this.agentSoulFile);
     writeTextAtomic(this.soulFile, newCoreText);
     writeTextAtomic(this.agentSoulFile, newAgentText);
+    if (agentChanged && this.audit) {
+      try {
+        this.audit.append({
+          path: this.agentSoulFile,
+          actor,
+          action: newAgentText.trim() ? 'write' : 'delete',
+          reason: revision.reason,
+          beforeText: agentBefore,
+          afterText: newAgentText,
+        });
+      } catch (e) {
+        this.logger?.warn('写人格审计失败', { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     const nextState: PersonaState = {
       ...state,
       version: revision.version,
@@ -577,6 +599,7 @@ export class PersonaStore {
     const target = state.history.find((r) => r.version === version);
     if (!target) throw new PetdError('E_NOT_FOUND', `没有 v${version} 的历史版本`);
     const content = normalizeNewlines(target.snapshot);
+    const agentBefore = readTextIfExists(this.agentSoulFile);
     writeTextAtomic(this.soulFile, content);
     writeTextAtomic(this.agentSoulFile, '');
     const ts = this.now();
@@ -596,6 +619,20 @@ export class PersonaStore {
       history: [revision, ...state.history].slice(0, MAX_HISTORY),
     };
     writeJsonAtomic(this.stateFile, nextState);
+    if (agentBefore !== null && agentBefore.trim() && this.audit) {
+      try {
+        this.audit.append({
+          path: this.agentSoulFile,
+          actor: 'user',
+          action: 'delete',
+          reason: revision.reason,
+          beforeText: agentBefore,
+          afterText: '',
+        });
+      } catch (e) {
+        this.logger?.warn('写人格审计失败', { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     this.logger?.info('人格已回滚', { from: state.version, to: revision.version, target: version });
     return { changed: true, version: revision.version, applied: ['*'], skipped: [], rejected: [] };
   }

@@ -19,6 +19,7 @@ const SectionView = Type.Object({
   locked: Type.Boolean(),
   aiEditable: Type.Boolean(),
   userOnly: Type.Boolean(),
+  source: Type.Optional(Type.Union([Type.Literal('core'), Type.Literal('agent')])),
 });
 
 const PersonaSnapshotResult = Type.Object({
@@ -30,6 +31,9 @@ const PersonaSnapshotResult = Type.Object({
   content: Type.String(),
   sections: Type.Array(SectionView),
   locks: Type.Record(Type.String(), Type.Boolean()),
+  coreFile: Type.String(),
+  agentFile: Type.String(),
+  hasAgentOverrides: Type.Boolean(),
 });
 
 const PatchResult = Type.Object({
