@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 124 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 125 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -121,7 +121,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 事件（目前有这些，data 形状见 chat/service.ts）
 
-`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`、`dsh.status`、`dsh.activity`、`dsh.event`、`dsh.approval`、`dsh.approval.resolved`、`learning.proposed`、`learning.approved`、`learning.rejected`、`learning.rolledback`。
+`session.updated`、`session.deleted`、`chat.user_message`、`chat.assistant_message`、`chat.failed`、`chat.tool`、`chat.handoff`、`persona.changed`、`memory.changed`、`memory.distilled`、`voice.speech`、`asr.download`、`asr.transcribed`、`asr.segment`、`asr.wake`、`mood.changed`、`reminder.created`、`reminder.due`、`reminder.snoozed`、`reminder.cancelled`、`reminder.skipped`、`automation.job.created`、`automation.job.updated`、`automation.job.deleted`、`automation.run.started`、`automation.run.succeeded`、`automation.run.failed`、`automation.run.cancelled`、`automation.skipped`、`plugin.changed`、`cua.permission`、`run.paused`、`run.resumed`、`approval.requested`、`approval.resolved`、`hooks.assessed`、`hooks.blocked`、`hooks.changed`、`presence.activity`、`agent.rollback`、`dsh.status`、`dsh.activity`、`dsh.event`、`dsh.approval`、`dsh.approval.resolved`、`learning.proposed`、`learning.approved`、`learning.rejected`、`learning.rolledback`。
 对未知事件忽略即可（Lead 会持续加）。
 
 ### 错误码
@@ -205,7 +205,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 - 搜索：`memory.glob {pattern}`、`memory.grep {match, regex?, path?}`（做全工作区搜索框很好用）。
 - 历史：`memory.history {path?, limit?}` → `{commits: [{hash, fullHash, author, email, date, message}]}`；`memory.diff {hash, path?}` → `{diff}`（纯文本 patch，直接等宽展示）。
 - 恢复：`memory.restore {path, hash, expectedContentHash?, force?}` → 把该提交里的文件内容写回工作区并生成**一次新提交**（不改写历史）；历史里没有该文件 → `E_NOT_FOUND`；`PARTNER.md` 允许恢复正文。
-- 蒸馏记忆：工作区 `memory/` 下是程序维护的三层长期记忆——`memory/facts.md`（永久事实表格：事实/权重/标签/出现/最近）、`memory/diary/<日期>.md`（一天一篇日记）、`memory/medium/<日期>-<会话>.md`（会话摘要，可带 `date/session/turns` frontmatter）、`memory/experiences.md`（经验候选）。`memory.inject`（read，无参数）返回 `{enabled, text, used:{facts,diary,medium}, dropped:{facts,diary,medium}}`：`text` 就是下一轮聊天会注入的正文，适合做「它现在记得什么」的预览；目录树里它们和普通文件一样可读写（表格行可直接编辑）。
+- 蒸馏记忆：工作区 `memory/` 下是程序维护的三层长期记忆——`memory/facts.md`（永久事实表格：事实/权重/标签/出现/最近）、`memory/diary/<日期>.md`（一天一篇日记）、`memory/medium/<日期>-<会话>.md`（会话摘要，可带 `date/session/turns` frontmatter）、`memory/experiences.md`（经验候选）。`memory.inject`（read，无参数）返回 `{enabled, text, used:{facts,diary,medium}, dropped:{facts,diary,medium}}`：`text` 就是下一轮聊天会注入的正文，适合做「它现在记得什么」的预览；目录树里它们和普通文件一样可读写（表格行可直接编辑）。`memory.distill {sessionId?, reason?}`（write）会花一次模型调用，把某个会话整理成摘要/日记/事实/经验；`chat.handoff` 之后会自动跑（可关），成功后广播 `memory.distilled`。
 - 附件：`blob.list`、`blob.put {dataBase64, name?, mime?}`（≤8MB，返回句柄 `blob:<文件名>`）、`blob.info {ref}`、`blob.get {ref}` → `{meta, dataBase64}`、`blob.delete {ref}`。
 
 **关键交互（别漏）**
@@ -217,7 +217,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
    - **列表缩略图不要每次走 WS 传整份 base64**：pet-ui 主进程和 petd 在同一台机器上，`memory.status` 会给 `workspace` 绝对路径，附件真实路径 = `<workspace>/blobs/<meta.name>`；主进程可直接用 Electron `nativeImage.createThumbnailFromPath(absPath, {width:256,height:256})`（或 `createFromPath` + `resize`）生成缩略图，缓存键用 `meta.sha256`（内容寻址，不会变）。渲染层只拿小图 dataURL。
    - 音频/视频（`kind` 为 `audio/video`）可以直接用 file:// 打开系统播放器或 `<audio>`/`<video>` 标签，注意 CSP 设置。
 5. **一键回到某版本**：历史页选中某次提交 → 展示 diff → 提供「恢复此版本内容」（调 `memory.restore {path, hash}`；后端会写回内容并生成一次新提交，历史只增不减）。
-6. **蒸馏记忆预览**（可选但推荐）：在 Memory 面板加一个「它记得什么」小节，调 `memory.inject` 展示注入正文与 `used/dropped` 计数（超预算被丢掉的条数），旁边解释 `config.memory.inject` 的预算与三层顺序；只读展示，不要在这里提供「让 AI 自己改记忆」的入口。
+6. **蒸馏记忆预览**（可选但推荐）：在 Memory 面板加一个「它记得什么」小节，调 `memory.inject` 展示注入正文与 `used/dropped` 计数（超预算被丢掉的条数），旁边解释 `config.memory.inject` 的预算与三层顺序；只读展示，不要在这里提供「让 AI 自己改记忆」的入口。可以加一个「整理一下这段对话」按钮调 `memory.distill`（会花 token，要二次确认），完成后刷新 `memory/` 目录树。
 
 **验收**：能浏览/编辑/新建/删除记忆文件；冲突提示与双按钮；`memory.changed` 触发树刷新；历史列表 + diff + 恢复；附件列表/预览/上传/删除；能看蒸馏记忆预览（`memory.inject`）。截图贴 README。
 

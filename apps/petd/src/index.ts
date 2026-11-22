@@ -46,6 +46,7 @@ import { registerAsrMethods } from './gateway/methods/asr.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
 import { buildDistilledContext } from './memory/distill.js';
+import { MemoryDistiller } from './memory/distill-runner.js';
 import { MoodStore } from './state/mood.js';
 import { registerMoodMethods } from './gateway/methods/mood.js';
 import { ReminderStore } from './reminders/store.js';
@@ -297,6 +298,17 @@ async function main(): Promise<void> {
   });
 
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
+
+  // ── 自动蒸馏：把会话整理成摘要/日记/事实/经验（旧桌宠记忆层第二步）；只在手动/交接后触发 ──
+  const distiller = new MemoryDistiller({
+    memory,
+    memoryService,
+    llm,
+    chatStore: store,
+    config: () => config.memory.distill,
+    logger,
+    publish: (event, data) => publishEvent(event, data),
+  });
 
   // ── 电脑操作（CUA）：看屏幕 + 动鼠标键盘；默认关闭；权限门 + 暂停门 + 用户让位 ──
   // 平台不是 Windows 时 enabled 为 false；v1 直接跑在 petd 进程里（koffi），子进程隔离留后续。
@@ -604,10 +616,19 @@ async function main(): Promise<void> {
     gateway,
     getConfig: () => config,
   });
-  registerChatMethods(registry, { chat });
+  registerChatMethods(registry, {
+    chat,
+    distillAfterHandoff: (sessionId) => {
+      if (!config.memory.distill.enabled || !config.memory.distill.autoOnHandoff) return;
+      void distiller
+        .run({ sessionId, reason: 'handoff' })
+        .catch((err: unknown) => logger.warn('交接后自动蒸馏失败', { error: err instanceof Error ? err.message : String(err) }));
+    },
+  });
   registerMemoryMethods(registry, {
     memory: memoryService,
     inject: () => buildDistilledContext(memory, config.memory.inject),
+    distill: distiller,
   });
   registerBlobMethods(registry, { blobs });
   registerVoiceMethods(registry, { voice });
