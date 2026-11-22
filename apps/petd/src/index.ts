@@ -45,6 +45,7 @@ import { AsrService } from './asr/service.js';
 import { registerAsrMethods } from './gateway/methods/asr.js';
 import { MemoryToolbox } from './chat/tools.js';
 import { buildChatSystemPrompt } from './memory/prefix.js';
+import { buildDistilledContext } from './memory/distill.js';
 import { MoodStore } from './state/mood.js';
 import { registerMoodMethods } from './gateway/methods/mood.js';
 import { ReminderStore } from './reminders/store.js';
@@ -419,7 +420,10 @@ async function main(): Promise<void> {
     llm,
     chat: config.chat,
     publish: (event, data) => publishEvent(event, data),
-    systemPrompt: () => buildChatSystemPrompt(memory, personaStore.read().content),
+    systemPrompt: () =>
+      buildChatSystemPrompt(memory, personaStore.read().content, {
+        distilled: config.memory.inject.enabled ? buildDistilledContext(memory, config.memory.inject).text : '',
+      }),
     // 情绪只给「行为指导」，不把数字写进提示词；关闭注入时返回空串
     moodPrompt: () => (config.mood.enabled && config.mood.chatInjection ? mood.prompt() : ''),
     // 技能清单/常驻技能正文 + 启用插件的 prompt.md；对应开关关闭时返回空串
@@ -601,7 +605,10 @@ async function main(): Promise<void> {
     getConfig: () => config,
   });
   registerChatMethods(registry, { chat });
-  registerMemoryMethods(registry, { memory: memoryService });
+  registerMemoryMethods(registry, {
+    memory: memoryService,
+    inject: () => buildDistilledContext(memory, config.memory.inject),
+  });
   registerBlobMethods(registry, { blobs });
   registerVoiceMethods(registry, { voice });
   registerAsrMethods(registry, { asr });
