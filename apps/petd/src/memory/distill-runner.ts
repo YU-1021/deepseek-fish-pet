@@ -6,10 +6,14 @@
  *   - 只写 AI 可写的数据区（workspace/**），每个文件都走 MemoryService（自动 Git 提交 + memory.changed 事件）；
  *   - 事实按「权重 + 相似合并 + 出现次数」累积，不按时间淘汰；
  *   - 日记一天一篇，重复蒸馏只追加、不覆盖（手写内容不会被吃）；
- *   - 经验只登记成候选，转正必须走 learning 审批（第三步），这里绝不自己批准。
+ *   - 经验只登记成候选；达到阈值时提名成 learning 学习提案（第三步），转正必须主人批准，这里绝不自己批准。
  */
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { PetdError } from '@petd/protocol';
 import type { PetdConfig } from '../kernel/config.js';
+import type { LearningService } from '../learning/service.js';
 import type { LlmClient } from '../llm/client.js';
 import type { ChatStore, Session } from '../chat/store.js';
 import type { MemoryService } from './service.js';
@@ -38,6 +42,10 @@ export interface MemoryDistillerOptions {
   llm?: LlmClient | null;
   chatStore?: Pick<ChatStore, 'get' | 'list'> | null;
   config: () => PetdConfig['memory']['distill'];
+  /** 学习闭环：经验达阈值时提名成候选（只写候选，人批准才生效） */
+  learning?: Pick<LearningService, 'propose'> | null;
+  /** petd home（提名去重状态存 state/experience-promotions.json） */
+  home?: string;
   logger?: MemoryDistillerLogger;
   now?: () => Date;
   publish?: (event: string, data: unknown) => void;
@@ -57,6 +65,8 @@ export interface DistillRunResult {
   turns: number;
   skipped?: 'too-short' | 'empty';
   files: DistillFiles;
+  /** 本次新提名成 learning 候选的经验条数（只提名，不批准） */
+  promoted?: number;
   usage?: { promptTokens?: number; completionTokens?: number };
 }
 
@@ -65,7 +75,7 @@ export interface DistillStatus {
   hasLlm: boolean;
   lastRunAt?: string;
   lastError?: string;
-  counters: { runs: number; factsAdded: number; factsMerged: number; experiencesAdded: number };
+  counters: { runs: number; factsAdded: number; factsMerged: number; experiencesAdded: number; promotions: number };
 }
 
 interface DistilledPayload {
@@ -259,10 +269,12 @@ export class MemoryDistiller {
   private readonly llm: LlmClient | null;
   private readonly chatStore: Pick<ChatStore, 'get' | 'list'> | null;
   private readonly config: () => PetdConfig['memory']['distill'];
+  private readonly learning: Pick<LearningService, 'propose'> | null;
+  private readonly promotionsFile: string | null;
   private readonly logger: MemoryDistillerLogger;
   private readonly now: () => Date;
   private readonly publish?: (event: string, data: unknown) => void;
-  private readonly counters = { runs: 0, factsAdded: 0, factsMerged: 0, experiencesAdded: 0 };
+  private readonly counters = { runs: 0, factsAdded: 0, factsMerged: 0, experiencesAdded: 0, promotions: 0 };
   private lastRunAt?: string;
   private lastError?: string;
 
@@ -272,6 +284,8 @@ export class MemoryDistiller {
     this.llm = options.llm ?? null;
     this.chatStore = options.chatStore ?? null;
     this.config = options.config;
+    this.learning = options.learning ?? null;
+    this.promotionsFile = options.home ? path.join(options.home, 'state', 'experience-promotions.json') : null;
     this.logger = options.logger ?? {};
     this.now = options.now ?? (() => new Date());
     this.publish = options.publish;
@@ -382,6 +396,12 @@ export class MemoryDistiller {
       const written = await this.memoryService.write(EXPERIENCES_FILE, renderExperiences(merged.entries));
       files.experiences = { path: EXPERIENCES_FILE, commit: written.commit ?? null, ...merged.stats };
       this.counters.experiencesAdded += merged.stats.added;
+      // 第三步：够格的经验提名成学习候选（只写候选，人批准后才生效）
+      const promoted = this.promoteExperiences(merged.entries);
+      if (promoted > 0) {
+        this.counters.promotions += promoted;
+        result.promoted = promoted;
+      }
     }
 
     this.counters.runs += 1;
@@ -420,6 +440,71 @@ export class MemoryDistiller {
       return this.memory.readFile(relPath);
     } catch {
       return '';
+    }
+  }
+
+  /**
+   * 经验候选达阈值 → 提名成 learning 学习提案（kind='prompt'，绝不自己批准）。
+   * 去重状态存在 home/state/experience-promotions.json：同一条经验只提名一次。
+   */
+  private promoteExperiences(entries: ReadonlyArray<FactEntry>): number {
+    const cfg = this.config();
+    if (!cfg.promoteExperiences || !this.learning) return 0;
+    const minWeight = Math.min(10, Math.max(1, cfg.promoteWeight));
+    const minHits = Math.max(1, cfg.promoteHits);
+    const state = this.readPromotions();
+    let promoted = 0;
+    for (const entry of entries) {
+      if (entry.weight < minWeight || entry.hits < minHits) continue;
+      const text = entry.text.trim();
+      if (!text) continue;
+      const key = createHash('sha256').update(text).digest('hex').slice(0, 32);
+      if (state[key]) continue;
+      try {
+        const proposal = this.learning.propose({
+          kind: 'prompt',
+          name: `从对话里学到的做法：${text.slice(0, 16)}`,
+          content: text,
+          reason: `经验候选达到阈值（权重 ${entry.weight}，出现 ${entry.hits} 次）自动提名，主人批准后才生效`,
+        });
+        state[key] = { id: proposal.id, at: this.now().toISOString() };
+        promoted += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn?.('经验提名失败', { text: text.slice(0, 40), error: message });
+      }
+    }
+    if (promoted > 0) this.writePromotions(state);
+    return promoted;
+  }
+
+  private readPromotions(): Record<string, { id: string; at: string }> {
+    if (!this.promotionsFile) return {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.promotionsFile, 'utf8')) as unknown;
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+      const out: Record<string, { id: string; at: string }> = {};
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+        const v = value as Record<string, unknown>;
+        out[key] = { id: String(v['id'] ?? ''), at: String(v['at'] ?? '') };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private writePromotions(state: Record<string, { id: string; at: string }>): void {
+    if (!this.promotionsFile) return;
+    try {
+      fs.mkdirSync(path.dirname(this.promotionsFile), { recursive: true });
+      const tmp = `${this.promotionsFile}.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      fs.renameSync(tmp, this.promotionsFile);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn?.('写经验提名状态失败', { error: message });
     }
   }
 }
