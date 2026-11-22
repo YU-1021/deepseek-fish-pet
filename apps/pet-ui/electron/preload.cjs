@@ -21,4 +21,12 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
     ipcRenderer.on('pet:cua-permission', listener);
     return () => ipcRenderer.removeListener('pet:cua-permission', listener);
   },
+  openDshApprovalWindow: (approval) => ipcRenderer.invoke('pet:dsh-approval-open', approval),
+  readDshApproval: () => ipcRenderer.invoke('pet:dsh-approval-read'),
+  clearDshApproval: (id) => ipcRenderer.invoke('pet:dsh-approval-clear', id),
+  onDshApproval: (callback) => {
+    const listener = (_event, approval) => callback(approval);
+    ipcRenderer.on('pet:dsh-approval', listener);
+    return () => ipcRenderer.removeListener('pet:dsh-approval', listener);
+  },
 });

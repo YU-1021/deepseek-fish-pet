@@ -5,6 +5,7 @@ import { request, subscribeEvents, usePetdStatus } from './petd';
 import { MoodSettingsPanel } from './mood-panel';
 import { ReminderCoordinator } from './reminder-panel';
 import { CuaPermissionOverlay } from './cua-panel';
+import { DshApprovalOverlay } from './dsh-panel';
 import './voice-chat.css';
 import { ApprovalCoordinator, ApprovalOverlay } from './hooks-panel';
 import { useMoodNumberPreference, useMoodState } from './mood';
@@ -82,7 +83,7 @@ export function App() {
     return () => { unsubscribe(); };
   }, []);
   if (new URLSearchParams(window.location.search).has('pet')) return <PetOverlay />;
-  if (new URLSearchParams(window.location.search).has('approval')) return <div className="approval-window-root"><ApprovalOverlay/><CuaPermissionOverlay/></div>;
+  if (new URLSearchParams(window.location.search).has('approval')) return <div className="approval-window-root"><ApprovalOverlay/><CuaPermissionOverlay/><DshApprovalOverlay/></div>;
 
   async function loadSessions(preferred?: string) {
     const result = await request('session.list', {}) as { sessions: Session[] };

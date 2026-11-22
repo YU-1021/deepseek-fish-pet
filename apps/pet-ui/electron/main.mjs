@@ -9,6 +9,7 @@ let mainWindow;
 let petWindow;
 let approvalWindow;
 let cuaPermission;
+let dshApproval;
 let tray;
 let memoryWorkspace;
 const thumbnailCache = new Map();
@@ -101,6 +102,23 @@ ipcMain.handle('pet:cua-permission-clear', (event, id) => {
     cuaPermission = undefined;
     approvalWindow?.webContents.send('pet:cua-permission', null);
     mainWindow?.webContents.send('pet:cua-permission', null);
+  }
+  return true;
+});
+ipcMain.handle('pet:dsh-approval-open', (event, approval) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  dshApproval = approval && typeof approval.id === 'string' ? approval : undefined;
+  if (!approvalWindow || approvalWindow.isDestroyed()) createApprovalWindow();
+  else { approvalWindow.webContents.send('pet:dsh-approval', dshApproval); approvalWindow.showInactive(); }
+  return true;
+});
+ipcMain.handle('pet:dsh-approval-read', (event) => event.sender === approvalWindow?.webContents ? dshApproval ?? null : null);
+ipcMain.handle('pet:dsh-approval-clear', (event, id) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  if (!id || dshApproval?.id === id) {
+    dshApproval = undefined;
+    approvalWindow?.webContents.send('pet:dsh-approval', null);
+    mainWindow?.webContents.send('pet:dsh-approval', null);
   }
   return true;
 });

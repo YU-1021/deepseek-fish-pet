@@ -39,6 +39,9 @@ let mockSkills = [
 let mockPlugins = [{ id: 'demo-companion', name: '伙伴小工具', version: '1.0.0', description: '示例插件，提供一个轻量规划技能。', author: 'mock', dir: 'mock://plugins/demo-companion', enabled: true, skillCount: 1, hasPrompt: true }];
 const cuaConfig = { enabled: process.env.MOCK_CUA_ENABLED === 'true', control: true, permission: 'ask-once', grantMinutes: 30, skipTerminalAsk: false, screenshot: { maxWidth: 1280, maxHeight: 800, quality: 75, afterAction: true }, includeImages: false };
 let runPaused = false;
+const dshConfig = { enabled: true, observe: true, exePath: 'mock://DeepSeek Harness.exe', cliPath: '', cwd: '', provider: 'mock', model: 'mock-model', reasoningEffort: 'medium', maxTokens: 4096, approvalPolicy: 'reject', askTimeoutMs: 120000, observeIntervalMs: 1500, activeMs: 15000 };
+let dshRuntimeRunning = false;
+let dshMockState = { sessionId: 'mock-dsh-session', workspace: 'F:\\DSH\\demo', workspaceRaw: '--F-DSH-demo--', file: 'mock-session.v4.jsonl.zstd', mtimeMs: Date.now(), size: 1024, state: 'idle', active: false, turn: null, step: null, tool: null, lastText: null, lastEventType: null, updatedAt: Date.now(), events: 5 };
 const mockAuditScope = { scope: 'AI 只写 home/skills 与 memory 中允许的动态内容（模拟）', memoryZone: 'memory', zones: ['*.agent.md', '*.agent.json', 'memory/'], auditFile: 'mock://state/agent-audit.jsonl' };
 let mockAuditEntries = [{ id: 'mock-audit-1', ts: new Date().toISOString(), actor: 'agent', action: 'write', path: 'SOUL.agent.md', zone: 'agent-file', reason: '根据最近相处经历微调表达方式', before: { hash: 'before-hash', bytes: 20, text: '## 说话方式\n简洁温柔。' }, after: { hash: 'after-hash', bytes: 25, text: '## 说话方式\n简洁温柔，偶尔俏皮。' }, diff: ' ## 说话方式\n-简洁温柔。\n+简洁温柔，偶尔俏皮。', diffChars: 5 }];
 
@@ -130,15 +133,16 @@ function handleMessage(socket, message) {
       publishEvent('approval.requested', pending);
     }, 800);
     if (process.env.MOCK_CUA_PERMISSION === 'true') setTimeout(() => publishEvent('cua.permission', { id: `mock-permission-${Date.now()}`, kind: 'act', question: '示例任务请求在当前窗口中点击一个按钮。', deadlineAt: Date.now() + 60000 }), 1200);
+    if (process.env.MOCK_DSH_APPROVAL === 'true') setTimeout(() => publishEvent('dsh.approval', { id: `mock-dsh-approval-${Date.now()}`, sessionId: 'mock-private-session', toolName: 'Bash', reason: '该命令会修改工作区文件。', at: Date.now() }), 1600);
     return;
   }
   if (input.type !== 'req') return;
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable', 'cua.status', 'cua.screenshot', 'cua.answer', 'run.status', 'run.pause', 'run.resume', 'agent.scope', 'agent.audit.list', 'agent.audit.get', 'agent.rollback'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable', 'cua.status', 'cua.screenshot', 'cua.answer', 'run.status', 'run.pause', 'run.resume', 'agent.scope', 'agent.audit.list', 'agent.audit.get', 'agent.rollback', 'dsh.status', 'dsh.observe', 'dsh.start', 'dsh.stop', 'dsh.prompt', 'dsh.ask', 'dsh.approval.answer'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig }, cua: { ...cuaConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig }, cua: { ...cuaConfig }, dsh: { ...dshConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -334,6 +338,22 @@ function handleMessage(socket, message) {
     if (!target) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '记录不存在' } }); return; }
     const entry = { id: `mock-audit-${Date.now()}`, ts: new Date().toISOString(), actor: 'user', action: 'rollback', path: target.path, zone: target.zone, reason: '通过 pet-ui 回滚', before: target.after, after: target.before, diff: target.diff, diffChars: target.diffChars };
     mockAuditEntries.unshift(entry); data = { path: target.path, restored: target.before ? 'content' : 'deleted', entry: { ...entry, before: undefined, after: undefined, diff: undefined } }; publishEvent('agent.rollback', { id: entry.id, targetId: target.id, path: target.path, restored: data.restored });
+  } else if (input.method === 'dsh.status' || input.method === 'dsh.observe') {
+    const observer = { enabled: dshConfig.observe, sessionsDir: 'mock://sessions', scanning: false, scannedAt: Date.now(), session: dshMockState, error: null };
+    if (input.method === 'dsh.observe') data = observer;
+    else data = { enabled: dshConfig.enabled, observe: dshConfig.observe, started: dshRuntimeRunning, runtime: dshRuntimeRunning ? { running: true, pid: process.pid, provider: 'mock', model: dshConfig.model, cwd: dshConfig.cwd, serverInfo: { name: 'mock', version: '1' }, startedAt: Date.now(), lastExitCode: null } : null, observer, paths: { exePath: dshConfig.exePath, cliPath: dshConfig.cliPath, cwd: dshConfig.cwd, sessionsDir: observer.sessionsDir }, counters: { prompts: 0, asks: 0, errors: 0 }, lastError: null, lastPromptAt: null, pendingApprovals: 0 };
+  } else if (input.method === 'dsh.start') {
+    if (!dshConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: 'DSH 桥已关闭' } }); return; }
+    dshRuntimeRunning = true; data = { started: true, runtime: { running: true, pid: process.pid, provider: 'mock', model: dshConfig.model, cwd: dshConfig.cwd, serverInfo: { name: 'mock', version: '1' }, startedAt: Date.now(), lastExitCode: null } }; publishEvent('dsh.status', { runtime: 'started', at: Date.now() });
+  } else if (input.method === 'dsh.stop') {
+    dshRuntimeRunning = false; data = { stopped: true }; publishEvent('dsh.status', { runtime: 'exited', at: Date.now() });
+  } else if (input.method === 'dsh.ask' || input.method === 'dsh.prompt') {
+    if (!dshConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: 'DSH 桥已关闭' } }); return; }
+    dshRuntimeRunning = true; const task = String(input.params?.text ?? '');
+    if (input.method === 'dsh.ask') { dshMockState = { ...dshMockState, state: 'thinking', active: true, updatedAt: Date.now(), lastText: task.slice(0, 120) }; publishEvent('dsh.activity', dshMockState); data = { text: `模拟 DSH 回答：已处理“${task.slice(0, 120)}”`, sessionId: 'mock-private-session', turn: 1, durationMs: 900 }; dshMockState = { ...dshMockState, state: 'idle', active: false, updatedAt: Date.now() }; publishEvent('dsh.activity', dshMockState); }
+    else data = { sessionId: 'mock-private-session', messageId: `mock-message-${Date.now()}` };
+  } else if (input.method === 'dsh.approval.answer') {
+    data = { resolved: true }; publishEvent('dsh.approval.resolved', { id: input.params?.id, outcome: input.params?.outcome });
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

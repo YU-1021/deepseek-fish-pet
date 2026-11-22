@@ -24,6 +24,7 @@ export function ApprovalCoordinator() {
   const connection = usePetdStatus();
   const [assessmentNotice, setAssessmentNotice] = useState('');
   const cuaPending = useRef(false);
+  const dshPending = useRef(false);
   useEffect(() => {
     if (connection.state !== 'connected') return;
     let live = true;
@@ -34,6 +35,7 @@ export function ApprovalCoordinator() {
     const unsubscribe = subscribeEvents((frame) => {
       if (frame.event === 'approval.requested') void window.petdBootstrap?.openApprovalWindow?.();
       if (frame.event === 'cua.permission') { cuaPending.current = true; void window.petdBootstrap?.openCuaPermissionWindow?.(frame.data); }
+      if (frame.event === 'dsh.approval') { dshPending.current = true; void window.petdBootstrap?.openDshApprovalWindow?.(frame.data); }
       if (frame.event === 'hooks.assessed') {
         const data = frame.data ?? {};
         if (data.risk === 'low' || data.risk === 'medium') {
@@ -49,12 +51,13 @@ export function ApprovalCoordinator() {
       if (frame.event === 'approval.resolved') window.setTimeout(() => {
         if (!live) return;
         void request('approval.list', {}).then((result) => {
-          if (!result.pending.length && !cuaPending.current) window.setTimeout(() => { if (live && !cuaPending.current) void window.petdBootstrap?.closeApprovalWindow?.(); }, 4500);
+          if (!result.pending.length && !cuaPending.current && !dshPending.current) window.setTimeout(() => { if (live && !cuaPending.current && !dshPending.current) void window.petdBootstrap?.closeApprovalWindow?.(); }, 4500);
         }).catch(() => {});
       }, 100);
     });
     const removePermissionListener = window.petdBootstrap?.onCuaPermission?.((permission) => { cuaPending.current = !!permission; });
-    return () => { live = false; unsubscribe(); removePermissionListener?.(); };
+    const removeDshListener = window.petdBootstrap?.onDshApproval?.((approval) => { dshPending.current = !!approval; });
+    return () => { live = false; unsubscribe(); removePermissionListener?.(); removeDshListener?.(); };
   }, [connection.state]);
   return assessmentNotice ? <div className="hooks-toast" role="status">{assessmentNotice}</div> : null;
 }

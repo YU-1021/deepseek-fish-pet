@@ -23,8 +23,8 @@ export function CuaPermissionOverlay() {
     setNotice('没来得及回答，已拒绝。'); setPermission(null);
     void window.petdBootstrap?.clearCuaPermission?.(expired.id);
     const timer = window.setTimeout(async () => {
-      try { const pending = await request('approval.list', {}); if (!pending.pending.length) await window.petdBootstrap?.closeApprovalWindow?.(); }
-      catch { await window.petdBootstrap?.closeApprovalWindow?.(); }
+      try { const [pending, dshPending] = await Promise.all([request('approval.list', {}), window.petdBootstrap?.readDshApproval?.()]); if (!pending.pending.length && !dshPending) await window.petdBootstrap?.closeApprovalWindow?.(); }
+      catch { if (!await window.petdBootstrap?.readDshApproval?.()) await window.petdBootstrap?.closeApprovalWindow?.(); }
     }, 4500);
     return () => window.clearTimeout(timer);
   }, [permission?.id, now]);
@@ -38,8 +38,8 @@ export function CuaPermissionOverlay() {
       setPermission(null);
       if (result.found === false) setNotice('这条授权已超时。');
       window.setTimeout(async () => {
-        try { const pending = await request('approval.list', {}); if (!pending.pending.length) await window.petdBootstrap?.closeApprovalWindow?.(); }
-        catch { await window.petdBootstrap?.closeApprovalWindow?.(); }
+        try { const [pending, dshPending] = await Promise.all([request('approval.list', {}), window.petdBootstrap?.readDshApproval?.()]); if (!pending.pending.length && !dshPending) await window.petdBootstrap?.closeApprovalWindow?.(); }
+        catch { if (!await window.petdBootstrap?.readDshApproval?.()) await window.petdBootstrap?.closeApprovalWindow?.(); }
       }, 4500);
     } catch (cause) { setNotice(errorText(cause)); }
     finally { setBusy(false); }
