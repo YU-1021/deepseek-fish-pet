@@ -9,6 +9,7 @@
  *   node scripts/memory-smoke.mjs --home D:\x  # 保留 home 便于检查工作区与 .git
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -81,7 +82,20 @@ function makeClient(ws) {
   const events = [];
   ws.on('message', (raw) => {
     const f = JSON.parse(raw.toString());
-    if (f.type === 'event') events.push(f);
+    if (f.type === 'event') {
+      events.push(f);
+      // 删/移是内置审批规则（ask），冒烟里自动「允许并记住」，否则会等人工审批超时。
+      if (f.event === 'approval.requested' && f.data && typeof f.data.id === 'string') {
+        ws.send(
+          JSON.stringify({
+            type: 'req',
+            id: 'smoke-approve-' + f.data.id,
+            method: 'approval.answer',
+            params: { id: f.data.id, accepted: true, remember: true },
+          })
+        );
+      }
+    }
     for (let i = waiters.length - 1; i >= 0; i -= 1) {
       const w = waiters[i];
       if (w.match(f)) {
@@ -215,6 +229,60 @@ try {
 
   const diff = await call(ws, client, 'memory.diff', { hash: wrote.data.commit, path: 'partner/偏好.md' });
   check(diff.ok && diff.data.diff.includes('+主人喜欢安静的环境'), 'memory.diff 能看到新增内容');
+
+  // pet-ui 契约：workspace 绝对路径 + expectedContentHash 并发 + memory.changed 形状 + 按版本恢复
+  check(path.resolve(status.data.workspace) === path.resolve(workspace), 'status.workspace 是工作区绝对路径');
+  const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+
+  const current = await call(ws, client, 'memory.read', { path: 'partner/偏好.md' });
+  const baseHash = sha256(current.data.content);
+  const hashed = await call(ws, client, 'memory.write', {
+    path: 'partner/偏好.md',
+    content: '主人喜欢安静，深夜会听雨声。',
+    expectedContentHash: baseHash,
+  });
+  check(hashed.ok, 'expectedContentHash 匹配时允许写入');
+
+  const beforeConflict = await call(ws, client, 'memory.history', { limit: 20 });
+  const conflict = await call(ws, client, 'memory.write', {
+    path: 'partner/偏好.md',
+    content: '这一版应该被拒绝。',
+    expectedContentHash: baseHash,
+  });
+  check(conflict.ok === false && conflict.error.code === 'E_CONFLICT', '过期 expectedContentHash → E_CONFLICT');
+  check(
+    conflict.error.details && typeof conflict.error.details.currentContentHash === 'string',
+    '冲突里带 currentContentHash 供 UI 提示'
+  );
+  const afterConflict = await call(ws, client, 'memory.read', { path: 'partner/偏好.md' });
+  check(afterConflict.data.content === '主人喜欢安静，深夜会听雨声。', '冲突时文件没有被覆盖');
+  const historyAfterConflict = await call(ws, client, 'memory.history', { limit: 20 });
+  check(historyAfterConflict.data.commits.length === beforeConflict.data.commits.length, '冲突时不产生新提交');
+
+  const forced = await call(ws, client, 'memory.write', {
+    path: 'partner/偏好.md',
+    content: 'force 覆盖后的内容。',
+    expectedContentHash: baseHash,
+    force: true,
+  });
+  check(forced.ok, 'force=true 时允许强制覆盖');
+
+  const restored = await call(ws, client, 'memory.restore', {
+    path: 'partner/偏好.md',
+    hash: wrote.data.commit,
+  });
+  check(restored.ok && typeof restored.data.commit === 'string', 'memory.restore 生成新提交');
+  check(restored.data.commit !== wrote.data.commit, 'restore 是新提交而不是改写历史');
+  const restoredRead = await call(ws, client, 'memory.read', { path: 'partner/偏好.md' });
+  check(restoredRead.data.content.includes('写代码时不要一直说话'), 'restore 把正文恢复到该版本');
+
+  const changedEvents = client.events.filter((e) => e.event === 'memory.changed');
+  check(changedEvents.some((e) => e.data.operation === 'write'), 'memory.changed 带 operation=write');
+  check(changedEvents.some((e) => e.data.operation === 'restore'), 'memory.changed 带 operation=restore');
+  check(
+    changedEvents.filter((e) => e.data.operation === 'write').every((e) => 'commit' in e.data),
+    'memory.changed 带 commit 字段'
+  );
 
   // 移动 / 删除
   const moved = await call(ws, client, 'memory.move', { from: 'partner/偏好.md', to: 'archive/偏好.md' });

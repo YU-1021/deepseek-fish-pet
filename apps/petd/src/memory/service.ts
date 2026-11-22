@@ -30,6 +30,11 @@ export function contentRevision(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 32);
 }
 
+/** 文件内容的完整 SHA-256（小写 hex），pet-ui 编辑器保存时用作 expectedContentHash。 */
+export function contentHash(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
 export interface MemoryReadResult {
   path: string;
   content: string;
@@ -52,6 +57,20 @@ export interface MemoryWriteOptions {
    * 文件不存在时传空字符串表示「新建」；不传则不做检查（整份覆盖）。
    */
   baseRevision?: string;
+  /**
+   * pet-ui 契约：客户端编辑基线正文的完整 SHA-256（小写 hex）。
+   * 与实际当前内容不一致且 force !== true → E_CONFLICT，不写文件、不建提交。
+   * 文件不存在时按空内容（sha256('')）比较。
+   */
+  expectedContentHash?: string;
+  /** 用户在冲突提示里明确选择「覆盖」时传 true。 */
+  force?: boolean;
+}
+
+export interface MemoryRestoreOptions {
+  /** 与 memory.write 相同的冲突语义：不一致且非 force → E_CONFLICT。 */
+  expectedContentHash?: string;
+  force?: boolean;
 }
 
 export interface MemoryGrepHit {
@@ -62,6 +81,8 @@ export interface MemoryGrepHit {
 
 export interface MemoryServiceStatus {
   dir: string;
+  /** 工作区绝对路径（pet-ui 主进程用它定位 blobs/ 下的真实附件文件）。 */
+  workspace: string;
   fileCount: number;
   git: GitStatus;
 }
@@ -104,7 +125,12 @@ export class MemoryService {
   }
 
   status(): MemoryServiceStatus {
-    return { dir: this.memory.dir, fileCount: this.memory.walkFiles('').length, git: this.git.status() };
+    return {
+      dir: this.memory.dir,
+      workspace: this.memory.dir,
+      fileCount: this.memory.walkFiles('').length,
+      git: this.git.status(),
+    };
   }
 
   tree(): string {
@@ -139,25 +165,43 @@ export class MemoryService {
     });
   }
 
+  /** 当前文件内容的完整 SHA-256；文件不存在时按空内容算。 */
+  contentHashOf(relPath: string): string {
+    const p = assertNonEmptyPath(relPath);
+    return contentHash(this.memory.exists(p) ? this.memory.readFile(p) : '');
+  }
+
+  private checkExpectedHash(relPath: string, expected: string | undefined, force: boolean | undefined): void {
+    if (expected === undefined || force === true) return;
+    const current = this.contentHashOf(relPath);
+    if (current === expected.toLowerCase()) return;
+    throw new PetdError('E_CONFLICT', `${this.memory.normalize(relPath)} 已被别处改动，请刷新后再保存`, {
+      currentContentHash: current,
+      expectedContentHash: expected,
+    });
+  }
+
   async write(relPath: string, content: string, opts: MemoryWriteOptions = {}): Promise<MemoryWriteResult> {
     const p = assertNonEmptyPath(relPath);
     this.checkBaseRevision(p, opts.baseRevision);
+    this.checkExpectedHash(p, opts.expectedContentHash, opts.force);
     this.memory.writeFileAtomic(p, content);
     const normalized = this.memory.normalize(p);
     const revision = contentRevision(content);
     const commit = await this.commit(`petd wrote ${normalized}`);
-    this.publish?.('memory.changed', { path: normalized, kind: 'write', revision });
+    this.publish?.('memory.changed', { operation: 'write', kind: 'write', path: normalized, revision, commit });
     return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), revision, commit };
   }
 
   async append(relPath: string, content: string, opts: MemoryWriteOptions = {}): Promise<MemoryWriteResult> {
     const p = assertNonEmptyPath(relPath);
     this.checkBaseRevision(p, opts.baseRevision);
+    this.checkExpectedHash(p, opts.expectedContentHash, opts.force);
     this.memory.appendFile(p, content);
     const normalized = this.memory.normalize(p);
     const revision = contentRevision(this.memory.readFile(p));
     const commit = await this.commit(`petd appended to ${normalized}`);
-    this.publish?.('memory.changed', { path: normalized, kind: 'append', revision });
+    this.publish?.('memory.changed', { operation: 'append', kind: 'append', path: normalized, revision, commit });
     return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), revision, commit };
   }
 
@@ -167,8 +211,9 @@ export class MemoryService {
     this.memory.deleteFile(p);
     this.memory.pruneEmptyDirs(p);
     const path = this.memory.normalize(p);
-    this.publish?.('memory.changed', { path, kind: 'delete' });
-    return { path, commit: await this.commit(`petd deleted ${path}`) };
+    const commit = await this.commit(`petd deleted ${path}`);
+    this.publish?.('memory.changed', { operation: 'delete', kind: 'delete', path, commit });
+    return { path, commit };
   }
 
   async move(fromRel: string, toRel: string): Promise<{ from: string; to: string; commit: string | null }> {
@@ -178,12 +223,45 @@ export class MemoryService {
     this.memory.renameFile(from, to);
     this.memory.pruneEmptyDirs(from);
     const commit = await this.commit(`petd moved ${this.memory.normalize(from)} → ${this.memory.normalize(to)}`);
-    this.publish?.(`memory.changed`, {
+    this.publish?.('memory.changed', {
+      operation: 'move',
+      kind: 'move',
       path: this.memory.normalize(to),
       from: this.memory.normalize(from),
-      kind: 'move',
+      to: this.memory.normalize(to),
+      commit,
     });
     return { from: this.memory.normalize(from), to: this.memory.normalize(to), commit };
+  }
+
+  /**
+   * 把某次提交里的文件内容恢复到工作区，并生成一次**新提交**（不改写历史）。
+   * 常驻文件（PARTNER.md）允许恢复正文；不存在该文件的历史版本 → E_NOT_FOUND。
+   */
+  async restore(relPath: string, hash: string, opts: MemoryRestoreOptions = {}): Promise<MemoryWriteResult> {
+    const p = assertNonEmptyPath(relPath);
+    const normalized = this.memory.normalize(p);
+    if (!this.git.available() || !this.git.isRepo()) {
+      throw new PetdError('E_UNAVAILABLE', '这个工作区没有 Git，不能按版本恢复');
+    }
+    this.checkExpectedHash(p, opts.expectedContentHash, opts.force);
+    let content: string;
+    try {
+      content = this.git.fileAt(hash, normalized);
+    } catch {
+      throw new PetdError('E_NOT_FOUND', `提交 ${hash} 里没有文件 ${normalized}`, { path: normalized, hash });
+    }
+    this.memory.writeFileAtomic(p, content);
+    const revision = contentRevision(content);
+    const commit = await this.commit(`petd restored ${normalized} from ${hash}`);
+    this.publish?.('memory.changed', {
+      operation: 'restore',
+      kind: 'restore',
+      path: normalized,
+      revision,
+      commit,
+    });
+    return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), revision, commit };
   }
 
   glob(pattern: string, dir = ''): string[] {
