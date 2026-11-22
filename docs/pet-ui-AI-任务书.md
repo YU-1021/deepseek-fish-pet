@@ -432,6 +432,8 @@ AI 想学什么，只能写成**候选提案**；主人批准/灰度后才进提
 
 「看屏 → 决策 → 点击」接进了 petd（`game.*`），聊天里由 Aknight.gmaer 插件使用。UI 的定位是：看得见它在看什么、能控制它能不能真动手；**不要做成自己一套游戏操作台**。
 
+> 已实现（pet-ui `efd9269`）：`src/game-panel.tsx`（状态卡 / 看屏预览 / 找字 / 预演与真点二次确认）+ `electron/main.mjs` 的 `game:read-capture` IPC（主进程读 `capture.path` 转 dataURL）+ `game-panel.test.tsx` 5 项。`allowClick` 在面板里只读展示，真点需勾选确认且受 `config.game.allowClick` 门控。
+
 - 方法：`game.status`（`{enabled, assistantDir, bridgePath, nodePath, allowClick, gameHint, counters{calls,ok,errors}, lastError, lastCallAt}`）、`game.look {find?, template?, ocrEngine?, textMax?}`（返回 `{ok, game, capture{w,h,path,blackRatio}, ocr{engine,text,lines,lineCount}, find[], template[]}`）、`game.find {text, minCoverage?}`、`game.template {names}`、`game.click {x, y, real?}`（`real` 缺省 false = dry-run，只回 `{ok, dryRun, planned{x,y}, note}`；`allowClick=false` 时传 `real:true` 返回 `E_FORBIDDEN`）。
 - 配置：`config.get.game {enabled, assistantDir, nodePath, timeoutMs, allowClick, gameHint}`。
 - 事件：本模块无专用事件（工具/方法都同步返回）；不要为它新增事件。
