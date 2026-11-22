@@ -7,6 +7,12 @@ const clients = new Set();
 let sequence = 0;
 const mood = { mood: 70, affection: 30, energy: 80, pokes: 0, updatedAt: Date.now(), tiers: { mood: '心情不错', affection: '逐渐熟悉', energy: '正常' } };
 const moodHistory = [];
+const hooksConfig = { enabled: true, mode: 'smart', approvalEnabled: true, approvalTimeoutMs: 30000, riskEnabled: true };
+let hookRules = [
+  { id: 'builtin-file-delete', description: '删除文件需要确认', enabled: true, kind: 'tool', names: ['file_delete', 'memory_delete'], action: 'ask', priority: 100, builtin: true },
+  { id: 'user-demo-deny', description: '拒绝危险终端参数', enabled: true, kind: 'tool', names: ['cua_type'], action: 'deny', argContains: 'rm -rf /', message: '危险终端命令已拦截。', priority: 10 },
+];
+let pendingApprovals = [];
 
 function frame(payload, opcode = 1) {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -58,21 +64,66 @@ function publishMood(applied, source, reason) {
   for (const socket of clients) send(socket, event);
 }
 
+function publishEvent(event, data) {
+  const payload = { type: 'event', event, seq: ++sequence, ts: Date.now(), data };
+  for (const socket of clients) send(socket, payload);
+}
+
 function handleMessage(socket, message) {
   const input = JSON.parse(message);
   if (input.type === 'connect') {
     send(socket, { type: 'hello', server: { name: 'petd', version: '0.1.0-mock', protocol: 1, pid: process.pid }, sessionId: 'mock-session' });
+    if (process.env.MOCK_APPROVAL_REQUEST === 'true') setTimeout(() => {
+      const pending = { id: `mock-approval-${Date.now()}`, kind: 'method', name: 'memory.delete', ruleId: 'builtin-file-delete', title: '删除工作区记忆文件', detail: '删除 memory/notes/draft.md，此操作不可恢复。', risk: 'high', riskReason: '操作将永久移除工作区文件，且没有可用的自动回滚。', requestedAt: Date.now(), deadlineAt: Date.now() + hooksConfig.approvalTimeoutMs, sessionId: 'mock-session' };
+      pendingApprovals.unshift(pending);
+      publishEvent('approval.requested', pending);
+    }, 800);
     return;
   }
   if (input.type !== 'req') return;
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
+  } else if (input.method === 'hooks.status') {
+    data = { ...hooksConfig, ruleCount: hookRules.length, pendingCount: pendingApprovals.length, sessionAllowedCount: 1 };
+  } else if (input.method === 'hooks.list') {
+    data = { rules: hookRules.map((rule) => ({ ...rule })) };
+  } else if (input.method === 'hooks.get') {
+    data = hookRules.find((rule) => rule.id === input.params?.id) ?? {};
+  } else if (input.method === 'hooks.create') {
+    const rule = { ...input.params, id: input.params?.id ?? `mock-rule-${Date.now()}`, enabled: input.params?.enabled ?? true, priority: input.params?.priority ?? 10 };
+    hookRules.push(rule); data = rule; publishEvent('hooks.changed', { action: 'created', rule });
+  } else if (input.method === 'hooks.update') {
+    const index = hookRules.findIndex((rule) => rule.id === input.params?.id);
+    if (index < 0) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '规则不存在' } }); return; }
+    hookRules[index] = { ...hookRules[index], ...input.params }; data = hookRules[index]; publishEvent('hooks.changed', { action: 'updated', rule: data });
+  } else if (input.method === 'hooks.toggle') {
+    const rule = hookRules.find((entry) => entry.id === input.params?.id);
+    if (!rule) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '规则不存在' } }); return; }
+    rule.enabled = input.params.enabled === true; data = rule; publishEvent('hooks.changed', { action: 'updated', rule });
+  } else if (input.method === 'hooks.delete') {
+    const rule = hookRules.find((entry) => entry.id === input.params?.id);
+    if (rule?.builtin) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_FORBIDDEN', message: '内置规则不能删除' } }); return; }
+    hookRules = hookRules.filter((entry) => entry.id !== input.params?.id); data = { deleted: !!rule }; publishEvent('hooks.changed', { action: 'deleted', rule });
+  } else if (input.method === 'hooks.assess') {
+    const name = String(input.params?.name ?? '');
+    const level = /delete|remove|exec|terminal|write/i.test(name) ? 'high' : 'medium';
+    data = { level, reason: level === 'high' ? '模拟评审：该操作可能造成不可逆修改。' : '模拟评审：该操作有一定影响，仍需遵守规则。', cached: false, fallback: false };
+  } else if (input.method === 'approval.list') {
+    data = { pending: pendingApprovals.map((item) => ({ ...item })) };
+  } else if (input.method === 'approval.answer') {
+    const index = pendingApprovals.findIndex((item) => item.id === input.params?.id);
+    if (index < 0) { data = { found: false }; }
+    else {
+      const [item] = pendingApprovals.splice(index, 1);
+      data = { found: true };
+      publishEvent('approval.resolved', { id: item.id, accepted: input.params.accepted === true, reason: 'answered', remember: input.params.remember === true });
+    }
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

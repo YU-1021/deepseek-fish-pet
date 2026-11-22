@@ -56,3 +56,23 @@ force?: boolean;              // 只在用户确认“覆盖”后传 true
 - `chat.send` 已接受 `attachments: string[]`，UI 传 `blob:<name>` 句柄，最多 10 个。
 
 对应完整 UI 行为和验收清单见 `apps/pet-ui/docs/memory-panel-spec.md`。
+
+## 智能审批门：配置写入
+
+当前 petd 只提供 `config.get`，没有可供 UI 安全修改 `hooks.*` 配置的写入方法。`hooks.status` 只读，`hooks.toggle` 只控制单条规则；`hooks.update` 更新规则字段，不能修改审批门全局设置。
+
+建议新增 `config.patch`（或 `hooks.configure`）支持部分更新：
+
+```ts
+{
+  hooks?: {
+    enabled?: boolean;
+    mode?: 'rules' | 'smart';
+    approvalEnabled?: boolean;
+    approvalTimeoutMs?: number;
+    risk?: { enabled?: boolean };
+  }
+}
+```
+
+需校验 `approvalTimeoutMs` 的安全上下限并返回更新后的配置。UI 在该方法上线前仅展示当前状态，不伪造可保存的模式/开关控件。

@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
   endDrag: () => ipcRenderer.invoke('pet:drag-end'),
   resizePet: (height) => ipcRenderer.invoke('pet:resize', height),
   updatePetHitRegions: (regions) => ipcRenderer.send('pet:hit-regions', regions),
+  openApprovalWindow: () => ipcRenderer.invoke('pet:approval-open'),
+  closeApprovalWindow: () => ipcRenderer.invoke('pet:approval-close'),
 });

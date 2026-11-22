@@ -4,6 +4,7 @@ import { Battery, Heart, Sparkles } from 'lucide-react';
 import { request, usePetdStatus } from './petd';
 import { moodErrorText, useMoodState } from './mood';
 import type { MoodEntry } from './mood';
+import { HooksSettingsPanel } from './hooks-panel';
 
 type MoodConfig = { enabled: boolean; chatInjection: boolean; chatNudge: boolean; moodDecayPerHour: number; energyRecoverPerHour: number };
 type MoodSettingsPanelProps = { config: { mood?: MoodConfig }; sessionId?: string; showValues: boolean; onShowValuesChange: (show: boolean) => void };
@@ -31,7 +32,7 @@ export function MoodSettingsPanel({ config, sessionId, showValues, onShowValuesC
     finally { setEvaluating(false); }
   }
 
-  return <section className="mood-panel" aria-label="情绪与状态">
+  return <><section className="mood-panel" aria-label="情绪与状态">
     <div className="mood-panel-heading"><div><span className="eyebrow">MOOD & STATUS</span><h3>情绪与状态</h3></div><span className={`mood-enabled ${isEnabled ? 'on' : ''}`}>{isEnabled ? '已启用' : '已关闭'}</span></div>
     <label className="mood-debug-toggle"><input type="checkbox" checked={showValues} onChange={(event) => onShowValuesChange(event.target.checked)}/>显示精确数值（调试）</label>
     {!isEnabled ? <p className="mood-disabled-note">情绪系统已关闭</p> : !state ? <p className="mood-muted">{error || '正在读取状态…'}</p> : <>
@@ -48,7 +49,7 @@ export function MoodSettingsPanel({ config, sessionId, showValues, onShowValuesC
       <div className="mood-history"><strong>最近变化</strong>{history.length ? history.slice(0, 8).map((entry) => <div className="mood-history-row" key={`${entry.ts}-${entry.key}`}><span>{formatDelta(entry)}</span><small>{new Date(entry.ts).toLocaleString()} · {entry.source}</small></div>) : <p className="mood-muted">还没有变化记录</p>}</div>
       <p className="mood-poke-count">被戳过 {state.pokes} 次</p>
     </>}
-  </section>;
+  </section><HooksSettingsPanel/></>;
 }
 
 function MoodGauge({ icon, label, tier, value, showValues }: { icon: ReactNode; label: string; tier: string; value: number; showValues: boolean }) {

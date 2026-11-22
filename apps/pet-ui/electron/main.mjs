@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
 let petWindow;
+let approvalWindow;
 let tray;
 let memoryWorkspace;
 const thumbnailCache = new Map();
@@ -71,6 +72,32 @@ ipcMain.handle('blob:file-url', (_event, input) => {
   return pathToFileURL(resolveBlobPath(name)).href;
 });
 ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
+ipcMain.handle('pet:approval-open', (event) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  if (!approvalWindow || approvalWindow.isDestroyed()) createApprovalWindow();
+  else approvalWindow.showInactive();
+  return true;
+});
+ipcMain.handle('pet:approval-close', (event) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  if (approvalWindow && !approvalWindow.isDestroyed()) approvalWindow.close();
+  return true;
+});
+function createApprovalWindow() {
+  const { x, y, width } = screen.getPrimaryDisplay().workArea;
+  approvalWindow = new BrowserWindow({
+    width: 420, height: 330, x: Math.max(x, x + width - 438), y: y + 24,
+    frame: false, transparent: false, backgroundColor: '#f7f5f1',
+    alwaysOnTop: true, resizable: false, minimizable: false, maximizable: false,
+    skipTaskbar: true, show: false,
+    webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  approvalWindow.setAlwaysOnTop(true, 'screen-saver');
+  if (process.env.VITE_DEV_SERVER_URL) void approvalWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?approval=1`);
+  else void approvalWindow.loadFile(path.join(here, '../dist/index.html'), { query: { approval: '1' } });
+  approvalWindow.once('ready-to-show', () => approvalWindow?.showInactive());
+  approvalWindow.on('closed', () => { approvalWindow = undefined; });
+}
 function dragPetStep() {
   if (!petDrag || !petWindow || petWindow.isDestroyed()) return endPetDrag();
   const cursor = screen.getCursorScreenPoint();
