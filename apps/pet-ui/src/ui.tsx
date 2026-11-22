@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Wifi, WifiOff, X } from 'lucide-react';
+import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Volume2, VolumeX, Wifi, WifiOff, X } from 'lucide-react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
 import { MoodSettingsPanel } from './mood-panel';
+import './voice-chat.css';
 import { ApprovalCoordinator, ApprovalOverlay } from './hooks-panel';
 import { useMoodNumberPreference, useMoodState } from './mood';
 import { MemoryPanel, uploadAttachmentFile } from './memory-panel';
@@ -56,8 +57,28 @@ export function App() {
   const [personaSaving, setPersonaSaving] = useState(false);
   const [personaHistory, setPersonaHistory] = useState<any[]>([]);
   const [config, setConfig] = useState<any>(null);
+  const [playingSpeechKey, setPlayingSpeechKey] = useState('');
+  const [speechNotice, setSpeechNotice] = useState('');
+  const [speechRetryReady, setSpeechRetryReady] = useState(false);
+  const [speechActive, setSpeechActive] = useState(false);
+  const currentSpeech = useRef<HTMLAudioElement | null>(null);
+  const speechAnimationTimer = useRef<number | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => () => {
+    currentSpeech.current?.pause();
+    if (speechAnimationTimer.current) window.clearTimeout(speechAnimationTimer.current);
+  }, []);
+  useEffect(() => {
+    const unsubscribe = subscribeEvents((frame) => {
+      if (frame.event !== 'voice.speech') return;
+      setSpeechActive(true);
+      if (speechAnimationTimer.current) window.clearTimeout(speechAnimationTimer.current);
+      const duration = Number(frame.data?.durationMs) || 0;
+      if (duration > 0) speechAnimationTimer.current = window.setTimeout(() => setSpeechActive(false), duration);
+    });
+    return () => { unsubscribe(); };
+  }, []);
   if (new URLSearchParams(window.location.search).has('pet')) return <PetOverlay />;
   if (new URLSearchParams(window.location.search).has('approval')) return <div className="approval-window-root"><ApprovalOverlay/></div>;
 
@@ -91,7 +112,7 @@ export function App() {
     event?.preventDefault(); const text = draft.trim(); if (!text || sending) return;
     setDraft(''); setError(''); setSending(true);
     const queued = pendingAttachments;
-    try { const result = await request('chat.send', { ...(activeId ? { sessionId: activeId } : {}), text, ...(queued.length ? { attachments: queued.map((item) => item.handle) } : {}) }); setActiveId(result.session.id); if (queued.length) { setMessageAttachments((items) => ({ ...items, [`${result.session.id}:${result.userMessage.ts}`]: result.attachments ?? queued })); setPendingAttachments([]); } await loadSessions(result.session.id); const latest = await request('session.get', { sessionId: result.session.id }); setMessages(latest.session.messages); }
+    try { const result = await request('chat.send', { ...(activeId ? { sessionId: activeId } : {}), text, ...(queued.length ? { attachments: queued.map((item) => item.handle) } : []) }); setActiveId(result.session.id); if (result.speech?.audioBase64) playSpeech(result.speech, `auto:${result.speech.id}`); if (queued.length) { setMessageAttachments((items) => ({ ...items, [`${result.session.id}:${result.userMessage.ts}`]: result.attachments ?? queued })); setPendingAttachments([]); } await loadSessions(result.session.id); const latest = await request('session.get', { sessionId: result.session.id }); setMessages(latest.session.messages); }
     catch (e) { setDraft(text); setError(friendlyError(e)); } finally { setSending(false); }
   }
   async function uploadChatFiles(files: FileList | null) {
@@ -117,6 +138,39 @@ export function App() {
     try { const result = await request('blob.get', { ref: attachment.handle }); setImagePreview({ src: `data:${result.meta.mime};base64,${result.dataBase64}`, name: attachment.name }); }
     catch (e) { setError(friendlyError(e)); }
   }
+  function stopSpeech() {
+    const audio = currentSpeech.current;
+    currentSpeech.current = null;
+    if (audio) { audio.pause(); audio.currentTime = 0; }
+    if (speechAnimationTimer.current) window.clearTimeout(speechAnimationTimer.current);
+    setPlayingSpeechKey(''); setSpeechActive(false); setSpeechRetryReady(false);
+  }
+  function playSpeech(speech: any, key: string) {
+    stopSpeech();
+    if (!speech?.audioBase64 || !speech?.mime) { setSpeechNotice('语音没有返回可播放音频。'); return; }
+    const audio = new Audio(`data:${speech.mime};base64,${speech.audioBase64}`);
+    currentSpeech.current = audio;
+    setPlayingSpeechKey(key); setSpeechNotice(''); setSpeechRetryReady(false); setSpeechActive(true);
+    if (Number(speech.durationMs) > 0) speechAnimationTimer.current = window.setTimeout(() => setSpeechActive(false), Number(speech.durationMs));
+    audio.onended = () => { if (currentSpeech.current === audio) stopSpeech(); };
+    audio.onerror = () => { if (currentSpeech.current === audio) { setSpeechNotice('音频播放失败，请重试。'); stopSpeech(); } };
+    audio.play().catch(() => { if (currentSpeech.current === audio) { setSpeechNotice('自动播放被拦截，请点“继续播放”。'); setSpeechRetryReady(true); setSpeechActive(false); } });
+  }
+  async function readMessage(message: Message, key: string) {
+    if (playingSpeechKey === key) { stopSpeech(); return; }
+    setSpeechNotice('正在合成语音…');
+    try {
+      const voice = config?.voice ?? {};
+      const speech = await request('voice.speak', { text: message.content, ...(voice.voice ? { voice: voice.voice } : {}), ...(voice.rate ? { rate: voice.rate } : {}), ...(voice.pitch ? { pitch: voice.pitch } : {}) }, 90_000);
+      playSpeech(speech, key);
+    } catch (cause) { setSpeechNotice(friendlyError(cause)); }
+  }
+  function retrySpeech() {
+    const audio = currentSpeech.current;
+    if (!audio) return;
+    setSpeechNotice(''); setSpeechRetryReady(false); setSpeechActive(true);
+    void audio.play().catch(() => { setSpeechNotice('播放仍被系统拦截，请再点一次。'); setSpeechRetryReady(true); setSpeechActive(false); });
+  }
   async function newChat() { try { const s = await request('session.create', {}); setSessions((items) => [s, ...items]); setActiveId(s.id); setMessages([]); setView('chat'); setError(''); } catch (e) { setError(friendlyError(e)); } }
   async function refreshPersona() { const snapshot = await request('persona.get', {}); setPersona(snapshot); setPersonaDraft(Object.fromEntries(snapshot.sections.map((s: any) => [s.key, s.content]))); }
   async function openView(next: View) { setView(next); setError(''); try { if (next === 'persona') { await refreshPersona(); const h = await request('persona.history', { limit: 20 }); setPersonaHistory(h.revisions); } if (next === 'settings') setConfig(await request('config.get', {})); } catch (e) { setError(friendlyError(e)); } }
@@ -132,8 +186,8 @@ export function App() {
     <section className="conversation-list"><div className="list-head"><div><span className="eyebrow">PET COMPANION</span><h1>{view === 'chat' ? '对话' : view === 'persona' ? '人格' : '设置'}</h1></div>{view === 'chat' && <button className="new-chat" onClick={() => void newChat()} title="新建对话"><Plus size={18}/></button>}</div>
       {view === 'chat' ? <><div className="search">⌕　最近的对话</div><div className="section-label">最近</div>{sessions.map((s) => <button key={s.id} className={`session ${s.id === activeId ? 'selected' : ''}`} onClick={() => { setActiveId(s.id); setError(''); }}><span className="session-dot">✦</span><div><strong>{s.title || '新的对话'}</strong><small>{new Date(s.updatedAt).toLocaleDateString()}　{s.messageCount} 条消息</small></div></button>)}{!sessions.length && <p className="empty-list">还没有对话，点击上方 ＋ 开始聊天。</p>}</> : <div className="sidebar-note"><span>✧</span><p>{view === 'persona' ? <>一起慢慢写下<br/>小鱼的样子。</> : <>让桌面伙伴<br/>住得舒服一点。</>}</p></div>}
     </section>
-    <section className="chat"><header className="chat-header"><div className="pet-avatar"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆"/><i/></div><div className="chat-title"><strong>{view === 'chat' ? '小鱼' : view === 'persona' ? '小鱼的人格' : '偏好设置'}</strong><span>{view === 'chat' ? '你的桌面伙伴' : view === 'persona' ? `人格版本 v${persona?.version ?? '—'}` : 'petd 连接配置'}</span></div><div className="header-actions"><button title="服务状态"><Activity size={17}/></button></div></header>
-      {view === 'chat' ? <><div className="messages" ref={scrollRef}><div className="day-divider"><span>对话记录</span></div>{messages.length === 0 && <div className="welcome"><div className="welcome-orb">🐋</div><h2>嗨，回来啦</h2><p>今天想聊点什么？我一直都在。</p></div>}{messages.map((m, i) => <div className={`message-row ${m.role === 'user' ? 'mine' : ''}`} key={`${m.ts}-${i}`}>{m.role === 'assistant' && <div className="mini-avatar">🐟</div>}<div><div className={`bubble ${m.role}`}>{m.content}</div>{(messageAttachments[`${activeId}:${m.ts}`] ?? []).map((attachment) => <button className="message-attachment" key={attachment.handle} onClick={() => attachment.mime.startsWith('image/') ? void openMessageImage(attachment) : setView('memory')}><Paperclip size={12}/>{attachment.name}</button>)}<time>{m.role === 'assistant' ? '小鱼 · ' : ''}{new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div></div>)}{sending && <div className="message-row"><div className="mini-avatar">🐟</div><div className="bubble assistant typing">小鱼正在想…</div></div>}</div>
+    <section className={`chat ${speechActive ? 'speaking' : ''}`}><header className="chat-header"><div className="pet-avatar"><video src={fishIdle} autoPlay loop muted playsInline aria-label="蓝色大肥鱼女仆"/><i/></div><div className="chat-title"><strong>{view === 'chat' ? '小鱼' : view === 'persona' ? '小鱼的人格' : '偏好设置'}</strong><span>{view === 'chat' ? '你的桌面伙伴' : view === 'persona' ? `人格版本 v${persona?.version ?? '—'}` : 'petd 连接配置'}</span></div><div className="header-actions"><button title="服务状态"><Activity size={17}/></button></div></header>
+      {view === 'chat' ? <><div className="messages" ref={scrollRef}><div className="day-divider"><span>对话记录</span></div>{speechNotice && <div className="voice-inline-notice" role="status">{speechNotice}{speechRetryReady && <button onClick={retrySpeech}>继续播放</button>}</div>}{messages.length === 0 && <div className="welcome"><div className="welcome-orb">🐋</div><h2>嗨，回来啦</h2><p>今天想聊点什么？我一直都在。</p></div>}{messages.map((m, i) => { const speechKey = `${m.ts}-${i}`; return <div className={`message-row ${m.role === 'user' ? 'mine' : ''}`} key={`${m.ts}-${i}`}>{m.role === 'assistant' && <div className="mini-avatar">🐟</div>}<div><div className={`bubble ${m.role}`}>{m.content}</div>{(messageAttachments[`${activeId}:${m.ts}`] ?? []).map((attachment) => <button className="message-attachment" key={attachment.handle} onClick={() => attachment.mime.startsWith('image/') ? void openMessageImage(attachment) : setView('memory')}><Paperclip size={12}/>{attachment.name}</button>)}<div className="message-meta"><time>{m.role === 'assistant' ? '小鱼 · ' : ''}{new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>{m.role === 'assistant' && <button className="speech-button" onClick={() => playingSpeechKey === speechKey ? stopSpeech() : void readMessage(m, speechKey)} aria-label={playingSpeechKey === speechKey ? '停止朗读' : '朗读消息'} title={playingSpeechKey === speechKey ? '停止朗读' : '朗读'}>{playingSpeechKey === speechKey ? <VolumeX size={13}/> : <Volume2 size={13}/>} {playingSpeechKey === speechKey ? '停止' : '朗读'}</button>}</div></div></div>; })}{sending && <div className="message-row"><div className="mini-avatar">🐟</div><div className="bubble assistant typing">小鱼正在想…</div></div>}</div>
         <div className="composer-wrap"><form className="composer" onSubmit={sendMessage}><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={keySend} placeholder="和小鱼说说话…（Enter 发送，Shift+Enter 换行）" rows={2} disabled={status.state !== 'connected' || sending}/>{pendingAttachments.length > 0 && <div className="pending-attachments">{pendingAttachments.map((item) => <span key={item.handle}>{item.name}<button type="button" disabled={sending} onClick={() => setPendingAttachments((items) => items.filter((entry) => entry.handle !== item.handle))} aria-label={`移除 ${item.name}`}><X size={12}/></button></span>)}</div>}<div className="composer-tools"><span>{error && <span className="error-text">{error}</span>}</span><div className="composer-actions"><input ref={fileInput} type="file" multiple hidden onChange={(e) => void uploadChatFiles(e.target.files)}/><button type="button" className="attach-button" onClick={() => fileInput.current?.click()} disabled={uploading || sending || status.state !== 'connected'} title="添加附件"><Paperclip size={15}/></button><button className="send" type="submit" disabled={!draft.trim() || sending || status.state !== 'connected'} aria-label="发送"><Send size={15}/></button></div></div></form><div className="fine-print">{uploading ? '正在上传附件…' : '小鱼可能会犯错，请核对重要信息'}</div></div></> : <div className="messages detail-view">{error && <div className="notice">{error}</div>}{view === 'persona' && persona && <><div className="detail-intro"><div className="welcome-orb">✨</div><h2>{persona.title || '小鱼'}</h2><p>人格版本 v{persona.version} · {new Date(persona.updatedAt).toLocaleString()}</p><div className="persona-actions">{personaEditing ? <><button onClick={() => { setPersonaEditing(false); void refreshPersona(); }}>取消</button><button className="primary-action" disabled={personaSaving} onClick={() => void savePersona()}>{personaSaving ? '保存中…' : '保存修改'}</button></> : <button className="primary-action" onClick={() => setPersonaEditing(true)}>编辑人格</button>}</div></div><div className="persona-content">{persona.preamble && <p>{persona.preamble}</p>}{persona.sections.map((section: any) => <article key={section.key}><div className="section-heading"><h3>{section.heading}</h3><span>{section.locked ? '🔒 已锁定' : section.aiEditable ? '可随相处演化' : '用户专属'}</span></div>{personaEditing ? <textarea className="persona-editor" value={personaDraft[section.key] ?? ''} onChange={(e) => setPersonaDraft({ ...personaDraft, [section.key]: e.target.value })} /> : <p>{section.content || '（尚未填写）'}</p>}{section.aiEditable && <button className="lock-action" onClick={() => void toggleLock(section)}>{section.locked ? '解锁 AI 修改' : '锁定，禁止 AI 修改'}</button>}</article>)}{personaHistory.length > 0 && <article><h3>历史版本</h3>{personaHistory.map((item) => <div className="history-row" key={`${item.version}-${item.ts}`}><span>v{item.version} · {item.actor === 'agent' ? '小鱼演化' : '用户修改'} · {item.reason || '无备注'}</span>{item.version < persona.version && <button onClick={() => void rollbackPersona(item.version)}>回滚到此版本</button>}</div>)}</article>}</div></>}{view === 'settings' && config && <div className="persona-content"><MoodSettingsPanel config={config} sessionId={activeId} showValues={showMoodValues} onShowValuesChange={setShowMoodValues}/><article><div className="section-heading"><h3>petd 服务</h3><span>{status.state === 'connected' ? '● 在线' : '○ 离线'}</span></div><p>版本：{status.version ?? config.version ?? '—'}</p><p>监听地址：{config.gateway?.host ?? '127.0.0.1'}:{status.gatewayPort ?? (config.gateway?.port || '动态端口')}</p><p>日志等级：{config.log?.level ?? '—'}</p></article><article><h3>界面</h3><p>消息与人格数据保存在 petd。此处只展示非敏感配置，不读取或显示 API 密钥。</p></article></div>}{!persona && !config && !error && <div className="detail-intro">正在读取 petd…</div>}</div>}
     </section>
     </>}

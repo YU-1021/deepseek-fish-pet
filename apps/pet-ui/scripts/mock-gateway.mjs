@@ -15,6 +15,18 @@ let hookRules = [
 let pendingApprovals = [];
 const presenceConfig = { enabled: true, quiet: true, intervalMinutes: 45, idleMinutes: 10, maxPerDay: 12, nightQuiet: { enabled: true, start: '23:00', end: '07:00' } };
 let presenceActivities = [];
+const voiceConfig = { enabled: true, engine: 'edge', voice: 'zh-CN-XiaoxiaoNeural', rate: 1, pitch: 1, autoSpeak: false };
+
+function mockWavBase64(durationMs = 450) {
+  const sampleRate = 8000;
+  const samples = Math.floor(sampleRate * durationMs / 1000);
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVE', 8);
+  wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24); wav.writeUInt32LE(sampleRate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+  wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+  return wav.toString('base64');
+}
 
 function frame(payload, opcode = 1) {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -86,9 +98,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -137,6 +149,15 @@ function handleMessage(socket, message) {
     const labels = { groom: '整理羽毛', stretch: '伸懒腰', window: '看窗外', nap: '打盹', tidy: '归置东西', idle: '发呆' };
     const activity = { id: `mock-presence-${Date.now()}`, kind, label: labels[kind], at: Date.now(), quiet: true };
     presenceActivities.unshift(activity); data = activity; publishEvent('presence.activity', activity);
+  } else if (input.method === 'voice.status') {
+    data = { ...voiceConfig, cacheDir: 'mock://voice-cache', cacheFiles: 3, cacheBytes: 128000 };
+  } else if (input.method === 'voice.voices') {
+    data = { voices: [{ id: 'zh-CN-XiaoxiaoNeural', label: '晓晓', lang: 'zh-CN', engine: 'edge' }, { id: 'Microsoft Huihui Desktop', label: 'Huihui', lang: 'zh-CN', engine: 'sapi' }] };
+  } else if (input.method === 'voice.speak') {
+    if (!voiceConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '语音功能已关闭' } }); return; }
+    if (typeof input.params?.text !== 'string' || !input.params.text.trim() || input.params.text.length > 4000) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_BAD_PARAMS', message: '语音文本为空或超长' } }); return; }
+    const speech = { id: `mock-speech-${Date.now()}`, file: 'mock.wav', mime: 'audio/wav', bytes: 0, durationMs: 450, cached: false, engine: voiceConfig.engine, voice: input.params.voice ?? voiceConfig.voice, rate: input.params.rate ?? voiceConfig.rate, pitch: input.params.pitch ?? voiceConfig.pitch, text: input.params.text, audioBase64: mockWavBase64(), elapsedMs: 5 };
+    data = speech; publishEvent('voice.speech', { ...speech, audioBase64: undefined });
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

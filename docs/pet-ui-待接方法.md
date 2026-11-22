@@ -76,3 +76,22 @@ force?: boolean;              // 只在用户确认“覆盖”后传 true
 ```
 
 需校验 `approvalTimeoutMs` 的安全上下限并返回更新后的配置。UI 在该方法上线前仅展示当前状态，不伪造可保存的模式/开关控件。
+
+## 语音设置：配置写入
+
+当前 petd 的语音接口提供 `voice.status` / `voice.voices` / `voice.speak`，但设置项仍只从 `config.get.voice` 读取；没有 UI 可用的配置写入方法。建议由 `config.patch` 支持：
+
+```ts
+{
+  voice?: {
+    enabled?: boolean;
+    engine?: 'edge' | 'sapi';
+    voice?: string;
+    rate?: number; // 0.5–2
+    pitch?: number; // 0.5–2
+    autoSpeak?: boolean;
+  }
+}
+```
+
+更新音色时应校验引擎与 `voice.voices` 对应；UI 在写入方法上线前只展示配置值，避免控件看似可改却不生效。
