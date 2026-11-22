@@ -16,6 +16,14 @@ let pendingApprovals = [];
 const presenceConfig = { enabled: true, quiet: true, intervalMinutes: 45, idleMinutes: 10, maxPerDay: 12, nightQuiet: { enabled: true, start: '23:00', end: '07:00' } };
 let presenceActivities = [];
 const voiceConfig = { enabled: true, engine: 'edge', voice: 'zh-CN-XiaoxiaoNeural', rate: 1, pitch: 1, autoSpeak: false };
+const asrConfig = { enabled: true, engine: 'whisper.cpp', model: 'tiny', language: 'auto', wakeEnabled: true, wakeWords: ['你好大肥鱼'], autoChat: false };
+const asrModels = [
+  { name: 'tiny', ready: true, current: true, sizeBytes: 75_000_000 },
+  { name: 'base', ready: false, current: false, sizeBytes: 148_000_000 },
+  { name: 'small', ready: false, current: false, sizeBytes: 488_000_000 },
+];
+let mockAsrStream = '';
+let mockAsrFeedCount = 0;
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -98,9 +106,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -158,6 +166,31 @@ function handleMessage(socket, message) {
     if (typeof input.params?.text !== 'string' || !input.params.text.trim() || input.params.text.length > 4000) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_BAD_PARAMS', message: '语音文本为空或超长' } }); return; }
     const speech = { id: `mock-speech-${Date.now()}`, file: 'mock.wav', mime: 'audio/wav', bytes: 0, durationMs: 450, cached: false, engine: voiceConfig.engine, voice: input.params.voice ?? voiceConfig.voice, rate: input.params.rate ?? voiceConfig.rate, pitch: input.params.pitch ?? voiceConfig.pitch, text: input.params.text, audioBase64: mockWavBase64(), elapsedMs: 5 };
     data = speech; publishEvent('voice.speech', { ...speech, audioBase64: undefined });
+  } else if (input.method === 'asr.status') {
+    data = { ...asrConfig, binary: { found: true, path: 'mock://whisper.cpp' }, models: asrModels.map((model) => model.name), listening: !!mockAsrStream, autoChat: asrConfig.autoChat };
+  } else if (input.method === 'asr.models') {
+    data = { models: asrModels.map((model) => ({ ...model })), active: asrConfig.model };
+  } else if (input.method === 'asr.download') {
+    const model = asrModels.find((entry) => entry.name === input.params?.model);
+    if (!model) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_BAD_PARAMS', message: '未知模型' } }); return; }
+    model.ready = true;
+    for (const [got, total] of [[1, 4], [2, 4], [4, 4]]) setTimeout(() => publishEvent('asr.download', { model: model.name, got: got * (model.sizeBytes / 4), total: model.sizeBytes, url: 'mock://model-download' }), got === 1 ? 80 : got === 2 ? 180 : 300);
+    data = { model: model.name, ready: true };
+  } else if (input.method === 'asr.listen.start') {
+    if (!asrConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: 'ASR 已关闭' } }); return; }
+    mockAsrStream = `mock-asr-${Date.now()}`; mockAsrFeedCount = 0;
+    data = { streamId: mockAsrStream, sampleRate: 16000, vad: { energyThreshold: 0.01, minSpeechMs: 240, silenceMs: 600, maxSegmentMs: 8000, preRollMs: 200 }, model: asrConfig.model, wakeWords: asrConfig.wakeWords };
+  } else if (input.method === 'asr.listen.feed') {
+    if (input.params?.streamId !== mockAsrStream) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '监听流已过期' } }); return; }
+    mockAsrFeedCount += 1;
+    const segments = mockAsrFeedCount % 4 === 0 ? [{ streamId: mockAsrStream, index: mockAsrFeedCount / 4, text: '这是本地识别的模拟字幕。', language: 'zh', durationMs: 960, tookMs: 120, wake: null }] : [];
+    data = { segments };
+    for (const segment of segments) publishEvent('asr.segment', segment);
+  } else if (input.method === 'asr.listen.stop') {
+    if (input.params?.streamId !== mockAsrStream) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '监听流已过期' } }); return; }
+    mockAsrStream = ''; data = { segments: [] };
+  } else if (input.method === 'asr.transcribe') {
+    data = { text: '这是本地识别的模拟文本。', language: 'zh', durationMs: 1200, tookMs: 220, wake: null };
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {
