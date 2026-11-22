@@ -14,7 +14,7 @@
     - 会话：`session.create` / `session.list` / `session.get` / `session.rename` / `session.delete`
     - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件；模型可在回复前调记忆工具，见下节；可带 `attachments` 附件句柄）
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
-    - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
+    - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.restore` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff`
     - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
     - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
     - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
@@ -294,9 +294,12 @@
 
 - **播种**：`PARTNER.md`（关于主人，短而精炼，**每轮全文进系统提示词**）、`MEMORY.md`（记忆使用索引）、`todo.md`（承诺/待办，带日期）、`partner/`（按主题/日期的细节笔记）、`notes/`、`handoffs/`（交接笔记）、`archive/`（旧内容归档）、`blobs/`（附件，Git 忽略）。
 - **每轮提示词** = 人格（SOUL.md 全文）+ `## 关于主人`（PARTNER.md，超 4000 字截断并留提示）+ `## 记忆维护约定` + `## 工作区文件`（文件清单；`handoffs/ blobs/ archive/` 只给份数，普通目录超过 10 个文件也折叠成「dir/ （N 份）」，太多时退化成只列顶层）。
-- **读写**：`memory.read/write/append/delete/move/glob/grep`；路径只能是工作区相对路径（拒绝 `..`、点开头、绝对路径、大小写/短名/链接逃逸）。
+- **读写**：`memory.read/write/append/delete/move/restore/glob/grep`；路径只能是工作区相对路径（拒绝 `..`、点开头、绝对路径、大小写/短名/链接逃逸）。
+- **并发与覆盖**：`memory.write` / `memory.append` 支持 `baseRevision`（32 位版本号）与 pet-ui 契约的 `expectedContentHash`（当前正文完整 SHA-256）+ `force`；不一致且非 `force` → `E_CONFLICT`，不写文件也不产生提交。`memory.status` 返回 `workspace` 绝对路径，供 pet-ui 主进程直接定位 `blobs/` 附件。
 - **写即提交**：每次写/追加/删/移动成功都自动 Git commit（作者 `petd`，消息如 `petd wrote partner/作息.md`），用串行队列避免 Git index 冲突。
 - **版本**：`memory.status` 看 Git 状态与 tags；`memory.history` 看提交；`memory.diff` 看某次提交改了啥。启动时打 `start-<版本>` tag，首次建仓是 `checkpoint0`。
+- **按版本恢复**：`memory.restore {path, hash, expectedContentHash?, force?}` 把某次提交里的文件内容写回工作区，并生成**一次新提交**（不改写历史、不动 Git 记录）；历史里没有该文件 → `E_NOT_FOUND`。`PARTNER.md` 允许恢复正文（仍不允许删除/移动）。
+- **变更事件**：`memory.changed` 的 `data` 为 `{operation:'write'|'append'|'delete'|'move'|'restore', path?, from?, to?, commit}`，提交不可用时 `commit` 为 `null`；事件帧顶层已有 `ts`。
 - **常驻保护**：`PARTNER.md` 不允许删除或整份移动（直接改内容即可），否则前缀会少东西。
 
 ## 聊天里自动读写记忆（工具循环）
@@ -584,11 +587,11 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 382/382（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词））
+cd apps/petd && node --test "dist/**/*.test.js"          :: 384/384（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
-cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，44 项；保留 home 可翻 workspace/.git）
+cd apps/petd && node scripts/memory-smoke.mjs --home D:\x   :: 记忆端到端（真 Git，57 项；保留 home 可翻 workspace/.git）
 cd apps/petd && node scripts/chat-memory-smoke.mjs --home D:\x :: 聊天记忆端到端（真 LLM 两次：让它记一件事→工作区出现文件；再问→先读记忆再答）
 cd apps/petd && node scripts/chat-handoff-smoke.mjs --home D:\x :: 交接端到端（真 LLM 若干次（含摘要）；第 4 轮触发自动交接→笔记/Git/contextStart；再手动交接一次）
 cd apps/petd && node scripts/blob-smoke.mjs --home D:\x        :: 附件端到端（真 LLM 一次；blob.* 闭环/去重/Git 忽略 blobs//chat.send 带附件句柄）
@@ -609,7 +612,7 @@ cd apps/petd && node scripts/dsh-smoke.mjs --home D:\x        :: DSH 桥端到�
 
 人格冒烟覆盖：SOUL/state 播种（v1 可回滚）、`persona.get`、用户 patch + 事件、`expectedVersion` 冲突、上锁/世界观拒锁、历史、真 LLM `persona.evolve`（会改）+ `persona.changed(agent)`、回滚到 v2、解锁、优雅退出。
 
-记忆冒烟覆盖（44 项）：工作区播种与目录、Git 仓库/`checkpoint0`/`start-<版本>` tag、`memory.status/tree/list`、write→落盘→Git 提交、append、read、glob、grep（路径+行号）、history、diff、move/delete、常驻文件禁删、路径逃逸拒绝、参数校验拒绝、重启后工作区与 Git HEAD 仍在、两次优雅退出。
+记忆冒烟覆盖（57 项）：工作区播种与目录、Git 仓库/`checkpoint0`/`start-<版本>` tag、`memory.status/tree/list`（含 `workspace` 绝对路径）、write→落盘→Git 提交、append、read、glob、grep（路径+行号）、history、diff、`expectedContentHash` 匹配/冲突/`force`、`memory.restore` 恢复正文并生成新提交、`memory.changed` 形状（operation/commit）、move/delete（自动应答审批门）、常驻文件禁删、路径逃逸拒绝、参数校验拒绝、重启后工作区与 Git HEAD 仍在、两次优雅退出。
 
 聊天记忆冒烟覆盖（21 项，真 LLM）：模型第一轮读旧文件→用 `write_file` 写新文件（工作区真的多出 `partner/*.md`，Git 有 `petd wrote …` 提交）→`chat.tool` 事件→工具过程不落库；第二轮先 `read_file` 再回答，答案里带出记忆要点；两轮后会话 4 条；优雅退出。
 

@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 122 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 123 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -198,22 +198,24 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 **数据来源（全部已在 petd 上线，方法清单以 `health.status` 为准）**
 - 树与列表：`memory.tree`（整棵文本树）或 `memory.list {dir}`（逐层展开，更适合树控件）。
+- 工作区位置：`memory.status` → `{dir, workspace, fileCount, git}`；`workspace` 是工作区绝对路径（附件真实文件在 `<workspace>/blobs/`）。
 - 读：`memory.read {path}` → `{path, content, revision}`；`revision` 是当前内容的版本号。
-- 写：`memory.write {path, content, baseRevision}`、追加 `memory.append`。
+- 写：`memory.write {path, content, baseRevision, expectedContentHash?, force?}`、追加 `memory.append`（参数同上）。`expectedContentHash` 是当前基线正文的完整 SHA-256（小写 hex，64 位）；两者不一致且非 `force` → `E_CONFLICT`，不写文件也不产生提交；`force: true` 表示用户明确选择覆盖。返回 `{path, bytes, revision, commit}`。
 - 删/移：`memory.delete {path}`、`memory.move {from, to}`。
 - 搜索：`memory.glob {pattern}`、`memory.grep {match, regex?, path?}`（做全工作区搜索框很好用）。
 - 历史：`memory.history {path?, limit?}` → `{commits: [{hash, fullHash, author, email, date, message}]}`；`memory.diff {hash, path?}` → `{diff}`（纯文本 patch，直接等宽展示）。
+- 恢复：`memory.restore {path, hash, expectedContentHash?, force?}` → 把该提交里的文件内容写回工作区并生成**一次新提交**（不改写历史）；历史里没有该文件 → `E_NOT_FOUND`；`PARTNER.md` 允许恢复正文。
 - 附件：`blob.list`、`blob.put {dataBase64, name?, mime?}`（≤8MB，返回句柄 `blob:<文件名>`）、`blob.info {ref}`、`blob.get {ref}` → `{meta, dataBase64}`、`blob.delete {ref}`。
 
 **关键交互（别漏）**
-1. **保存冲突**：保存时把读到的 `revision` 作为 `baseRevision` 传回。后端内容变了会报 `E_CONFLICT`，`error.details.currentRevision` 是最新版本；UI 提示「文件已被桌宠/另一端改过」，给「载入最新（丢弃我的修改）/ 覆盖（用最新 revision 再写一次）」两个选择，**不要静默覆盖**。
-2. **实时刷新**：订阅 `memory.changed` 事件（`{path, kind: 'write'|'append'|'delete'|'move', revision, from?}`）；树自动刷新；如果当前打开的文件被外部改动且本地有未保存修改 → 提示冲突，别直接重载丢掉用户输入。
+1. **保存冲突**：保存时把读到的 `revision` 作为 `baseRevision`（或把当前正文 SHA-256 作为 `expectedContentHash`）传回。后端内容变了会报 `E_CONFLICT`，`error.details.currentRevision` / `currentContentHash` 是最新版本；UI 提示「文件已被桌宠/另一端改过」，给「载入最新（丢弃我的修改）/ 覆盖（`force: true` 再写一次）」两个选择，**不要静默覆盖**。
+2. **实时刷新**：订阅 `memory.changed` 事件（data 为 `{operation: 'write'|'append'|'delete'|'move'|'restore', path?, from?, to?, commit}`，顶层帧带 `ts`）；树自动刷新；如果当前打开的文件被外部改动且本地有未保存修改 → 提示冲突，别直接重载丢掉用户输入。
 3. **常驻文件**：`PARTNER.md` 是每轮进系统提示词的「主人画像」，删/移会被后端拒绝（`E_FORBIDDEN`）——UI 上删除/移动按钮置灰并标个「常驻」徽标，编辑本身是允许的。
 4. **附件预览**：`blob.get` 返回 base64，图片直接 `<img>`；文本类可以渲染成文本（用 `meta.mime` 判断，注意 1MB 预览上限，超了提示下载）。上传用 `blob.put`，然后把句柄传给聊天（`chat.send` 的 `attachments`）。
    - **缩略图**：`blob.preview {ref}` 会返回 `meta.kind`（`image/text/audio/video/binary`）、图片的 `meta.image {width,height}`（服务端只读文件头嗅探，不解码整图）和文本开头的 `text` 摘录（可带 `maxChars`，`truncated` 表示截断）。
    - **列表缩略图不要每次走 WS 传整份 base64**：pet-ui 主进程和 petd 在同一台机器上，`memory.status` 会给 `workspace` 绝对路径，附件真实路径 = `<workspace>/blobs/<meta.name>`；主进程可直接用 Electron `nativeImage.createThumbnailFromPath(absPath, {width:256,height:256})`（或 `createFromPath` + `resize`）生成缩略图，缓存键用 `meta.sha256`（内容寻址，不会变）。渲染层只拿小图 dataURL。
    - 音频/视频（`kind` 为 `audio/video`）可以直接用 file:// 打开系统播放器或 `<audio>`/`<video>` 标签，注意 CSP 设置。
-5. **一键回到某版本**：历史页选中某次提交 → 展示 diff → 提供「恢复此版本内容」（= 用该提交里的文件内容 `memory.write` 回去，并提示会生成一次新提交）。
+5. **一键回到某版本**：历史页选中某次提交 → 展示 diff → 提供「恢复此版本内容」（调 `memory.restore {path, hash}`；后端会写回内容并生成一次新提交，历史只增不减）。
 
 **验收**：能浏览/编辑/新建/删除记忆文件；冲突提示与双按钮；`memory.changed` 触发树刷新；历史列表 + diff + 恢复；附件列表/预览/上传/删除。截图贴 README。
 

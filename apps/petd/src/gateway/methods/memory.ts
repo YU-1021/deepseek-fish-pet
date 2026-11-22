@@ -35,6 +35,12 @@ const WriteResult = Type.Object({
 
 const BaseRevision = Type.Optional(Type.String({ maxLength: 100 }));
 
+/** 完整 SHA-256（小写 hex，64 位）；pet-ui 编辑器保存时传当前基线正文的 hash。 */
+const ExpectedHash = Type.Optional(Type.String({ minLength: 64, maxLength: 64, pattern: '^[0-9a-fA-F]{64}$' }));
+
+/** 用户在冲突提示里确认「覆盖」时为 true。 */
+const Force = Type.Optional(Type.Boolean());
+
 export interface MemoryMethodDeps {
   memory: MemoryService;
 }
@@ -48,6 +54,8 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
       params: Type.Object({}),
       result: Type.Object({
         dir: Type.String(),
+        /** 工作区绝对路径（pet-ui 主进程用它定位 blobs/ 下的附件真实文件） */
+        workspace: Type.String(),
         fileCount: Type.Integer(),
         git: Type.Object({
           available: Type.Boolean(),
@@ -108,18 +116,24 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     {
       name: 'memory.write',
       scope: 'write',
-      description: '写工作区文件（整份覆盖，自动建目录并提交一次 Git）；带 baseRevision 时做乐观并发冲突检测',
+      description: '写工作区文件（整份覆盖，自动建目录并提交一次 Git）；带 baseRevision/expectedContentHash 时做乐观并发冲突检测，force=true 才允许覆盖',
       params: Type.Object({
         path: Type.String({ minLength: 1, maxLength: 400 }),
         content: Type.String({ maxLength: 200_000 }),
         baseRevision: BaseRevision,
+        expectedContentHash: ExpectedHash,
+        force: Force,
       }),
       result: WriteResult,
       idempotent: false,
     },
     (params) => {
-      const p = params as { path: string; content: string; baseRevision?: string };
-      return deps.memory.write(p.path, p.content, p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision });
+      const p = params as { path: string; content: string; baseRevision?: string; expectedContentHash?: string; force?: boolean };
+      return deps.memory.write(p.path, p.content, {
+        ...(p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision }),
+        ...(p.expectedContentHash === undefined ? {} : { expectedContentHash: p.expectedContentHash }),
+        ...(p.force === undefined ? {} : { force: p.force }),
+      });
     }
   );
 
@@ -127,18 +141,24 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     {
       name: 'memory.append',
       scope: 'write',
-      description: '追加到工作区文件末尾（文件不存在则创建；自动提交一次 Git）；带 baseRevision 时做乐观并发冲突检测',
+      description: '追加到工作区文件末尾（文件不存在则创建；自动提交一次 Git）；带 baseRevision/expectedContentHash 时做乐观并发冲突检测',
       params: Type.Object({
         path: Type.String({ minLength: 1, maxLength: 400 }),
         content: Type.String({ maxLength: 200_000 }),
         baseRevision: BaseRevision,
+        expectedContentHash: ExpectedHash,
+        force: Force,
       }),
       result: WriteResult,
       idempotent: false,
     },
     (params) => {
-      const p = params as { path: string; content: string; baseRevision?: string };
-      return deps.memory.append(p.path, p.content, p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision });
+      const p = params as { path: string; content: string; baseRevision?: string; expectedContentHash?: string; force?: boolean };
+      return deps.memory.append(p.path, p.content, {
+        ...(p.baseRevision === undefined ? {} : { baseRevision: p.baseRevision }),
+        ...(p.expectedContentHash === undefined ? {} : { expectedContentHash: p.expectedContentHash }),
+        ...(p.force === undefined ? {} : { force: p.force }),
+      });
     }
   );
 
@@ -169,6 +189,29 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     (params) => {
       const p = params as { from: string; to: string };
       return deps.memory.move(p.from, p.to);
+    }
+  );
+
+  reg.register(
+    {
+      name: 'memory.restore',
+      scope: 'write',
+      description: '把某次提交里的文件内容恢复到工作区（生成一次新提交，不改写历史）；常驻文件只允许恢复正文',
+      params: Type.Object({
+        path: Type.String({ minLength: 1, maxLength: 400 }),
+        hash: Type.String({ minLength: 4, maxLength: 200 }),
+        expectedContentHash: ExpectedHash,
+        force: Force,
+      }),
+      result: WriteResult,
+      idempotent: false,
+    },
+    (params) => {
+      const p = params as { path: string; hash: string; expectedContentHash?: string; force?: boolean };
+      return deps.memory.restore(p.path, p.hash, {
+        ...(p.expectedContentHash === undefined ? {} : { expectedContentHash: p.expectedContentHash }),
+        ...(p.force === undefined ? {} : { force: p.force }),
+      });
     }
   );
 
