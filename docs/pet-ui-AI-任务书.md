@@ -327,6 +327,8 @@ petd 已上线「技能（SKILL.md）+ 声明式插件」：技能是一段可�
 6. **插件详情**：`plugin.get {id}` 展示版本/描述/技能数/是否有 prompt.md；**不要**做「安装插件」的在线商店（当前只支持本地目录，放进去重启即生效）。
 7. **提示**：技能/插件都会进系统提示词（清单 + always 正文，受 `skills.promptMaxChars` 限制），UI 可给一行说明「技能越多，提示词越长，必要时在聊天里让它用 list_skills/load_skill 按需查」。
 8. **错误**：`E_UNAVAILABLE`（skill/plugin 总开关关闭）→ 提示去 config.json 打开；`E_FORBIDDEN`（改插件技能）→ 灰置并提示「插件技能只读」；`E_CONFLICT`（重名）→ 就地提示换名；`E_NOT_FOUND` → 刷新列表。
+9. **命名规则提示**：技能身份 = 目录名，必须是 ASCII（`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`），中文标题写在 frontmatter/正文；插件 id 同理（点号不允许）。新建技能的输入框直接按这个正则校验，并给示例「目录名 `look-screen`，标题 `看游戏界面`」。
+10. **内置游戏助手**：`apps/petd/assets/plugins/aknight-gmaer/` 是现成插件（`Aknight.gmaer`，5 个技能 + prompt）。UI 不需要做安装器；如果做「插件」列表的空状态，可以提示「把插件目录拷到 `<home>/plugins/` 后刷新」。技能键示例：`aknight-gmaer/look-screen`。
 
 **验收**：建一个 always 技能 → 聊天里模型语气/行为有变化（或它主动 load_skill）→ 停用演示插件后技能列表里不再出现其技能 → 重启 petd 后工作区技能仍在、插件停用状态保留。截图贴 README。
 
@@ -407,6 +409,7 @@ AI 会自我演化（`persona.evolve` 改 `SOUL.agent.md` 外圈），但每次�
 5. **不硬编码**：方法清单以 `health.status.methods` 为准；事件 data 形状以后端代码为准（只会加字段，未知字段忽略）。
 6. **不要做**：不要把 DSH 会话日志/全文读进前端；不要在 UI 里存 DSH 的 key/凭证；不要默认打开「自动交给 DSH」（默认只观察）。
 7. **验收**：桌面 DSH 正在干活时桌宠 UI 显示 working/工具名（读方向）；`dsh.status` 显示私有 runtime 未起；点「交给 DSH」真拿到回答（花一点 token）；`approvalPolicy='ask'` 触发一次审批 → 气泡出现、允许后继续、拒绝则结束；关掉 `dsh.enabled` → 界面显示已关闭且 `dsh.ask` 报中文错误。
+8. **聊天里的 `ask_dsh` 工具**：桌宠聊天里模型自己也可以调 `ask_dsh {task, timeout_ms}`（写代码/改代码/查项目/跑命令，计入写配额、一轮最多 3 次）。UI 侧：在工具活动折叠区显示「交给 DSH：<task 摘要> → <耗时/结果摘要>」即可，不需要单独入口；桥关闭时工具不出现。
 
 ## 8.17 M16：学习闭环 UI 规格（petd 后端已就绪）
 
