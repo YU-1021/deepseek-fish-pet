@@ -224,6 +224,14 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
           observeIntervalMs: Type.Integer(),
           activeMs: Type.Integer(),
         }),
+        game: Type.Object({
+          enabled: Type.Boolean(),
+          assistantDir: Type.String(),
+          nodePath: Type.String(),
+          timeoutMs: Type.Integer(),
+          allowClick: Type.Boolean(),
+          gameHint: Type.String(),
+        }),
         learning: Type.Object({
           enabled: Type.Boolean(),
           requireApproval: Type.Boolean(),
@@ -271,6 +279,7 @@ export function registerHealth(reg: MethodRegistry, deps: HealthDeps): void {
         hooks: { ...cfg.hooks, risk: { ...cfg.hooks.risk } },
         presence: { ...cfg.presence, nightQuiet: { ...cfg.presence.nightQuiet } },
         dsh: { ...cfg.dsh },
+        game: { ...cfg.game },
         learning: { ...cfg.learning },
       };
     }

@@ -366,6 +366,69 @@ export const DSH_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/** 游戏助手（Aknight.gmaer 插件用）：看游戏画面、找按钮、点干员；识别/抓帧/点击都在「预习助手」里做 */
+export const GAME_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'game_look',
+      description:
+        '看游戏当前画面（MAA 抓帧 + PaddleOCR 识别，返回画面上的文字和截图路径）。游戏必须在前台最上面、没被浏览器等窗口挡住，否则拍到的会是挡住它的窗口；被挡住了先用电脑操作把游戏切到前台。',
+      parameters: {
+        type: 'object',
+        properties: {
+          find: { type: 'array', items: { type: 'string' }, description: '可选：顺便在画面上找这些文字（如「开始行动」「代理指挥」）' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'game_find',
+      description: '在游戏画面上找一段文字（模糊匹配），返回覆盖率和坐标。点按钮/干员前先用它定位。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '要找的文字，如「开始行动」「代理指挥」' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'game_click',
+      description:
+        '点游戏里的一个坐标（干员头像、按钮）。默认只返回计划坐标、不真的点（dry-run）；只有主人明确让你动手时才传 real:true。点之前先用 game_look/game_find 确认位置，不要凭记忆点。',
+      parameters: {
+        type: 'object',
+        properties: {
+          x: { type: 'number', description: '窗口内容坐标 x（1280×720 抓帧坐标系）' },
+          y: { type: 'number', description: '窗口内容坐标 y（1280×720 抓帧坐标系）' },
+          real: { type: 'boolean', description: 'true = 真的点（需要主人在 config.game.allowClick 里打开开关）' },
+        },
+        required: ['x', 'y'],
+      },
+    },
+  },
+];
+
+/** 游戏助手工具的最小接口（GameAssistant 结构化满足它；测试里可以塞假的） */
+export interface GameTool {
+  look(options?: {
+    find?: string[];
+    template?: string[];
+    ocrEngine?: 'paddle' | 'windows';
+    textMax?: number;
+  }): Promise<Record<string, unknown>>;
+  find(text: string, minCoverage?: number): Promise<Record<string, unknown>>;
+  template(names: string[]): Promise<Record<string, unknown>>;
+  click(x: number, y: number, options?: { real?: boolean }): Promise<Record<string, unknown>>;
+}
+
 /** 聊天里可用的全部工具（记忆 + 提醒 + 自动化） */
 export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
 
@@ -377,6 +440,7 @@ const ALL_TOOL_NAMES = new Set<string>([
   ...SKILL_TOOLS,
   ...LEARNING_TOOLS,
   ...DSH_TOOLS,
+  ...GAME_TOOLS,
   ...CUA_TOOLS,
 ].map((t) => t.function.name));
 
@@ -402,6 +466,8 @@ export interface MemoryToolboxOptions {
   learning?: LearningService;
   /** DSH 桥；不传/未启用 = 不暴露编程委派工具 */
   dsh?: Pick<DshBridge, 'ask'>;
+  /** 游戏助手；不传/未启用 = 不暴露 game_* 工具 */
+  game?: GameTool;
   /** 电脑操作引擎；不传/未启用 = 不暴露 CUA 工具 */
   cua?: CuaEngine;
   /** 截图是否作为图片一起回给模型（config.cua.includeImages） */
@@ -431,6 +497,7 @@ const WRITE_TOOLS = new Set([
   'cancel_task',
   'propose_learning',
   'ask_dsh',
+  'game_click',
 ]);
 
 /** 本地时间（给模型看的，形如 2026-11-15 20:30） */
@@ -449,6 +516,38 @@ function formatMinutes(ms: number): string {
   return rest === 0 ? `约 ${h} 小时` : `约 ${h} 小时 ${rest} 分钟`;
 }
 
+/** 把 game_look 的返回整理成给模型看的人话 */
+function formatGameLook(res: Record<string, unknown>): string {
+  const capture = (res['capture'] ?? {}) as Record<string, unknown>;
+  const ocr = (res['ocr'] ?? {}) as Record<string, unknown>;
+  const lines: string[] = [];
+  lines.push(`游戏画面 ${String(capture['w'] ?? '?')}×${String(capture['h'] ?? '?')}，截图 ${String(capture['png'] ?? '')}`);
+  const text = typeof ocr['text'] === 'string' ? ocr['text'] : '';
+  lines.push(text ? `识别到的文字（${String(ocr['lineCount'] ?? 0)} 行）：\n${text}` : '画面上没有识别到文字。');
+  const find = res['find'];
+  if (Array.isArray(find) && find.length) {
+    lines.push('找字结果：');
+    for (const item of find) {
+      const it = (item ?? {}) as Record<string, unknown>;
+      const cov = typeof it['coverage'] === 'number' ? it['coverage'] : 0;
+      const box = it['box'] as Record<string, unknown> | null | undefined;
+      const pos = box && typeof box['x'] === 'number' && typeof box['y'] === 'number' ? ` @(${box['x']},${box['y']})` : '';
+      lines.push(`- ${String(it['text'] ?? '')}：${(cov * 100).toFixed(1)}%${pos}`);
+    }
+  }
+  const tpl = res['templates'];
+  if (Array.isArray(tpl) && tpl.length) {
+    lines.push('模板匹配：');
+    for (const item of tpl) {
+      const it = (item ?? {}) as Record<string, unknown>;
+      const score = typeof it['score'] === 'number' ? it['score'] : 0;
+      lines.push(`- ${String(it['name'] ?? '')}：${score.toFixed(3)}${it['matched'] === true ? '（命中）' : ''}`);
+    }
+  }
+  lines.push('（要动手点之前，先用 game_find 定位，再 game_click；默认只 dry-run，不真点）');
+  return lines.join('\n');
+}
+
 export class MemoryToolbox {
   private readonly service: MemoryService;
   private readonly blobs?: BlobStore;
@@ -457,6 +556,7 @@ export class MemoryToolbox {
   private readonly skills?: SkillStore;
   private readonly learning?: LearningService;
   private readonly dsh?: Pick<DshBridge, 'ask'>;
+  private readonly game?: GameTool;
   private readonly cua?: CuaEngine;
   private readonly cuaIncludeImages: boolean;
   private readonly maxWrites: number;
@@ -473,6 +573,7 @@ export class MemoryToolbox {
     this.skills = opts.skills;
     this.learning = opts.learning;
     this.dsh = opts.dsh;
+    this.game = opts.game;
     this.cua = opts.cua;
     this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.maxWrites = opts.maxWrites;
@@ -487,6 +588,7 @@ export class MemoryToolbox {
     if (this.skills !== undefined) tools = [...tools, ...SKILL_TOOLS];
     if (this.learning !== undefined) tools = [...tools, ...LEARNING_TOOLS];
     if (this.dsh !== undefined) tools = [...tools, ...DSH_TOOLS];
+    if (this.game !== undefined) tools = [...tools, ...GAME_TOOLS];
     if (this.cua !== undefined && this.cua.enabled) tools = [...tools, ...CUA_TOOLS];
     return tools;
   }
@@ -777,6 +879,36 @@ export class MemoryToolbox {
         const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
         return `DSH 做完了（${seconds}s，会话 ${answer.sessionId}，第 ${answer.turn} 轮）：\n${answer.text}`;
       }
+      case 'game_look': {
+        const find = Array.isArray(args['find'])
+          ? args['find'].filter((x): x is string => typeof x === 'string')
+          : undefined;
+        const res = await this.requireGame().look(find && find.length ? { find } : {});
+        return formatGameLook(res);
+      }
+      case 'game_find': {
+        const res = await this.requireGame().find(str('text'));
+        const foundRaw = res['found'];
+        const found = typeof foundRaw === 'boolean' ? foundRaw : res['ok'] === true;
+        const coverage = typeof res['coverage'] === 'number' ? res['coverage'] : 0;
+        const box = res['box'] as { x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null | undefined;
+        if (!found) return `没找到「${str('text')}」（最高覆盖率 ${(coverage * 100).toFixed(1)}%）。可以再 game_look 看看屏幕上有什么。`;
+        const center = box && typeof box.x === 'number' && typeof box.y === 'number'
+          ? `，中心约 (${Math.round(box.x + (typeof box.w === 'number' ? box.w / 2 : 0))}, ${Math.round(box.y + (typeof box.h === 'number' ? box.h / 2 : 0))})`
+          : '';
+        return `找到了「${str('text')}」：覆盖率 ${(coverage * 100).toFixed(1)}%${center}。`;
+      }
+      case 'game_click': {
+        const x = optNum('x');
+        const y = optNum('y');
+        if (x === undefined || y === undefined) throw new PetdError('E_BAD_PARAMS', '缺少参数 x/y');
+        const real = args['real'] === true;
+        const res = await this.requireGame().click(Math.round(x), Math.round(y), { real });
+        if (res['dryRun'] === true || real === false) {
+          return `计划点击 (${Math.round(x)}, ${Math.round(y)})；这次没有真的点（dry-run）。主人在旁边明确说要点时，再传 real:true。`;
+        }
+        return `已点击 (${Math.round(x)}, ${Math.round(y)})。点完记得 game_look 确认结果。`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
@@ -817,6 +949,12 @@ export class MemoryToolbox {
   private requireDsh(): Pick<DshBridge, 'ask'> {
     if (!this.dsh) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有接 DSH 桥（config.dsh.enabled=false）');
     return this.dsh;
+  }
+
+  /** 游戏工具必须配了游戏助手才能用 */
+  private requireGame(): GameTool {
+    if (!this.game) throw new PetdError('E_UNAVAILABLE', '游戏助手没开（config.game.enabled=false）');
+    return this.game;
   }
 
   private truncate(text: string): string {

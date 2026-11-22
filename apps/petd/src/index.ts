@@ -74,6 +74,8 @@ import { AgentAuditLog } from './kernel/agent-audit.js';
 import { registerAgentMethods } from './gateway/methods/agent.js';
 import { DshBridge } from './dsh/bridge.js';
 import { registerDshMethods } from './gateway/methods/dsh.js';
+import { GameAssistant } from './game/assistant.js';
+import { registerGameMethods } from './gateway/methods/game.js';
 import { LearningService } from './learning/service.js';
 import { registerLearningMethods } from './gateway/methods/learning.js';
 
@@ -421,6 +423,22 @@ async function main(): Promise<void> {
   });
   if (config.dsh.enabled && config.dsh.observe) dsh.start();
   logger.info('DSH 桥已就绪', { enabled: config.dsh.enabled, observe: config.dsh.observe });
+  // ── 游戏助手：识别/抓帧/点击都交给「预习助手」（MAA method 8 + PaddleOCR + AsstAsyncClick）──
+  const game = new GameAssistant({
+    config: () => config.game,
+    home: paths.home,
+    logger: {
+      debug: (msg, data) => logger.debug(msg, data),
+      info: (msg, data) => logger.info(msg, data),
+      warn: (msg, data) => logger.warn(msg, data),
+      error: (msg, data) => logger.error(msg, data),
+    },
+  });
+  logger.info('游戏助手已就绪', {
+    enabled: config.game.enabled,
+    allowClick: config.game.allowClick,
+    assistantDir: game.status().assistantDir,
+  });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──
@@ -491,6 +509,7 @@ async function main(): Promise<void> {
         ...(config.skills.enabled ? { skills: skillStore } : {}),
         ...(config.learning.enabled ? { learning } : {}),
         ...(config.dsh.enabled ? { dsh } : {}),
+        ...(config.game.enabled ? { game } : {}),
         ...(cua.enabled ? { cua } : {}),
         cuaIncludeImages: config.cua.includeImages,
         guard: async (ctx) => {
@@ -678,6 +697,7 @@ async function main(): Promise<void> {
     publish: (event, data) => publishEvent(event, data),
   });
   registerDshMethods(registry, { bridge: dsh });
+  registerGameMethods(registry, { game });
   registerLearningMethods(registry, { learning });
 
   // 人格自演化取「最近经历」：指定会话优先，否则取最近更新的会话；只取最后 20 条

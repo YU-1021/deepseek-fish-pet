@@ -275,6 +275,20 @@ export interface PetdConfig {
     /** 会话日志多久没更新算不活跃（毫秒） */
     activeMs: number;
   };
+  game: {
+    /** 游戏助手总开关（默认关：打开后聊天里才会出现 game_* 工具） */
+    enabled: boolean;
+    /** 预习助手目录（识别/抓帧/点击的实现）；空 = 自动探测 */
+    assistantDir: string;
+    /** node 可执行文件；空 = 用 petd 自己的 node */
+    nodePath: string;
+    /** 单次桥调用超时（毫秒） */
+    timeoutMs: number;
+    /** 是否允许真点游戏（默认 false = 只做 dry-run 计划，不点） */
+    allowClick: boolean;
+    /** 找游戏窗口用的标题/进程关键字 */
+    gameHint: string;
+  };
   learning: {
     /** 学习/提案总开关（关闭后连 AI 写候选都拒绝） */
     enabled: boolean;
@@ -489,6 +503,15 @@ export const DEFAULT_CONFIG: PetdConfig = {
     askTimeoutMs: 180_000,
     observeIntervalMs: 1500,
     activeMs: 15_000,
+  },
+  game: {
+    // 游戏助手：识别/抓帧/点击都交给「预习助手」（MAA method 8 + PaddleOCR + AsstAsyncClick）
+    enabled: false,
+    assistantDir: '',
+    nodePath: '',
+    timeoutMs: 30_000,
+    allowClick: false,
+    gameHint: '明日方舟',
   },
   learning: {
     // 学习闭环：AI 只能写候选（proposals / skills/staging / learning），批准与转正由主人来
@@ -982,6 +1005,29 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof am === 'number' && Number.isInteger(am) && am >= 1000 && am <= 300_000) out.dsh.activeMs = am;
       else if (am !== undefined) warnings.push('dsh.activeMs 非法，回默认 15000');
     } else warnings.push('dsh 段必须是对象，回默认');
+  }
+  const gameRaw = raw['game'];
+  if (gameRaw !== undefined) {
+    if (isObject(gameRaw)) {
+      const ge = gameRaw['enabled'];
+      if (typeof ge === 'boolean') out.game.enabled = ge;
+      else if (ge !== undefined) warnings.push('game.enabled 非法，回默认 false');
+      const ad = gameRaw['assistantDir'];
+      if (typeof ad === 'string') out.game.assistantDir = ad.trim();
+      else if (ad !== undefined) warnings.push('game.assistantDir 非法，回默认空');
+      const np = gameRaw['nodePath'];
+      if (typeof np === 'string') out.game.nodePath = np.trim();
+      else if (np !== undefined) warnings.push('game.nodePath 非法，回默认空');
+      const tm = gameRaw['timeoutMs'];
+      if (typeof tm === 'number' && Number.isInteger(tm) && tm >= 1000 && tm <= 300_000) out.game.timeoutMs = tm;
+      else if (tm !== undefined) warnings.push('game.timeoutMs 非法，回默认 30000');
+      const ac = gameRaw['allowClick'];
+      if (typeof ac === 'boolean') out.game.allowClick = ac;
+      else if (ac !== undefined) warnings.push('game.allowClick 非法，回默认 false');
+      const gh = gameRaw['gameHint'];
+      if (typeof gh === 'string') out.game.gameHint = gh.trim() || DEFAULT_CONFIG.game.gameHint;
+      else if (gh !== undefined) warnings.push('game.gameHint 非法，回默认 明日方舟');
+    } else warnings.push('game 段必须是对象，回默认');
   }
   const learningRaw = raw['learning'];
   if (learningRaw !== undefined) {

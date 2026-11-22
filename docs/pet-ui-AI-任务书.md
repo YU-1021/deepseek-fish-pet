@@ -103,7 +103,7 @@ node apps/petd/dist/index.js --home "$env:TEMP\petd-ui-dev" --echo
 
 ### 已上线方法（`health.status` 会返回实时清单，UI 请动态读，别硬编码）
 
-目前共 125 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
+目前共 130 个方法：`health.*` / `config.get` / `session.*` / `chat.*`（含 `chat.handoff`）/ `persona.*` / `memory.*` / `blob.*` / `voice.*` / `asr.*` / `mood.*` / `reminder.*` / `automation.*` / `skill.*` / `plugin.*` / `cua.*` / `run.*` / `hooks.*` / `approval.*` / `presence.*` / `agent.*` / `dsh.*` / `learning.*` / `game.*`。下表只列早期骨架里最常用的几条，完整清单以 `health.status.methods` 为准。
 
 | 方法 | 参数 | 结果要点 |
 |---|---|---|
@@ -427,6 +427,23 @@ AI 想学什么，只能写成**候选提案**；主人批准/灰度后才进提
 5. **不要做**：不要给 AI 暴露「批准/拒绝/回滚」的聊天入口（这几步只能人做）；不要自动批准；不要把提案正文写进前端持久化存储；不要把 `learning/` 产物当成配置文件编辑（它归 AI 写、人只审批）。
 6. **不硬编码**：方法清单以 `health.status.methods` 为准；事件 data 形状以后端代码为准（只会加字段，未知字段忽略）。
 7. **验收**：让聊天里模型调一次 `propose_learning`（或直接调 `learning.propose`）→ 列表出现待审条目 → 批准（灰度）→ 状态变 `gray` 且 `learning.status.activeGray` 有它 → 撤销 → 状态 `rolledback` 且产物删除；技能提案批准后能在技能页看到转正后的技能；`learning.proposed`/`learning.approved`/`learning.rolledback` 事件都能驱动界面刷新；被拒绝的提案仍能查看，但不生效。
+
+## 8.18 M17：游戏助手 UI 规格（petd 后端已就绪）
+
+「看屏 → 决策 → 点击」接进了 petd（`game.*`），聊天里由 Aknight.gmaer 插件使用。UI 的定位是：看得见它在看什么、能控制它能不能真动手；**不要做成自己一套游戏操作台**。
+
+- 方法：`game.status`（`{enabled, assistantDir, bridgePath, nodePath, allowClick, gameHint, counters{calls,ok,errors}, lastError, lastCallAt}`）、`game.look {find?, template?, ocrEngine?, textMax?}`（返回 `{ok, game, capture{w,h,path,blackRatio}, ocr{engine,text,lines,lineCount}, find[], template[]}`）、`game.find {text, minCoverage?}`、`game.template {names}`、`game.click {x, y, real?}`（`real` 缺省 false = dry-run，只回 `{ok, dryRun, planned{x,y}, note}`；`allowClick=false` 时传 `real:true` 返回 `E_FORBIDDEN`）。
+- 配置：`config.get.game {enabled, assistantDir, nodePath, timeoutMs, allowClick, gameHint}`。
+- 事件：本模块无专用事件（工具/方法都同步返回）；不要为它新增事件。
+
+1. **状态卡片（必做）**：设置页「游戏助手」——显示开关状态、助手目录、桥是否就绪、`allowClick` 当前值（用红色提示「真点已开」）；开关关闭时所有 `game.*` 显示「未开启」；`counters.calls/errors` 与 `lastError` 便于排查。
+2. **看屏预览（必做）**：主进程读 `capture.path` 的 PNG（**renderer 不碰文件系统**），显示 1280×720 截图 + OCR 文本 + `find` 结果列表（文字/覆盖率/中心坐标）+ `template` 匹配列表；提供「看一眼」按钮（调 `game.look`）。
+3. **点击确认（必做）**：任何真点必须走二次确认弹窗——显示计划坐标、来源（find 结果或手动输入）、当前 `allowClick`；`allowClick=false` 时只允许「试算（dry-run）」并在弹窗里说明「真点开关没开」。确认后调 `game.click {x,y,real:true}`。
+4. **真点开关（必做，人专属）**：`allowClick` 的开关只放在设置里，必须二次确认并给警告（「打开后聊天里模型经你同意可以真的点游戏」）；**不要给聊天/AI 任何打开它的入口**；建议默认关，并显示「本次允许」的一次性按钮（前端只调 dry-run + 引导主人手动确认，先不做临时授权方法）。
+5. **聊天工具展示**：`game_look`/`game_find`/`game_click` 在工具折叠区显示摘要（画面尺寸、OCR 前 3 行、find 命中数与坐标、click 是 dry-run 还是真点）；dry-run 结果用蓝色标「仅计划」。
+6. **失败处理**：`E_UNAVAILABLE`（没开/找不到预习助手）→ 卡片里给「检查助手目录」说明；`E_INTERNAL`（超时/桥没输出）→ 显示 `lastError` 与重试按钮；OCR 明显是网页内容时提示「游戏可能被挡住，先用 CUA 聚焦游戏窗口」。
+7. **不硬编码**：方法清单以 `health.status.methods` 为准；返回字段以后端为准（只增字段，未知忽略）；截图路径不要缓存到前端持久化存储。
+8. **验收**：设置里开 `game.enabled` → 卡片显示桥就绪 → 「看一眼」出截图与 OCR → `game.find` 显示命中坐标 → 「试算」返回计划 → 打开 `allowClick`（二次确认）后真点一次主人指定的坐标（主人自己点确认）→ 关闭 `allowClick` 后真点被拒并提示原因；关掉 `game.enabled` 后 `game.*` 全部显示未开启。
 
 ## 9. 测试策略（省 token）
 
