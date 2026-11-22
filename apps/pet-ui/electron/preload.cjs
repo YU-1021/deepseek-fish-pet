@@ -13,4 +13,12 @@ contextBridge.exposeInMainWorld('petdBootstrap', {
   updatePetHitRegions: (regions) => ipcRenderer.send('pet:hit-regions', regions),
   openApprovalWindow: () => ipcRenderer.invoke('pet:approval-open'),
   closeApprovalWindow: () => ipcRenderer.invoke('pet:approval-close'),
+  openCuaPermissionWindow: (permission) => ipcRenderer.invoke('pet:cua-permission-open', permission),
+  readCuaPermission: () => ipcRenderer.invoke('pet:cua-permission-read'),
+  clearCuaPermission: (id) => ipcRenderer.invoke('pet:cua-permission-clear', id),
+  onCuaPermission: (callback) => {
+    const listener = (_event, permission) => callback(permission);
+    ipcRenderer.on('pet:cua-permission', listener);
+    return () => ipcRenderer.removeListener('pet:cua-permission', listener);
+  },
 });

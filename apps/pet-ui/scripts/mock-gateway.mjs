@@ -37,6 +37,8 @@ let mockSkills = [
   { key: 'plugin:demo-companion:gentle-planner', name: 'gentle-planner', description: '把计划拆成小步骤。', keywords: ['计划'], always: false, source: 'plugin', pluginId: 'demo-companion', bodyChars: 20, updatedAt: new Date().toISOString(), body: '将复杂任务拆成轻松可开始的步骤。' },
 ];
 let mockPlugins = [{ id: 'demo-companion', name: '伙伴小工具', version: '1.0.0', description: '示例插件，提供一个轻量规划技能。', author: 'mock', dir: 'mock://plugins/demo-companion', enabled: true, skillCount: 1, hasPrompt: true }];
+const cuaConfig = { enabled: process.env.MOCK_CUA_ENABLED === 'true', control: true, permission: 'ask-once', grantMinutes: 30, skipTerminalAsk: false, screenshot: { maxWidth: 1280, maxHeight: 800, quality: 75, afterAction: true }, includeImages: false };
+let runPaused = false;
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -125,15 +127,16 @@ function handleMessage(socket, message) {
       pendingApprovals.unshift(pending);
       publishEvent('approval.requested', pending);
     }, 800);
+    if (process.env.MOCK_CUA_PERMISSION === 'true') setTimeout(() => publishEvent('cua.permission', { id: `mock-permission-${Date.now()}`, kind: 'act', question: '示例任务请求在当前窗口中点击一个按钮。', deadlineAt: Date.now() + 60000 }), 1200);
     return;
   }
   if (input.type !== 'req') return;
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable', 'cua.status', 'cua.screenshot', 'cua.answer', 'run.status', 'run.pause', 'run.resume'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig }, cua: { ...cuaConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -303,6 +306,17 @@ function handleMessage(socket, message) {
     const plugin = mockPlugins.find((entry) => entry.id === input.params?.id);
     if (!plugin) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '插件不存在' } }); return; }
     plugin.enabled = input.method === 'plugin.enable'; data = { ...plugin }; publishEvent('plugin.changed', { action: plugin.enabled ? 'enabled' : 'disabled', plugin: data });
+  } else if (input.method === 'cua.status') {
+    data = { enabled: cuaConfig.enabled, control: cuaConfig.control, permission: cuaConfig.permission, grantedUntil: 0, terminalGrantedUntil: 0, paused: runPaused, engine: 'mock', idleMs: 60000, foreground: { hwnd: 1, title: 'Mock Desktop', app: 'mock.exe', displayIndex: 0 }, displays: [{ index: 0, primary: true, width: 1280, height: 800, x: 0, y: 0, dpi: 96 }] };
+  } else if (input.method === 'cua.screenshot') {
+    if (!cuaConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: 'CUA 未启用' } }); return; }
+    data = { text: 'Mock screen preview (no real screen is captured).', width: 1280, height: 800, displayIndex: 0, scale: 1, cursor: { x: 640, y: 400 }, cursorText: 'cursor', foreground: { hwnd: 1, title: 'Mock Desktop', app: 'mock.exe', displayIndex: 0 } };
+  } else if (input.method === 'cua.answer') {
+    data = { found: true };
+  } else if (input.method === 'run.status') {
+    data = { paused: runPaused, reason: runPaused ? '用户暂停了运行' : null, changedAt: Date.now() };
+  } else if (input.method === 'run.pause' || input.method === 'run.resume') {
+    runPaused = input.method === 'run.pause'; data = { paused: runPaused, reason: runPaused ? input.params?.reason ?? '用户暂停了运行' : null, changedAt: Date.now() }; publishEvent(runPaused ? 'run.paused' : 'run.resumed', data);
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

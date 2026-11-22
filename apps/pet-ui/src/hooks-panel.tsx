@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
 import './hooks-panel.css';
@@ -23,6 +23,7 @@ const riskLabel: Record<Risk, string> = { low: '低风险', medium: '中风险',
 export function ApprovalCoordinator() {
   const connection = usePetdStatus();
   const [assessmentNotice, setAssessmentNotice] = useState('');
+  const cuaPending = useRef(false);
   useEffect(() => {
     if (connection.state !== 'connected') return;
     let live = true;
@@ -32,6 +33,7 @@ export function ApprovalCoordinator() {
     void refresh();
     const unsubscribe = subscribeEvents((frame) => {
       if (frame.event === 'approval.requested') void window.petdBootstrap?.openApprovalWindow?.();
+      if (frame.event === 'cua.permission') { cuaPending.current = true; void window.petdBootstrap?.openCuaPermissionWindow?.(frame.data); }
       if (frame.event === 'hooks.assessed') {
         const data = frame.data ?? {};
         if (data.risk === 'low' || data.risk === 'medium') {
@@ -47,11 +49,12 @@ export function ApprovalCoordinator() {
       if (frame.event === 'approval.resolved') window.setTimeout(() => {
         if (!live) return;
         void request('approval.list', {}).then((result) => {
-          if (!result.pending.length) window.setTimeout(() => { if (live) void window.petdBootstrap?.closeApprovalWindow?.(); }, 4500);
+          if (!result.pending.length && !cuaPending.current) window.setTimeout(() => { if (live && !cuaPending.current) void window.petdBootstrap?.closeApprovalWindow?.(); }, 4500);
         }).catch(() => {});
       }, 100);
     });
-    return () => { live = false; unsubscribe(); };
+    const removePermissionListener = window.petdBootstrap?.onCuaPermission?.((permission) => { cuaPending.current = !!permission; });
+    return () => { live = false; unsubscribe(); removePermissionListener?.(); };
   }, [connection.state]);
   return assessmentNotice ? <div className="hooks-toast" role="status">{assessmentNotice}</div> : null;
 }

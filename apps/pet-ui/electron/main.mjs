@@ -8,6 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow;
 let petWindow;
 let approvalWindow;
+let cuaPermission;
 let tray;
 let memoryWorkspace;
 const thumbnailCache = new Map();
@@ -81,6 +82,26 @@ ipcMain.handle('pet:approval-open', (event) => {
 ipcMain.handle('pet:approval-close', (event) => {
   if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
   if (approvalWindow && !approvalWindow.isDestroyed()) approvalWindow.close();
+  return true;
+});
+ipcMain.handle('pet:cua-permission-open', (event, permission) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  cuaPermission = permission && typeof permission.id === 'string' ? permission : undefined;
+  if (!approvalWindow || approvalWindow.isDestroyed()) createApprovalWindow();
+  else { approvalWindow.webContents.send('pet:cua-permission', cuaPermission); approvalWindow.showInactive(); }
+  return true;
+});
+ipcMain.handle('pet:cua-permission-read', (event) => {
+  if (event.sender !== approvalWindow?.webContents) return null;
+  return cuaPermission ?? null;
+});
+ipcMain.handle('pet:cua-permission-clear', (event, id) => {
+  if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;
+  if (!id || cuaPermission?.id === id) {
+    cuaPermission = undefined;
+    approvalWindow?.webContents.send('pet:cua-permission', null);
+    mainWindow?.webContents.send('pet:cua-permission', null);
+  }
   return true;
 });
 function createApprovalWindow() {

@@ -95,3 +95,23 @@ force?: boolean;              // 只在用户确认“覆盖”后传 true
 ```
 
 更新音色时应校验引擎与 `voice.voices` 对应；UI 在写入方法上线前只展示配置值，避免控件看似可改却不生效。
+
+## CUA 设置：配置写入
+
+CUA 已有运行态读取、截图、权限回答与暂停/恢复方法，但没有可供 UI 修改 `config.cua` 的方法。建议 `config.patch` 支持以下部分字段，并由 petd 校验危险组合（例如 `enabled=true`、`control=true`、权限档位、跳过终端确认）：
+
+```ts
+{
+  cua?: {
+    enabled?: boolean;
+    control?: boolean;
+    permission?: 'ask-each-turn' | 'ask-before-acting' | 'ask-once' | 'never-ask';
+    grantMinutes?: number;
+    skipTerminalAsk?: boolean;
+    screenshot?: { maxWidth?: number; maxHeight?: number; quality?: number; afterAction?: boolean };
+    includeImages?: boolean;
+  }
+}
+```
+
+UI 在该方法上线前仅展示 `config.get.cua` 和 `cua.status`，不伪造可保存的开关或权限档位。
