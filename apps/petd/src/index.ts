@@ -490,6 +490,7 @@ async function main(): Promise<void> {
         ...(automation === undefined ? {} : { automation }),
         ...(config.skills.enabled ? { skills: skillStore } : {}),
         ...(config.learning.enabled ? { learning } : {}),
+        ...(config.dsh.enabled ? { dsh } : {}),
         ...(cua.enabled ? { cua } : {}),
         cuaIncludeImages: config.cua.includeImages,
         guard: async (ctx) => {

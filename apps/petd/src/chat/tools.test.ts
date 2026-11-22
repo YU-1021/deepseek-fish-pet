@@ -377,3 +377,34 @@ test('审批门 guard：拒绝时工具不执行，放行时正常，异常变�
   assert.equal(broken.ok, false);
   assert.match(broken.text, /错误（E_INTERNAL）：审批门出错/);
 });
+test('ask_dsh：把编程任务交给 DSH 并回传结果；未接桥时报 E_UNAVAILABLE', async () => {
+  const service = tmpService();
+  const asked: Array<{ task: string; timeoutMs?: number }> = [];
+  const box = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    dsh: {
+      ask: async (task: string, timeoutMs?: number) => {
+        asked.push(timeoutMs === undefined ? { task } : { task, timeoutMs });
+        return { text: '改好了：加了 README 一行。', sessionId: 's-dsh', turn: 3, durationMs: 1234 };
+      },
+    },
+  });
+  const tools = box.definitions().map((t) => t.function.name);
+  assert.ok(tools.includes('ask_dsh'));
+
+  const res = await box.execute(call('ask_dsh', { task: '给 F:/x 项目加一行 README', timeout_ms: 60_000 }));
+  assert.equal(res.ok, true);
+  assert.match(res.text, /DSH 做完了/);
+  assert.match(res.text, /改好了/);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]?.timeoutMs, 60_000);
+  assert.equal(box.writes, 1, '编程委派也计入写配额');
+
+  const noBridge = makeToolbox(service);
+  assert.ok(!noBridge.definitions().map((t) => t.function.name).includes('ask_dsh'));
+  const fail = await noBridge.execute(call('ask_dsh', { task: 'x' }));
+  assert.equal(fail.ok, false);
+  assert.match(fail.text, /E_UNAVAILABLE/);
+});

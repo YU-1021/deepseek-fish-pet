@@ -1,6 +1,6 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 蒸馏记忆注入（含自动蒸馏） + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥 + 学习闭环）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 蒸馏记忆注入（含自动蒸馏） + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥 + 游戏助手插件（Aknight.gmaer） + 学习闭环）
 
-这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天）、**蒸馏记忆注入**（永久事实/日记/会话摘要三层，按权重与预算压进提示词），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一），以及**学习闭环（learning）**（AI 只能把想学的写成候选提案，主人批准/灰度后才进提示词或变成正式技能；全程审计、可回滚，AI 自己批准不了、也写不了正式技能）。
+这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天）、**蒸馏记忆注入**（永久事实/日记/会话摘要三层，按权重与预算压进提示词），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一），以及**学习闭环（learning）**（AI 只能把想学的写成候选提案，主人批准/灰度后才进提示词或变成正式技能；全程审计、可回滚，AI 自己批准不了、也写不了正式技能），以及**游戏助手插件 Aknight.gmaer**（明日方舟陪玩：看屏/进关/布阵/挂机/查干员，随插件提供只读技能；编程类任务由聊天工具 `ask_dsh` 交给 DSH）。
 
 ## 现在有什么
 
@@ -21,8 +21,8 @@
     - 情绪与状态：`mood.status` / `mood.history` / `mood.adjust` / `mood.poke` / `mood.evaluate`（心情/好感/精力 0–100，离线回落，聊天时给行为指导、聊完小步变化，可让模型评估一段对话）
     - 提醒与日程：`reminder.status` / `reminder.list` / `reminder.create` / `reminder.cancel` / `reminder.snooze`（一次性提醒；到点广播 `reminder.due`，错过太久的标 skipped；聊天里模型可用 `remind_in/remind_at/remind_list/remind_cancel` 自己设提醒）
     - 自动化：`automation.status` / `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.delete` / `automation.pause` / `automation.resume` / `automation.run` / `automation.runs`（cron 式自主任务；运行 = 在专用会话里跑一轮聊天并记下输出/用量；聊天里模型可用 `schedule_task/list_tasks/cancel_task` 自己排任务）
-    - 技能：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`（`SKILL.md` + frontmatter；清单进系统提示词，正文靠 `load_skill` 按需读；插件技能只读且带 `pluginId/` 前缀）
-    - 插件：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`（声明式：`home/plugins/<id>/plugin.json` + `prompt.md` + `skills/`，不执行任意 JS；启停状态持久化）
+    - 技能：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`（`SKILL.md` + frontmatter；清单进系统提示词，正文靠 `load_skill` 按需读；插件技能只读且带 `pluginId/` 前缀；**技能身份 = 目录名，目录名必须是 ASCII 安全名**，中文标题写在 frontmatter/正文里）
+    - 插件：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`（声明式：`home/plugins/<id>/plugin.json` + `prompt.md` + `skills/`，不执行任意 JS；启停状态持久化；自带游戏助手模板 `assets/plugins/aknight-gmaer/`）
     - 感知与输入（CUA）：`cua.status` / `cua.screenshot` / `cua.zoom` / `cua.windows` / `cua.focus` / `cua.click` / `cua.move` / `cua.drag` / `cua.mouse_down` / `cua.mouse_up` / `cua.scroll` / `cua.type` / `cua.key` / `cua.wait` / `cua.answer`（照 Coo 形状：GDI 截屏 + 窗口/前台 + SendInput 操作；带权限门、用户让位、终端保护、只读开关；聊天里对应 13 个工具）
     - 运行控制：`run.status` / `run.pause` / `run.resume`（暂停后聊天、自动化、电脑操作都会被挡住；恢复后继续）
     - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` / `hooks.assess`（预览一次操作的风险等级）+ `approval.list` / `approval.answer`（危险动作先问；默认 smart 模式：规则优先，其余敏感操作让模型评 low/medium/high，低/中自动放行、高风险才问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆/键鼠工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.assessed` / `hooks.blocked` / `hooks.changed`）
@@ -460,12 +460,15 @@ cron 式的「自己干活」：每个任务是一段 prompt + 一种计划，�
 技能 = 一段可复用的做事方法（`SKILL.md` + YAML frontmatter），插件 = 一组技能的声明式打包（还能附带一段额外提示词）。都不执行任意代码。
 
 - **技能文件**：`home/skills/<技能名>/SKILL.md`，frontmatter 支持 `name`（展示用）/`description`/`keywords`/`always`，正文是纯 Markdown；目录名就是技能 id（安全字符，避免同名前缀互相覆盖）。
+- **目录名要 ASCII**：技能身份 = 目录名，必须是 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`；中文名放 frontmatter `name` 和正文里。中文目录会被跳过并记一条 warn（`插件技能` 同规则）。
 - **提示词里怎么出现**：只放「清单 + `always: true` 的正文」，按 `skills.promptMaxChars` 预算截断；模型需要某技能的完整步骤时调 `load_skill {name}`，用 `list_skills` 看全部。这样技能很多也不炸上下文。
 - **管理方法**：`skill.list` / `skill.get` / `skill.create` / `skill.update` / `skill.delete`；插件技能只读（`update/delete` 返回 `E_FORBIDDEN`），键带 `pluginId/` 前缀。
-- **插件目录**：`home/plugins/<id>/` 下 `plugin.json`（`name`/`version`/`description` 必填，可选 `author`）、可选 `prompt.md`（最多 2000 字，拼在系统提示词里）、可选 `skills/`（结构同工作区技能，启用后自动进清单）。
+- **插件目录**：`home/plugins/<id>/` 下 `plugin.json`（`name`/`version`/`description` 必填，可选 `author`）、可选 `prompt.md`（最多 2000 字，拼在系统提示词里）、可选 `skills/`（结构同工作区技能，启用后自动进清单）。插件 id 同样是 ASCII 安全名（点号不允许，所以 `Aknight.gmaer` 的目录/id 是 `aknight-gmaer`）。
+- **内置游戏助手模板**：`apps/petd/assets/plugins/aknight-gmaer/`（`Aknight.gmaer`，明日方舟陪玩：看屏、进关、布阵、挂机、查干员；红线是花理智/源石/合成玉前必须主人同意、不点充值、先看屏再动手）。把它整个拷到 `home/plugins/aknight-gmaer/` 就生效，重启 petd 后在技能清单里看到 `aknight-gmaer/` 开头的 5 个技能。
 - **启停**：`plugin.list` / `plugin.get` / `plugin.enable` / `plugin.disable`；状态存 `home/state/plugins.json`（默认启用，停用后它的技能与提示词都不再生效，但文件和技能仍保留）。
 - **声明式、不执行 JS**：插件不能带可执行代码，只贡献「技能 + 提示词」；将来要做动态插件再单独设计权限与沙箱。
 - **聊天里模型能自己用**：`load_skill` / `list_skills` 两个工具（不计写配额）；技能与插件都关闭时工具不会出现。
+- **交给 DSH 写代码**：聊天里模型还能调 `ask_dsh {task, timeout_ms}`（只用于写代码/改代码/查项目/跑命令，会花 token；计入写配额，一轮最多 3 次）。这是「桌宠自己不会写代码时，交给 DSH 做，做完把结果带回来」的通道；DSH 桥没开时该工具不出现。
 - **确认方式**：`node apps/petd/scripts/skills-plugins-smoke.mjs`（真 petd、纯本地、37 项断言，含插件技能只读、启停持久、重启保留）。
 
 ## 感知与输入（CUA）
@@ -526,6 +529,7 @@ AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不
 
 - **DSH → 桌宠（只读观察，默认开）**：尾读 `$DSH_HOME/sessions/<workspace>/<sessionId>/session.v4.jsonl.zstd`（zstd 分帧，Node 24 自带解压），取最后若干事件归纳 `state`（`idle` / `thinking` / `working`）、`turn/step`、当前工具名、最后一段回答文字、`active`（15 秒内更新过）；每 1.5 秒扫一次，只广播 `dsh.activity`，**不 spawn runtime、不花 token**。`dsh.observe` 立刻扫一次并返回快照。
 - **桌宠 → DSH（写方向，懒启动）**：用桌面自带的 Electron 当 Node 起一个私有 runtime（`node spawn "DeepSeek Harness.exe" --expose-internals <app.asar 里的 cli.js> --profile sdk`，env `ELECTRON_RUN_AS_NODE=1`），走 stdio 上的 newline-delimited JSON-RPC 2.0：`initialize` → `session/prompt`，事件走 `session.event` / `session.status`。`dsh.prompt` 立刻返回 `messageId`；`dsh.ask` 等这一回合 `turn/end` 再返回最终文字。凭证复用 DSH 已存的（不需要 `DEEPSEEK_API_KEY`；只有 headless profile 才需要）。
+- **聊天里的编程委派**：`ask_dsh {task, timeout_ms}`——只用来写代码/改代码/查项目/跑命令，会花 token；计入写配额（一轮最多 3 次），DSH 桥关闭时不出现。这是「桌宠自己能做的自己做，编程类交给 DSH」的入口。
 - **为什么不直接连桌面 GUI**：desktop profile 不挂 SDK stdio 服务；`session/resume` 只能恢复没被占用的会话，无法同时附着到 GUI 正在用的会话。私有 runtime 的会话仍落在同一个 `$DSH_HOME/sessions` 里，GUI 之后能 resume。
 - **持久会话**：写方向默认固定 `sessionId='petd-bridge'`（回合数会累加）；对已存在的 id，DSH 的 `session/prompt` 会报 `session "x" already exists`，桥会自动先 `session/resume` 再重试一次。
 - **审批**：`dsh.approvalPolicy='reject'`（默认）时 DSH 要危险权限直接拒；`'ask'` 时广播 `dsh.approval {id, sessionId, toolName, reason, at}`，等前端 `dsh.approval.answer {id, outcome}`（120 秒没人答按 `rejected`）。
@@ -637,7 +641,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 409/409（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并）/经验提名（阈值/去重/失败不中断））
+cd apps/petd && node --test "dist/**/*.test.js"          :: 413/413（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并）/经验提名（阈值/去重/失败不中断）/插件技能接入（ASCII 目录规则/启停即时可见）/ask_dsh 编程委派）
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）

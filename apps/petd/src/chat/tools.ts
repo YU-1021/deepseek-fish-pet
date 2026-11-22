@@ -18,6 +18,7 @@ import type { MemoryService } from '../memory/service.js';
 import type { ReminderStore } from '../reminders/store.js';
 import type { SkillStore } from '../skills/store.js';
 import type { LearningService } from '../learning/service.js';
+import type { DshBridge } from '../dsh/bridge.js';
 import type { CuaEngine } from '../cua/engine.js';
 import { CUA_TOOL_NAMES, CUA_TOOLS, executeCuaTool } from './cua-tools.js';
 
@@ -342,6 +343,29 @@ export const LEARNING_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/** 编程委派：桌宠自己不写代码，编程/工程类任务交给 DSH 做，结果拿回来再整理成技能或提案 */
+export const DSH_TOOLS: LlmToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'ask_dsh',
+      description:
+        '把编程/工程类任务交给 DSH（DeepSeek Harness）去做：它有自己的工具、能读你电脑上的代码并改。只用于写代码、改代码、查项目、跑命令这类事；日常聊天、记东西、看屏幕不要用。会花 token，一轮最多一次。',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: '要 DSH 做的事，写清楚：改哪个项目/文件、要达到什么效果、有什么限制（例如「在 F:/x 项目里加一个…，别动 node_modules」）',
+          },
+          timeout_ms: { type: 'number', description: '最多等多久（毫秒，默认 300000，范围 5000–600000）' },
+        },
+        required: ['task'],
+      },
+    },
+  },
+];
+
 /** 聊天里可用的全部工具（记忆 + 提醒 + 自动化） */
 export const CHAT_TOOLS: LlmToolDefinition[] = [...MEMORY_TOOLS, ...REMINDER_TOOLS];
 
@@ -352,6 +376,7 @@ const ALL_TOOL_NAMES = new Set<string>([
   ...AUTOMATION_TOOLS,
   ...SKILL_TOOLS,
   ...LEARNING_TOOLS,
+  ...DSH_TOOLS,
   ...CUA_TOOLS,
 ].map((t) => t.function.name));
 
@@ -375,6 +400,8 @@ export interface MemoryToolboxOptions {
   skills?: SkillStore;
   /** 学习闭环；不传 = 不暴露学习提案工具 */
   learning?: LearningService;
+  /** DSH 桥；不传/未启用 = 不暴露编程委派工具 */
+  dsh?: Pick<DshBridge, 'ask'>;
   /** 电脑操作引擎；不传/未启用 = 不暴露 CUA 工具 */
   cua?: CuaEngine;
   /** 截图是否作为图片一起回给模型（config.cua.includeImages） */
@@ -403,6 +430,7 @@ const WRITE_TOOLS = new Set([
   'schedule_task',
   'cancel_task',
   'propose_learning',
+  'ask_dsh',
 ]);
 
 /** 本地时间（给模型看的，形如 2026-11-15 20:30） */
@@ -428,6 +456,7 @@ export class MemoryToolbox {
   private readonly automation?: AutomationStore;
   private readonly skills?: SkillStore;
   private readonly learning?: LearningService;
+  private readonly dsh?: Pick<DshBridge, 'ask'>;
   private readonly cua?: CuaEngine;
   private readonly cuaIncludeImages: boolean;
   private readonly maxWrites: number;
@@ -443,6 +472,7 @@ export class MemoryToolbox {
     this.automation = opts.automation;
     this.skills = opts.skills;
     this.learning = opts.learning;
+    this.dsh = opts.dsh;
     this.cua = opts.cua;
     this.cuaIncludeImages = opts.cuaIncludeImages === true;
     this.maxWrites = opts.maxWrites;
@@ -456,6 +486,7 @@ export class MemoryToolbox {
     if (this.automation !== undefined && this.automation.isEnabled()) tools = [...tools, ...AUTOMATION_TOOLS];
     if (this.skills !== undefined) tools = [...tools, ...SKILL_TOOLS];
     if (this.learning !== undefined) tools = [...tools, ...LEARNING_TOOLS];
+    if (this.dsh !== undefined) tools = [...tools, ...DSH_TOOLS];
     if (this.cua !== undefined && this.cua.enabled) tools = [...tools, ...CUA_TOOLS];
     return tools;
   }
@@ -734,6 +765,18 @@ export class MemoryToolbox {
         });
         return `已写成学习提案 ${item.id}（${item.kind}，${item.name}，状态：待主人审批）。主人批准后才生效；可以在提案列表里查看正文。`;
       }
+      case 'ask_dsh': {
+        const task = str('task');
+        const timeoutMs = optNum('timeout_ms');
+        const bridge = this.requireDsh();
+        const started = Date.now();
+        const answer = await bridge.ask(
+          task,
+          timeoutMs === undefined ? undefined : Math.min(600_000, Math.max(5_000, Math.round(timeoutMs)))
+        );
+        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
+        return `DSH 做完了（${seconds}s，会话 ${answer.sessionId}，第 ${answer.turn} 轮）：\n${answer.text}`;
+      }
       default:
         throw new PetdError('E_BAD_PARAMS', `没有这个工具：${name}`);
     }
@@ -768,6 +811,12 @@ export class MemoryToolbox {
   private requireLearning(): LearningService {
     if (!this.learning) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有启用学习闭环');
     return this.learning;
+  }
+
+  /** 编程委派工具必须配了 DSH 桥才能用 */
+  private requireDsh(): Pick<DshBridge, 'ask'> {
+    if (!this.dsh) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有接 DSH 桥（config.dsh.enabled=false）');
+    return this.dsh;
   }
 
   private truncate(text: string): string {
