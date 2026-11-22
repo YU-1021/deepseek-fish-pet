@@ -30,6 +30,13 @@ const reminderTimers = new Map();
 const automationConfig = { enabled: process.env.MOCK_AUTOMATION_ENABLED === 'true', tickSeconds: 30, catchUpMinutes: 60, maxJobs: 50, maxRunsKept: 100, runTimeoutMs: 240000 };
 let automationJobs = [];
 let automationRuns = [];
+const skillsConfig = { enabled: true, dir: 'mock://skills', promptMaxChars: 12000 };
+const pluginsConfig = { enabled: true, dir: 'mock://plugins' };
+let mockSkills = [
+  { key: 'workspace:daily-review', name: 'daily-review', description: '整理每日计划', keywords: ['计划', '复盘'], always: false, source: 'workspace', bodyChars: 34, updatedAt: new Date().toISOString(), body: '先总结今天完成的事，再列出明天最重要的三项。' },
+  { key: 'plugin:demo-companion:gentle-planner', name: 'gentle-planner', description: '把计划拆成小步骤。', keywords: ['计划'], always: false, source: 'plugin', pluginId: 'demo-companion', bodyChars: 20, updatedAt: new Date().toISOString(), body: '将复杂任务拆成轻松可开始的步骤。' },
+];
+let mockPlugins = [{ id: 'demo-companion', name: '伙伴小工具', version: '1.0.0', description: '示例插件，提供一个轻量规划技能。', author: 'mock', dir: 'mock://plugins/demo-companion', enabled: true, skillCount: 1, hasPrompt: true }];
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -124,9 +131,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -268,6 +275,34 @@ function handleMessage(socket, message) {
   } else if (input.method === 'automation.runs') {
     const all = automationRuns.filter((run) => !input.params?.id || run.jobId === input.params.id);
     data = { runs: all.slice(0, input.params?.limit ?? 50) };
+  } else if (input.method === 'skill.list') {
+    data = { skills: mockSkills.filter((skill) => skill.source === 'workspace' || mockPlugins.some((plugin) => plugin.id === skill.pluginId && plugin.enabled)).map(({ body, ...info }) => info) };
+  } else if (input.method === 'skill.get') {
+    data = mockSkills.find((skill) => skill.key === input.params?.key) ?? {};
+  } else if (input.method === 'skill.create') {
+    if (!skillsConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '技能已关闭' } }); return; }
+    const p = input.params ?? {};
+    if (mockSkills.some((skill) => skill.name === p.name)) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_CONFLICT', message: '技能名称已存在' } }); return; }
+    const skill = { key: `workspace:${p.name}`, name: p.name, description: p.description ?? '', keywords: p.keywords ?? [], always: p.always ?? false, source: 'workspace', bodyChars: String(p.body).length, updatedAt: new Date().toISOString(), body: p.body };
+    mockSkills.push(skill); const { body, ...info } = skill; data = info;
+  } else if (input.method === 'skill.update') {
+    if (!skillsConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '技能已关闭' } }); return; }
+    const skill = mockSkills.find((entry) => entry.name === input.params?.name && entry.source === 'workspace');
+    if (!skill) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '技能不存在' } }); return; }
+    Object.assign(skill, input.params, { bodyChars: input.params.body?.length ?? skill.bodyChars, updatedAt: new Date().toISOString() }); const { body, ...info } = skill; data = info;
+  } else if (input.method === 'skill.delete') {
+    if (!skillsConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '技能已关闭' } }); return; }
+    const existed = mockSkills.some((skill) => skill.name === input.params?.name && skill.source === 'workspace');
+    mockSkills = mockSkills.filter((skill) => skill.name !== input.params?.name || skill.source !== 'workspace'); data = { deleted: existed, key: `workspace:${input.params?.name}` };
+  } else if (input.method === 'plugin.list') {
+    data = { plugins: mockPlugins.map((plugin) => ({ ...plugin })) };
+  } else if (input.method === 'plugin.get') {
+    data = mockPlugins.find((plugin) => plugin.id === input.params?.id) ?? {};
+  } else if (input.method === 'plugin.enable' || input.method === 'plugin.disable') {
+    if (!pluginsConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '插件已关闭' } }); return; }
+    const plugin = mockPlugins.find((entry) => entry.id === input.params?.id);
+    if (!plugin) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '插件不存在' } }); return; }
+    plugin.enabled = input.method === 'plugin.enable'; data = { ...plugin }; publishEvent('plugin.changed', { action: plugin.enabled ? 'enabled' : 'disabled', plugin: data });
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {
