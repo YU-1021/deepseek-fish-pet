@@ -13,6 +13,8 @@ let hookRules = [
   { id: 'user-demo-deny', description: '拒绝危险终端参数', enabled: true, kind: 'tool', names: ['cua_type'], action: 'deny', argContains: 'rm -rf /', message: '危险终端命令已拦截。', priority: 10 },
 ];
 let pendingApprovals = [];
+const presenceConfig = { enabled: true, quiet: true, intervalMinutes: 45, idleMinutes: 10, maxPerDay: 12, nightQuiet: { enabled: true, start: '23:00', end: '07:00' } };
+let presenceActivities = [];
 
 function frame(payload, opcode = 1) {
   const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
@@ -84,9 +86,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -124,6 +126,17 @@ function handleMessage(socket, message) {
       data = { found: true };
       publishEvent('approval.resolved', { id: item.id, accepted: input.params.accepted === true, reason: 'answered', remember: input.params.remember === true });
     }
+  } else if (input.method === 'presence.status') {
+    data = { ...presenceConfig, countToday: presenceActivities.length, total: presenceActivities.length, last: presenceActivities[0] ?? null, nextAt: null };
+  } else if (input.method === 'presence.list') {
+    data = { activities: presenceActivities.slice(0, input.params?.limit ?? 50) };
+  } else if (input.method === 'presence.run_once') {
+    if (!presenceConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '静默活动已关闭' } }); return; }
+    const kinds = ['groom', 'stretch', 'window', 'nap', 'tidy', 'idle'];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)];
+    const labels = { groom: '整理羽毛', stretch: '伸懒腰', window: '看窗外', nap: '打盹', tidy: '归置东西', idle: '发呆' };
+    const activity = { id: `mock-presence-${Date.now()}`, kind, label: labels[kind], at: Date.now(), quiet: true };
+    presenceActivities.unshift(activity); data = activity; publishEvent('presence.activity', activity);
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

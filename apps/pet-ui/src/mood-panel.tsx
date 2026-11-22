@@ -5,6 +5,7 @@ import { request, usePetdStatus } from './petd';
 import { moodErrorText, useMoodState } from './mood';
 import type { MoodEntry } from './mood';
 import { HooksSettingsPanel } from './hooks-panel';
+import { PresenceSettingsPanel } from './presence-panel';
 
 type MoodConfig = { enabled: boolean; chatInjection: boolean; chatNudge: boolean; moodDecayPerHour: number; energyRecoverPerHour: number };
 type MoodSettingsPanelProps = { config: { mood?: MoodConfig }; sessionId?: string; showValues: boolean; onShowValuesChange: (show: boolean) => void };
@@ -49,7 +50,7 @@ export function MoodSettingsPanel({ config, sessionId, showValues, onShowValuesC
       <div className="mood-history"><strong>最近变化</strong>{history.length ? history.slice(0, 8).map((entry) => <div className="mood-history-row" key={`${entry.ts}-${entry.key}`}><span>{formatDelta(entry)}</span><small>{new Date(entry.ts).toLocaleString()} · {entry.source}</small></div>) : <p className="mood-muted">还没有变化记录</p>}</div>
       <p className="mood-poke-count">被戳过 {state.pokes} 次</p>
     </>}
-  </section><HooksSettingsPanel/></>;
+  </section><HooksSettingsPanel/><PresenceSettingsPanel/></>;
 }
 
 function MoodGauge({ icon, label, tier, value, showValues }: { icon: ReactNode; label: string; tier: string; value: number; showValues: boolean }) {

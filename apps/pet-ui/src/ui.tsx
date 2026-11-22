@@ -151,6 +151,10 @@ function PetOverlay() {
   const petVideo = useRef<HTMLVideoElement | null>(null);
   const pointerStart = useRef<{ id: number; x: number; y: number } | null>(null);
   const pointerMoved = useRef(false);
+  const lastInteractionAt = useRef(0);
+  const queuedPresence = useRef<{ id: string; kind: string } | null>(null);
+  const presenceTimer = useRef<number | undefined>(undefined);
+  const presenceAnimationTimer = useRef<number | undefined>(undefined);
   const [reaction, setReaction] = useState<{ en: string; zh: string } | null>(null);
   function syncPetHitRegions() {
     const overlay = document.querySelector('.pet-overlay');
@@ -223,6 +227,40 @@ function PetOverlay() {
     const timer = window.setTimeout(syncPetHitRegions, 0);
     return () => window.clearTimeout(timer);
   }, [reaction]);
+  useEffect(() => {
+    let live = true;
+    const animateWhenQuiet = () => {
+      if (!live || !queuedPresence.current) return;
+      if (pointerStart.current || Date.now() - lastInteractionAt.current < 10_000) {
+        presenceTimer.current = window.setTimeout(animateWhenQuiet, 1500);
+        return;
+      }
+      const activity = queuedPresence.current;
+      queuedPresence.current = null;
+      const pet = petFloat.current;
+      if (!pet) return;
+      const classes = ['groom', 'stretch', 'window', 'nap', 'tidy', 'idle'].map((kind) => `pet-presence-${kind}`);
+      pet.classList.remove(...classes);
+      void pet.offsetWidth;
+      pet.classList.add(`pet-presence-${activity.kind}`);
+      if (presenceAnimationTimer.current) window.clearTimeout(presenceAnimationTimer.current);
+      presenceAnimationTimer.current = window.setTimeout(() => pet.classList.remove(`pet-presence-${activity.kind}`), 2200);
+    };
+    const unsubscribe = subscribeEvents((frame) => {
+      if (frame.event === 'chat.user_message' || frame.event === 'chat.assistant_message') lastInteractionAt.current = Date.now();
+      if (frame.event !== 'presence.activity' || frame.data?.quiet !== true) return;
+      const kind = String(frame.data.kind ?? 'idle');
+      if (!['groom', 'stretch', 'window', 'nap', 'tidy', 'idle'].includes(kind)) return;
+      queuedPresence.current = { id: String(frame.data.id ?? Date.now()), kind };
+      if (presenceTimer.current) window.clearTimeout(presenceTimer.current);
+      animateWhenQuiet();
+    });
+    return () => {
+      live = false; unsubscribe();
+      if (presenceTimer.current) window.clearTimeout(presenceTimer.current);
+      if (presenceAnimationTimer.current) window.clearTimeout(presenceAnimationTimer.current);
+    };
+  }, []);
   async function poke() {
     if (enabled !== true) return;
     try {
@@ -251,6 +289,7 @@ function PetOverlay() {
   }
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
+    lastInteractionAt.current = Date.now();
     pointerStart.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     pointerMoved.current = false;
     void window.petdBootstrap?.startDrag();
