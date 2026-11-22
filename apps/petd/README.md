@@ -557,7 +557,7 @@ AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不
 - **架构**：petd 网关 `game.*` → `GameAssistant` spawn `node tools/petd-bridge.js` → 预习助手（MAA method 8 抓帧 + PaddleOCR + 模板匹配 + `AsstAsyncClick` 后台点击）。桥是「一行 JSON 请求 / 一行 JSON 回复」，不长期驻留。
 - **方法**：`game.status`（助手目录/桥/游戏窗口）、`game.look`（抓一帧 + 识别 + 可选 find/template，返回 1280×720 画面文字）、`game.find`（找字覆盖率 + 中心坐标）、`game.template`（模板匹配）、`game.click`（默认 dry-run 只返回计划）。
 - **安全**：`config.game.allowClick` 默认 false；真点要同时满足「开关打开」和「调用带 `real:true`」；插件 prompt 与 5 个技能都要求先 dry-run 看计划、主人同意才 real、一步一动作、花理智前必须问。
-- **限制**：MAA method 8 抓的是桌面副本——游戏被浏览器/别的窗口完全挡住时会拍到挡住它的窗口，插件流程遇到这种情况先用 `cua_windows`/`cua_focus` 把游戏切前台；识别资产已自包含在预习助手 `models/`（104MB），抓帧/点击仍需要 MAA 的 `MaaCore.dll`。
+- **限制**：MAA method 8 抓的是桌面副本——游戏被浏览器/别的窗口完全挡住时会拍到挡住它的窗口，插件流程遇到这种情况先用 `cua_windows`/`cua_focus` 把游戏切前台；**整套 MAA 运行库与资源已自包含在预习助手 `models/maa/`（330MB，含 `MaaCore.dll`），抓帧/识别/点击都不需要另装 MAA**。
 - **确认方式**：`node apps/petd/scripts/game-smoke.mjs`（默认不碰游戏：config + status + dry-run 点击；`--live` 才真抓一帧识别）。
 - 设计与操作流程见 `docs/游戏助手.md`。
 
