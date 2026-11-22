@@ -39,6 +39,8 @@ let mockSkills = [
 let mockPlugins = [{ id: 'demo-companion', name: '伙伴小工具', version: '1.0.0', description: '示例插件，提供一个轻量规划技能。', author: 'mock', dir: 'mock://plugins/demo-companion', enabled: true, skillCount: 1, hasPrompt: true }];
 const cuaConfig = { enabled: process.env.MOCK_CUA_ENABLED === 'true', control: true, permission: 'ask-once', grantMinutes: 30, skipTerminalAsk: false, screenshot: { maxWidth: 1280, maxHeight: 800, quality: 75, afterAction: true }, includeImages: false };
 let runPaused = false;
+const mockAuditScope = { scope: 'AI 只写 home/skills 与 memory 中允许的动态内容（模拟）', memoryZone: 'memory', zones: ['*.agent.md', '*.agent.json', 'memory/'], auditFile: 'mock://state/agent-audit.jsonl' };
+let mockAuditEntries = [{ id: 'mock-audit-1', ts: new Date().toISOString(), actor: 'agent', action: 'write', path: 'SOUL.agent.md', zone: 'agent-file', reason: '根据最近相处经历微调表达方式', before: { hash: 'before-hash', bytes: 20, text: '## 说话方式\n简洁温柔。' }, after: { hash: 'after-hash', bytes: 25, text: '## 说话方式\n简洁温柔，偶尔俏皮。' }, diff: ' ## 说话方式\n-简洁温柔。\n+简洁温柔，偶尔俏皮。', diffChars: 5 }];
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -134,7 +136,7 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable', 'cua.status', 'cua.screenshot', 'cua.answer', 'run.status', 'run.pause', 'run.resume'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs', 'skill.list', 'skill.get', 'skill.create', 'skill.update', 'skill.delete', 'plugin.list', 'plugin.get', 'plugin.enable', 'plugin.disable', 'cua.status', 'cua.screenshot', 'cua.answer', 'run.status', 'run.pause', 'run.resume', 'agent.scope', 'agent.audit.list', 'agent.audit.get', 'agent.rollback'] };
   } else if (input.method === 'config.get') {
     data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig }, skills: { ...skillsConfig }, plugins: { ...pluginsConfig }, cua: { ...cuaConfig } };
   } else if (input.method === 'mood.status') {
@@ -317,6 +319,21 @@ function handleMessage(socket, message) {
     data = { paused: runPaused, reason: runPaused ? '用户暂停了运行' : null, changedAt: Date.now() };
   } else if (input.method === 'run.pause' || input.method === 'run.resume') {
     runPaused = input.method === 'run.pause'; data = { paused: runPaused, reason: runPaused ? input.params?.reason ?? '用户暂停了运行' : null, changedAt: Date.now() }; publishEvent(runPaused ? 'run.paused' : 'run.resumed', data);
+  } else if (input.method === 'agent.scope') {
+    data = mockAuditScope;
+  } else if (input.method === 'agent.audit.list') {
+    const filtered = mockAuditEntries.filter((entry) => (!input.params?.path || entry.path.toLowerCase().includes(input.params.path.toLowerCase())) && (!input.params?.actor || entry.actor === input.params.actor));
+    data = { entries: filtered.slice(0, input.params?.limit ?? 100).map(({ before, after, diff, ...entry }) => entry), total: filtered.length };
+  } else if (input.method === 'agent.audit.get') {
+    const entry = mockAuditEntries.find((item) => item.id === input.params?.id);
+    if (!entry) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '记录不存在' } }); return; }
+    data = { entry };
+  } else if (input.method === 'agent.rollback') {
+    if (process.env.MOCK_AUDIT_CONFLICT === 'true' && input.params?.force !== true) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_CONFLICT', message: '文件之后又被修改', details: { currentHash: 'current-hash', expectedHash: 'after-hash' } } }); return; }
+    const target = mockAuditEntries.find((item) => item.id === input.params?.id);
+    if (!target) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '记录不存在' } }); return; }
+    const entry = { id: `mock-audit-${Date.now()}`, ts: new Date().toISOString(), actor: 'user', action: 'rollback', path: target.path, zone: target.zone, reason: '通过 pet-ui 回滚', before: target.after, after: target.before, diff: target.diff, diffChars: target.diffChars };
+    mockAuditEntries.unshift(entry); data = { path: target.path, restored: target.before ? 'content' : 'deleted', entry: { ...entry, before: undefined, after: undefined, diff: undefined } }; publishEvent('agent.rollback', { id: entry.id, targetId: target.id, path: target.path, restored: data.restored });
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

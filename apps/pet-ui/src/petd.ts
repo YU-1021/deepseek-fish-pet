@@ -31,7 +31,7 @@ function connect() {
         if (!task) return;
         window.clearTimeout(task.timer); pending.delete(frame.id);
         if (frame.ok) task.resolve(frame.data);
-        else task.reject(Object.assign(new Error(frame.error?.message ?? 'petd 请求失败'), { code: frame.error?.code }));
+        else task.reject(Object.assign(new Error(frame.error?.message ?? 'petd 请求失败'), { code: frame.error?.code, details: frame.error?.details }));
       } else if (frame.type === 'event') events.forEach((listener) => listener(frame));
     };
     socket.onclose = (event) => {
