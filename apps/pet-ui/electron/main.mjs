@@ -73,6 +73,16 @@ ipcMain.handle('blob:file-url', (_event, input) => {
   const { name } = input && typeof input === 'object' ? input : {};
   return pathToFileURL(resolveBlobPath(name)).href;
 });
+ipcMain.handle('game:read-capture', (_event, filePath) => {
+  if (typeof filePath !== 'string' || !/\.(png|jpe?g|webp)$/i.test(filePath)) throw new Error('游戏截图路径无效');
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) throw new Error('游戏截图文件不存在');
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error('游戏截图文件异常');
+  const image = nativeImage.createFromPath(resolved);
+  if (image.isEmpty()) throw new Error('无法读取游戏截图');
+  return image.toDataURL();
+});
 ipcMain.handle('pet:show-chat', () => { mainWindow?.show(); mainWindow?.focus(); });
 ipcMain.handle('pet:approval-open', (event) => {
   if (event.sender !== mainWindow?.webContents && event.sender !== approvalWindow?.webContents) return false;

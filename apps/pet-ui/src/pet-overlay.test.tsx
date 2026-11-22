@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.stubGlobal('Audio', class { currentTime = 0; volume = 1; play = mocks.audioPlay; });
   mocks.moodEnabled = true;
   window.history.replaceState({}, '', '/?pet=1');
-  Object.defineProperty(window, 'petdBootstrap', { configurable: true, value: { showChat: mocks.showChat, showPetMenu: mocks.showPetMenu, startDrag: mocks.startDrag, endDrag: mocks.endDrag } });
+  Object.defineProperty(window, 'petdBootstrap', { configurable: true, value: { showChat: mocks.showChat, showPetMenu: mocks.showPetMenu, startDrag: mocks.startDrag, endDrag: mocks.endDrag, updatePetHitRegions: vi.fn() } });
   mocks.request.mockImplementation(async (method: string) => {
     if (method === 'mood.status') return { enabled: mocks.moodEnabled, state: snapshot };
     if (method === 'mood.history') return { entries: [] };
