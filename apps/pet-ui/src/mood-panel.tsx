@@ -10,7 +10,6 @@ import { VoiceSettingsPanel } from './voice-panel';
 import { AsrSettingsPanel } from './asr-panel';
 import { ReminderSettingsPanel } from './reminder-panel';
 import { AutomationSettingsPanel } from './automation-panel';
-import { SkillsSettingsPanel } from './skills-panel';
 import { CuaSettingsPanel } from './cua-panel';
 import { AgentAuditSettingsPanel } from './agent-audit-panel';
 import { DshSettingsPanel } from './dsh-panel';
@@ -59,7 +58,7 @@ export function MoodSettingsPanel({ config, sessionId, showValues, onShowValuesC
       <div className="mood-history"><strong>最近变化</strong>{history.length ? history.slice(0, 8).map((entry) => <div className="mood-history-row" key={`${entry.ts}-${entry.key}`}><span>{formatDelta(entry)}</span><small>{new Date(entry.ts).toLocaleString()} · {entry.source}</small></div>) : <p className="mood-muted">还没有变化记录</p>}</div>
       <p className="mood-poke-count">被戳过 {state.pokes} 次</p>
     </>}
-  </section><HooksSettingsPanel/><PresenceSettingsPanel/><VoiceSettingsPanel config={config}/><AsrSettingsPanel/><ReminderSettingsPanel config={config.reminders}/><AutomationSettingsPanel config={config.automation}/><SkillsSettingsPanel config={config}/><CuaSettingsPanel config={config.cua}/><AgentAuditSettingsPanel/><DshSettingsPanel config={config.dsh}/><LearningSettingsPanel config={config.learning}/></>;
+  </section><HooksSettingsPanel/><PresenceSettingsPanel/><VoiceSettingsPanel config={config}/><AsrSettingsPanel/><ReminderSettingsPanel config={config.reminders}/><AutomationSettingsPanel config={config.automation}/><CuaSettingsPanel config={config.cua}/><AgentAuditSettingsPanel/><DshSettingsPanel config={config.dsh}/><LearningSettingsPanel config={config.learning}/></>;
 }
 
 function MoodGauge({ icon, label, tier, value, showValues }: { icon: ReactNode; label: string; tier: string; value: number; showValues: boolean }) {
