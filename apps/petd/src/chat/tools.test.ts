@@ -408,3 +408,97 @@ test('ask_dsh：把编程任务交给 DSH 并回传结果；未接桥时报 E_UN
   assert.equal(fail.ok, false);
   assert.match(fail.text, /E_UNAVAILABLE/);
 });
+
+test('game_look：查看游戏画面，回传 OCR 文字与找字结果', async () => {
+  const service = tmpService();
+  const seen: Array<Record<string, unknown>> = [];
+  const box = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    game: {
+      look: async (options: Record<string, unknown>) => {
+        seen.push(options);
+        return {
+          ok: true,
+          capture: { w: 1280, h: 720, png: 'C:/tmp/frame.png' },
+          ocr: { engine: 'paddle', ok: true, text: '作战 12/21\n暂停', lineCount: 2 },
+          find: [{ text: '开始行动', coverage: 0.96, box: { x: 100, y: 200, w: 40, h: 20 } }],
+        };
+      },
+      find: async () => ({}),
+      template: async () => ({ ok: true, hits: [] }),
+      click: async () => ({ ok: true }),
+    },
+  });
+  assert.ok(box.definitions().map((t) => t.function.name).includes('game_look'));
+  const res = await box.execute(call('game_look', { find: ['开始行动'] }));
+  assert.equal(res.ok, true);
+  assert.match(res.text, /游戏画面 1280×720/);
+  assert.match(res.text, /识别到的文字（2 行）/);
+  assert.match(res.text, /找到|找字结果/);
+  assert.match(res.text, /开始行动：96\.0%/);
+  assert.deepEqual(seen, [{ find: ['开始行动'] }]);
+});
+
+test('game_find：找到时给覆盖率与中心坐标，没找到时明确说没找到', async () => {
+  const service = tmpService();
+  const box = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    game: {
+      look: async () => ({ ok: true }),
+      find: async (text: string) =>
+        text === '代理指挥'
+          ? { ok: true, found: true, text, coverage: 0.96, box: { x: 100, y: 200, w: 40, h: 20 } }
+          : { ok: true, found: false, text, coverage: 0.2, box: null },
+      template: async () => ({ ok: true, hits: [] }),
+      click: async () => ({ ok: true }),
+    },
+  });
+  const hit = await box.execute(call('game_find', { text: '代理指挥' }));
+  assert.equal(hit.ok, true);
+  assert.match(hit.text, /覆盖率 96\.0%/);
+  assert.match(hit.text, /中心约 \(120, 210\)/);
+  const miss = await box.execute(call('game_find', { text: '开始行动' }));
+  assert.match(miss.text, /没找到「开始行动」/);
+});
+
+test('game_click：默认 dry-run 只给计划；real:true 才真点；计入写配额', async () => {
+  const service = tmpService();
+  const clicks: Array<{ x: number; y: number; real?: boolean }> = [];
+  const box = new MemoryToolbox({
+    service,
+    maxWrites: 3,
+    maxResultChars: 4000,
+    game: {
+      look: async () => ({ ok: true }),
+      find: async () => ({ ok: true }),
+      template: async () => ({ ok: true, hits: [] }),
+      click: async (x: number, y: number, options: { real?: boolean }) => {
+        clicks.push({ x, y, real: options?.real });
+        return { ok: true, dryRun: options?.real !== true, x, y };
+      },
+    },
+  });
+  const dry = await box.execute(call('game_click', { x: 10, y: 20 }));
+  assert.match(dry.text, /计划点击 \(10, 20\)/);
+  assert.equal(box.writes, 1, 'game_click 算写操作');
+  const real = await box.execute(call('game_click', { x: 10, y: 20, real: true }));
+  assert.match(real.text, /已点击 \(10, 20\)/);
+  assert.deepEqual(clicks, [
+    { x: 10, y: 20, real: false },
+    { x: 10, y: 20, real: true },
+  ]);
+});
+
+test('game_*：没配游戏助手时不暴露且调用报 E_UNAVAILABLE', async () => {
+  const service = tmpService();
+  const box = makeToolbox(service);
+  assert.ok(!box.definitions().map((t) => t.function.name).includes('game_look'));
+  const res = await box.execute(call('game_look', {}));
+  assert.equal(res.ok, false);
+  assert.match(res.text, /E_UNAVAILABLE/);
+  assert.match(res.text, /游戏助手没开/);
+});

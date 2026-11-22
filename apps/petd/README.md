@@ -28,6 +28,7 @@
     - 审批门：`hooks.status` / `hooks.list` / `hooks.get` / `hooks.create` / `hooks.update` / `hooks.delete` / `hooks.toggle` / `hooks.assess`（预览一次操作的风险等级）+ `approval.list` / `approval.answer`（危险动作先问；默认 smart 模式：规则优先，其余敏感操作让模型评 low/medium/high，低/中自动放行、高风险才问；内置规则 + 自定义 allow/ask/deny；聊天的文件/定时/记忆/键鼠工具与危险网关方法都过这层；事件 `approval.requested` / `approval.resolved` / `hooks.assessed` / `hooks.blocked` / `hooks.changed`）
   - 静默活动：`presence.status` / `presence.list` / `presence.run_once`（大部分时间自己安静待着；按间隔/夜间安静/用户闲置/每日上限挑小动作，只发 `presence.activity` 事件，不聊天不朗读）
   - 自我迭代审计：`agent.scope`（AI 能写哪些文件）/ `agent.audit.list` / `agent.audit.get`（动态文件的变更流水与 diff）/ `agent.rollback`（人按记录把某个 `.agent.*` 文件回滚到变更前；AI 没有对应工具）
+  - 游戏助手：`game.status` / `game.look` / `game.find` / `game.template` / `game.click`（通过预习助手桥做 MAA 抓帧 + PaddleOCR/模板识别 + 后台点击；`game.click` 默认 dry-run 只给计划，`config.game.allowClick=true` 且传 `real:true` 才真点；聊天里对应 `game_look` / `game_find` / `game_click`）
   - DSH 双向桥：`dsh.status` / `dsh.observe` / `dsh.start` / `dsh.stop` / `dsh.prompt` / `dsh.ask` / `dsh.approval.answer`（读方向：只读尾读桌面 GUI 的 v4 会话日志，归纳空闲/思考中/working，不花 token；写方向：node spawn 桌面自带的 Electron 起私有 SDK JSON-RPC runtime，`dsh.ask` 等这一回合结束拿回答；审批默认拒绝，`dsh.approvalPolicy='ask'` 才广播 `dsh.approval` 问人；事件 `dsh.status` / `dsh.activity` / `dsh.event` / `dsh.approval` / `dsh.approval.resolved`）
   - 学习闭环：`learning.status` / `learning.list` / `learning.get` / `learning.propose`（AI 只能提案，不生效）/ `learning.approve` / `learning.reject` / `learning.rollback`（提案→人批准或灰度→进提示词/转正技能→可回滚；事件 `learning.proposed` / `learning.approved` / `learning.rejected` / `learning.rolledback`）
   - 落盘：`config.json`、`secrets.json`（0600，只存密钥）、`SOUL.md`（人格内核，只人改）、`SOUL.agent.md`（人格外圈，AI 自演化区）、`persona-state.json`（版本/锁/历史）、`sessions/<id>.jsonl` + `sessions/index.json`、`workspace/`（工作区记忆，本身是 Git 仓库；`workspace/blobs/` 存附件、Git 忽略）、`skills/<技能名>/SKILL.md`（工作区技能）、`skills/staging/<id>.agent.md`（AI 技能候选）、`proposals/<id>.agent.md`（其它学习候选）、`learning/<name>.agent.json`（已批准/灰度学习结果）、`state/learning.json`（学习状态与灰度记录）、`plugins/<id>/{plugin.json,prompt.md,skills/}`（声明式插件）、`voice-cache/`（TTS 音频按内容 hash 缓存，可随时删）、`asr/`（whisper 模型与 VAD 模型、临时 WAV；模型很大，可放别处用 `asr.modelDir` 指过去）、`state/mood.json`（情绪状态与最近 100 条变化历史）、`state/reminders.json`（提醒列表与已响记录）、`state/automations.json`（自主任务与运行记录）、`state/plugins.json`（插件启停状态）、`state/hooks.json`（审批门规则）、`state/presence.json`（静默活动记录与今日计数）、`state/agent-audit.jsonl`（动态文件变更审计，只追加、可轮转）、`dsh-workspace/`（DSH 桥私有 runtime 的工作目录，`dsh.cwd` 可改）、`token.json`（0600）、`gateway.json`（运行中端口，退出删除）、`petd.log`（JSONL + 轮转）
@@ -35,7 +36,7 @@
 
 ## 首次启动会做什么
 
-1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks/presence/dsh 十五段）
+1. `config.json` 不存在则按默认生成（gateway/log/llm/chat/voice/asr/mood/reminders/automation/skills/plugins/cua/hooks/presence/dsh/game/learning/memory 各段）
 2. 若 `%APPDATA%/dayu-pet/config.json` 存在：把 `apiBase`/`model` 补进配置、把 `apiKey` 迁进 `secrets.json`（只读旧目录，不打印密钥）
 3. 若旧 `persona.json` 存在：播种 `SOUL.md`（没有则用内置默认人格），同时建 `persona-state.json`（v1 历史可回滚）
 4. 建工作区 `workspace/`：播种 `PARTNER.md`（主人画像模板）、`MEMORY.md`（记忆索引）、`todo.md`（承诺与待办）和 `partner/ notes/ handoffs/ archive/ blobs/` 目录；建 Git 仓库，打 `checkpoint0` 与 `start-<版本>` tag
@@ -178,6 +179,14 @@
     "observeIntervalMs": 1500,
     "activeMs": 15000
   },
+  "game": {
+    "enabled": false,
+    "assistantDir": "",
+    "nodePath": "",
+    "timeoutMs": 30000,
+    "allowClick": false,
+    "gameHint": "明日方舟"
+  },
   "learning": {
     "enabled": true,
     "requireApproval": true,
@@ -299,6 +308,11 @@
 - `dsh.exePath` / `dsh.cliPath` / `dsh.cwd`：`DeepSeek Harness.exe`、SDK runtime 的 `cli.js`、私有 runtime 工作目录；留空自动找（`%LOCALAPPDATA%\Programs\DeepSeek Harness` → `F:\DSH\DeepSeek Harness` → `C:\Program Files\DeepSeek Harness`；cwd 默认 `<home>/dsh-workspace`）。`cli.js` 在 `app.asar` 内，普通 Node 看不见，所以自动检查时跳过 asar 内部路径。
 - `dsh.provider` / `dsh.model` / `dsh.reasoningEffort` / `dsh.maxTokens`：私有 runtime 的模型参数（默认 deepseek-official / deepseek-flash / high / 16000）。
 - `dsh.approvalPolicy` / `dsh.askTimeoutMs`：`reject`（默认，DSH 要危险权限直接拒）或 `ask`（广播 `dsh.approval` 问前端/人，超时拒绝）；`dsh.ask` 等回答的上限（默认 180000ms）。
+- `game.enabled`：游戏助手总开关（默认 false）。打开后聊天里才有 `game_look` / `game_find` / `game_click`，网关才有 `game.*`；关闭时这些方法返回 `E_UNAVAILABLE`。
+- `game.assistantDir` / `game.nodePath`：预习助手目录（默认会在 `C:\deepseek\预习助手`、`F:\DSH\大肥鱼\预习助手` 里找）与 node 可执行文件（留空用当前 node）。
+- `game.timeoutMs`：单次调用超时（1s–300s，默认 30000）。
+- `game.allowClick`：真点总开关（默认 false）。关着时 `game.click` 只返回计划（dry-run）；打开后还要调用参数带 `real:true` 才会真的点。
+- `game.gameHint`：游戏窗口标题/进程提示词（默认「明日方舟」），桥用它找游戏窗口。
 - `learning.enabled`：学习闭环总开关（默认 true）。关闭后聊天里不再提供 `propose_learning` 工具，`learning.propose` 返回 `E_UNAVAILABLE`；已存在的提案仍可读、审批。
 - `learning.requireApproval`：AI 写的学习提案是否必须人批准后生效（默认 true；目前只有人能批准，AI 没有批准通道）。
 - `learning.grayPercent`：灰度比例（0–100，默认 10）——批准为「灰度」的偏好/经验，只有这个比例的回合会被拼进提示词，用来先小范围试。
@@ -536,6 +550,17 @@ AI 会自我演化的时代先定好边界：**代码、配置、密钥永远不
 - **确认方式**：`node apps/petd/scripts/dsh-smoke.mjs`（不花 token：真起 petd、真 spawn 私有 runtime 握手、真观察桌面会话；加 `--live` 才真问一句，花一点 token；24 项）。
 - 设计与实测见 `docs/dsh-bridge.md`。
 
+## 游戏助手（game.*）
+
+把「看屏 → 决策 → 点击」接进 petd：petd 通过一个本机桥调用预习助手（默认 `C:\deepseek\预习助手`）的 MAA 抓帧、PaddleOCR/模板识别与后台点击；聊天里由 Aknight.gmaer 插件使用。
+
+- **架构**：petd 网关 `game.*` → `GameAssistant` spawn `node tools/petd-bridge.js` → 预习助手（MAA method 8 抓帧 + PaddleOCR + 模板匹配 + `AsstAsyncClick` 后台点击）。桥是「一行 JSON 请求 / 一行 JSON 回复」，不长期驻留。
+- **方法**：`game.status`（助手目录/桥/游戏窗口）、`game.look`（抓一帧 + 识别 + 可选 find/template，返回 1280×720 画面文字）、`game.find`（找字覆盖率 + 中心坐标）、`game.template`（模板匹配）、`game.click`（默认 dry-run 只返回计划）。
+- **安全**：`config.game.allowClick` 默认 false；真点要同时满足「开关打开」和「调用带 `real:true`」；插件 prompt 与 5 个技能都要求先 dry-run 看计划、主人同意才 real、一步一动作、花理智前必须问。
+- **限制**：MAA method 8 抓的是桌面副本——游戏被浏览器/别的窗口完全挡住时会拍到挡住它的窗口，插件流程遇到这种情况先用 `cua_windows`/`cua_focus` 把游戏切前台；识别资产已自包含在预习助手 `models/`（104MB），抓帧/点击仍需要 MAA 的 `MaaCore.dll`。
+- **确认方式**：`node apps/petd/scripts/game-smoke.mjs`（默认不碰游戏：config + status + dry-run 点击；`--live` 才真抓一帧识别）。
+- 设计与操作流程见 `docs/游戏助手.md`。
+
 ## 学习闭环（learning.*）
 
 AI 可以「学」，但不能「自己改自己」：它只能把想学的写成**候选提案**，主人批准后才生效，而且批准/回滚都留痕、可撤销。
@@ -613,6 +638,9 @@ node apps/petd/scripts/dsh-smoke.mjs
 
 :: 冒烟：学习闭环（不花 token；提案/列表/详情/灰度批准/回滚/技能转正/审计留痕）
 node apps/petd/scripts/learning-smoke.mjs
+
+:: 冒烟：游戏助手（默认不碰游戏：配置/状态/dry-run 点击；加 --live 才真抓一帧识别）
+node apps/petd/scripts/game-smoke.mjs
 ```
 
 READY 行示例：
@@ -641,7 +669,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 413/413（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并）/经验提名（阈值/去重/失败不中断）/插件技能接入（ASCII 目录规则/启停即时可见）/ask_dsh 编程委派）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 431/431（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并）/经验提名（阈值/去重/失败不中断）/插件技能接入（ASCII 目录规则/启停即时可见）/ask_dsh 编程委派/游戏助手（服务/方法/工具/真桥 e2e 演练））
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）
@@ -696,6 +724,8 @@ CUA 冒烟覆盖（34 项，真截屏/真窗口，不移动你的鼠标键盘）
 DSH 桥冒烟覆盖（默认 22/22 不花 token，加 `--live` 共 24/24）：`config.get` 的 dsh 段（enabled/observe/approvalPolicy）、`dsh.status` 懒启动与观察开关、`DeepSeek Harness.exe` 与 `app.asar` 内 `cli.js` 自动定位、`dsh.observe` 真读桌面 GUI 最新 v4 会话（state/active/workspace）、`dsh.start` 真 spawn 私有 SDK runtime 并握手（provider=deepseek-official、有 serverInfo）、`dsh.status` 事件、`--live` 时 `dsh.ask` 真模型回「收到」且带 turn（会话持久化，turn 累加）、`dsh.event` 事件、`dsh.stop` 关闭 runtime、优雅退出且 `gateway.json` 已删除。
 学习闭环冒烟覆盖（26 项，不花 token）：config.get 的 learning 段、learning.status 初始计数与目录、learning.propose 写候选（proposals/<id>.agent.md 与 skills/staging/<id>.agent.md）、learning.list/learning.get 读回正文、learning.approve 灰度批准写 learning/<name>.agent.json 且 activeGray 有记录、learning.rollback 删除产物并记 state/agent-audit.jsonl、技能提案批准后转正为 skills/<name>/SKILL.md、回滚删除技能文件、learning.proposed/approved/rolledback 事件、优雅退出且 gateway.json 已删除。
 
+游戏助手冒烟覆盖（默认 14 项、`--live` 18 项，不点鼠标键盘）：找到预习助手目录、config.get 的 game 段（enabled/allowClick/gameHint）、game.status 的桥路径与真实存在、game.click 默认 dry-run 只回计划坐标与说明、`--live` 时 game.look 真抓帧（1280×720）、OCR 有结果、find 返回覆盖率、优雅退出 exit=0、gateway.json 已删除。
+
 ## 刻意没做（等需求逐个说）
 
-口语/发音评测（用户明确不做）、说话人识别、游戏助手、WebUI、多 agent 实例、SQLite 状态、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、UIA/OCR/DOM 感知（CUA 只有截图+窗口+键鼠）、CUA 引擎子进程隔离、记忆工具的流式输出……
+口语/发音评测（用户明确不做）、说话人识别、WebUI、多 agent 实例、SQLite 状态、向量检索、图片/音频内容解析（附件只存和给句柄，不做视觉识别）、动态代码插件（插件只贡献技能/提示词，不执行 JS）、UIA/OCR/DOM 感知（CUA 只有截图+窗口+键鼠）、CUA 引擎子进程隔离、记忆工具的流式输出……
