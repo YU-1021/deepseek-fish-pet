@@ -299,6 +299,27 @@ async function main(): Promise<void> {
 
   const llm = createLlmClient({ config: config.llm, apiKey: secrets.llm.apiKey });
 
+  // ── 学习闭环：AI 只能写候选（proposals / skills/staging），人批准/灰度/回滚后才生效 ──
+  // 放在蒸馏之前构造：蒸馏第三步要把够格的经验提名成学习候选。
+  const learning = new LearningService({
+    home: paths.home,
+    config: () => config.learning,
+    logger: {
+      debug: (msg, data) => logger.debug(msg, data),
+      info: (msg, data) => logger.info(msg, data),
+      warn: (msg, data) => logger.warn(msg, data),
+      error: (msg, data) => logger.error(msg, data),
+    },
+    publish: (event, data) => publishEvent(event, data),
+    audit: agentAudit,
+  });
+  learning.ensure();
+  logger.info('学习闭环已就绪', {
+    enabled: config.learning.enabled,
+    requireApproval: config.learning.requireApproval,
+    grayPercent: config.learning.grayPercent,
+  });
+
   // ── 自动蒸馏：把会话整理成摘要/日记/事实/经验（旧桌宠记忆层第二步）；只在手动/交接后触发 ──
   const distiller = new MemoryDistiller({
     memory,
@@ -306,6 +327,8 @@ async function main(): Promise<void> {
     llm,
     chatStore: store,
     config: () => config.memory.distill,
+    learning,
+    home: paths.home,
     logger,
     publish: (event, data) => publishEvent(event, data),
   });
@@ -398,25 +421,6 @@ async function main(): Promise<void> {
   });
   if (config.dsh.enabled && config.dsh.observe) dsh.start();
   logger.info('DSH 桥已就绪', { enabled: config.dsh.enabled, observe: config.dsh.observe });
-  // ── 学习闭环：AI 只能写候选（proposals / skills/staging），人批准/灰度/回滚后才生效 ──
-  const learning = new LearningService({
-    home: paths.home,
-    config: () => config.learning,
-    logger: {
-      debug: (msg, data) => logger.debug(msg, data),
-      info: (msg, data) => logger.info(msg, data),
-      warn: (msg, data) => logger.warn(msg, data),
-      error: (msg, data) => logger.error(msg, data),
-    },
-    publish: (event, data) => publishEvent(event, data),
-    audit: agentAudit,
-  });
-  learning.ensure();
-  logger.info('学习闭环已就绪', {
-    enabled: config.learning.enabled,
-    requireApproval: config.learning.requireApproval,
-    grayPercent: config.learning.grayPercent,
-  });
   // 自动化任务在 chat 之后创建（runner 要调 chat.send），这里先声明给 toolbox 用
   let automation: AutomationStore | undefined;
   // ── 语音：Edge 在线神经语音 + 本机 SAPI 兜底；音频随结果回给 UI 直接播放 ──

@@ -204,7 +204,10 @@
       "similarity": 0.72,
       "maxTokens": 1200,
       "temperature": 0.3,
-      "autoOnHandoff": true
+      "autoOnHandoff": true,
+      "promoteExperiences": true,
+      "promoteWeight": 4,
+      "promoteHits": 2
     }
   }
 }
@@ -221,6 +224,8 @@
 - `memory.distill.similarity`：事实/经验的相似度阈值（0.5–1，默认 0.72），够像就合并权重而不是新增一条。
 - `memory.distill.maxTokens` / `temperature`：单次蒸馏的输出上限与温度（默认 1200 / 0.3，要稳定）。
 - `memory.distill.autoOnHandoff`：`chat.handoff` 交接笔记完成后是否后台自动蒸馏一次（默认开）。
+- `memory.distill.promoteExperiences`：经验候选够格时是否自动提名成 learning 学习提案（默认开；只提名，人批准才生效）。
+- `memory.distill.promoteWeight` / `promoteHits`：提名门槛——权重至少多少（1–10，默认 4）、出现过至少几次（默认 2）。
 
 - `thinkingDisabled`：V4.1-Flash 默认开思考会拖慢首字且按输出价计费，默认显式关掉。
 - `chat.maxToolRounds`：一轮聊天里最多允许几轮「模型调工具 → 结果回灌」（0 = 关闭记忆工具）。
@@ -345,7 +350,7 @@
 - **顺序即记忆维护约定**：注入段自带说明「这是自动整理的记忆，细节以工作区文件为准，不要整份重写」；`memory/` 目录在文件清单里折叠，模型需要细节仍可用记忆工具去读。
 - **预览**：`memory.inject`（read）返回 `{enabled,text,used,dropped}`，pet-ui 设置页可以直接看「下一轮会注入什么」。
 - **手动维护**：表格行可以直接手改/加行，注入只读不改写文件；自动写入走下面的「自动蒸馏」。
-- **自动蒸馏**：`memory.distill {sessionId?, reason?}`（write，一次模型调用）把会话整理成 `{summary, diary, facts[], experiences[]}`，分别写 `memory/medium/`、`memory/diary/`、`memory/facts.md`、`memory/experiences.md`；`sessionId` 省略时取最近一次有消息的会话。事实/经验按「权重累加 + 相似合并（默认阈值 0.72）+ 出现次数+1」更新，不按时间淘汰；同一天再蒸馏日记只追加、不覆盖。默认 `minMessages=4`、太短直接跳过（不花 token）。`chat.handoff` 完成后若 `memory.distill.autoOnHandoff=true` 会在后台自动跑一次，失败只记日志、不影响交接结果。成功后广播 `memory.distilled` 事件（data 带 sessionId/reason/turns/files）。
+- **自动蒸馏**：`memory.distill {sessionId?, reason?}`（write，一次模型调用）把会话整理成 `{summary, diary, facts[], experiences[]}`，分别写 `memory/medium/`、`memory/diary/`、`memory/facts.md`、`memory/experiences.md`；`sessionId` 省略时取最近一次有消息的会话。事实/经验按「权重累加 + 相似合并（默认阈值 0.72）+ 出现次数+1」更新，不按时间淘汰；同一天再蒸馏日记只追加、不覆盖。默认 `minMessages=4`、太短直接跳过（不花 token）。`chat.handoff` 完成后若 `memory.distill.autoOnHandoff=true` 会在后台自动跑一次，失败只记日志、不影响交接结果。成功后广播 `memory.distilled` 事件（data 带 sessionId/reason/turns/files）。**经验转正**：合并后权重 ≥ `promoteWeight` 且出现 ≥ `promoteHits` 的经验会自动提名成 learning 候选（`kind=prompt`，写进 `proposals/`），只在 `home/state/experience-promotions.json` 里记一笔防重复提名；AI 自己不会批准，必须主人在学习闭环 UI 里过一遍。
 
 ## 聊天里自动读写记忆（工具循环）
 
@@ -632,7 +637,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 406/406（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并））
+cd apps/petd && node --test "dist/**/*.test.js"          :: 409/409（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并）/经验提名（阈值/去重/失败不中断））
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）

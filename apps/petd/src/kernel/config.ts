@@ -325,6 +325,12 @@ export interface PetdConfig {
       temperature: number;
       /** chat.handoff 交接完成后自动蒸馏一次 */
       autoOnHandoff: boolean;
+      /** 经验候选达到阈值时自动提名成学习提案（人批准后才生效） */
+      promoteExperiences: boolean;
+      /** 经验提名的最低权重（1–10） */
+      promoteWeight: number;
+      /** 经验提名的最低出现次数 */
+      promoteHits: number;
     };
   };
 }
@@ -512,6 +518,9 @@ export const DEFAULT_CONFIG: PetdConfig = {
       maxTokens: 1200,
       temperature: 0.3,
       autoOnHandoff: true,
+      promoteExperiences: true,
+      promoteWeight: 4,
+      promoteHits: 2,
     },
   },
 };
@@ -1055,6 +1064,15 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
           const aoh = md['autoOnHandoff'];
           if (typeof aoh === 'boolean') out.memory.distill.autoOnHandoff = aoh;
           else if (aoh !== undefined) warnings.push('memory.distill.autoOnHandoff 非法，回默认 true');
+          const pe = md['promoteExperiences'];
+          if (typeof pe === 'boolean') out.memory.distill.promoteExperiences = pe;
+          else if (pe !== undefined) warnings.push('memory.distill.promoteExperiences 非法，回默认 true');
+          const pw = md['promoteWeight'];
+          if (typeof pw === 'number' && Number.isInteger(pw) && pw >= 1 && pw <= 10) out.memory.distill.promoteWeight = pw;
+          else if (pw !== undefined) warnings.push('memory.distill.promoteWeight 非法，回默认 4');
+          const ph = md['promoteHits'];
+          if (typeof ph === 'number' && Number.isInteger(ph) && ph >= 1 && ph <= 20) out.memory.distill.promoteHits = ph;
+          else if (ph !== undefined) warnings.push('memory.distill.promoteHits 非法，回默认 2');
         } else warnings.push('memory.distill 段必须是对象，回默认');
       }
     } else warnings.push('memory 段必须是对象，回默认');

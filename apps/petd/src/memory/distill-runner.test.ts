@@ -14,12 +14,18 @@ import { SEED_DIRS } from './prefix.js';
 import { DIARY_DIR, EXPERIENCES_FILE, FACTS_FILE, MEDIUM_DIR, parseFacts } from './distill.js';
 import { buildTranscript, dateKey, MemoryDistiller, similarity } from './distill-runner.js';
 import type { LlmClient } from '../llm/client.js';
+import type { LearningService } from '../learning/service.js';
 import type { PetdConfig } from '../kernel/config.js';
 import type { ChatStore, Session } from '../chat/store.js';
 
 const NOW = new Date('2026-11-22T10:30:00+08:00');
 
-function setup(opts: { messages?: Session['messages']; llm?: LlmClient | null; over?: Partial<PetdConfig['memory']['distill']> } = {}) {
+function setup(opts: {
+  messages?: Session['messages'];
+  llm?: LlmClient | null;
+  over?: Partial<PetdConfig['memory']['distill']>;
+  learning?: { propose: (input: { kind: string; name: string; content: string; reason: string }) => { id: string } } | null;
+} = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-distill-run-'));
   const dir = path.join(home, 'workspace');
   const memory = new WorkspaceMemory({ dir });
@@ -64,7 +70,21 @@ function setup(opts: { messages?: Session['messages']; llm?: LlmClient | null; o
     memoryService: service,
     llm: opts.llm === undefined ? fakeLlm(DEFAULT_PAYLOAD) : opts.llm,
     chatStore,
-    config: () => ({ enabled: true, minMessages: 2, maxInputChars: 12_000, similarity: 0.72, maxTokens: 1200, temperature: 0.3, autoOnHandoff: true, ...(opts.over ?? {}) }),
+    config: () => ({
+      enabled: true,
+      minMessages: 2,
+      maxInputChars: 12_000,
+      similarity: 0.72,
+      maxTokens: 1200,
+      temperature: 0.3,
+      autoOnHandoff: true,
+      promoteExperiences: false,
+      promoteWeight: 4,
+      promoteHits: 2,
+      ...(opts.over ?? {}),
+    }),
+    learning: (opts.learning ?? null) as unknown as Pick<LearningService, 'propose'> | null,
+    home,
     now: () => NOW,
     publish: (event, data) => events.push({ event, data }),
   });
@@ -181,6 +201,63 @@ test('关闭时抛 E_UNAVAILABLE；没有 llm 也抛 E_UNAVAILABLE', async () =>
     () => noLlm.distiller.run({ sessionId: 's-test' }),
     (err: unknown) => err instanceof PetdError && err.code === 'E_UNAVAILABLE'
   );
+});
+
+test('经验达阈值自动提名 learning 候选：同一条只提名一次，绝不自己批准', async () => {
+  const calls: Array<{ kind: string; name: string; content: string; reason: string }> = [];
+  const ctx = setup({
+    over: { promoteExperiences: true, promoteWeight: 4, promoteHits: 1 },
+    learning: {
+      propose: (input) => {
+        calls.push(input as { kind: string; name: string; content: string; reason: string });
+        return { id: `lrn-test-${calls.length}` };
+      },
+    },
+  });
+  const first = await ctx.distiller.run({ sessionId: 's-test' });
+  assert.equal(first.promoted, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.kind, 'prompt');
+  assert.ok(calls[0]?.content.includes('先记下来再回应'));
+  assert.ok(fs.existsSync(path.join(ctx.home, 'state', 'experience-promotions.json')));
+  // 再蒸馏一次：同一条经验不再重复提名
+  const second = await ctx.distiller.run({ sessionId: 's-test' });
+  assert.equal(second.promoted, undefined);
+  assert.equal(calls.length, 1);
+  assert.equal(ctx.distiller.status().counters.promotions, 1);
+});
+
+test('经验没到阈值 / 没接 learning / 关掉开关时不提名', async () => {
+  const calls: unknown[] = [];
+  const learning = { propose: (input: unknown) => (calls.push(input), { id: 'lrn-x' }) };
+  const lowWeight = setup({ over: { promoteExperiences: true, promoteWeight: 9, promoteHits: 1 }, learning });
+  const r1 = await lowWeight.distiller.run({ sessionId: 's-test' });
+  assert.equal(r1.promoted, undefined);
+  assert.equal(calls.length, 0);
+
+  const noLearning = setup({ over: { promoteExperiences: true, promoteWeight: 1, promoteHits: 1 } });
+  const r2 = await noLearning.distiller.run({ sessionId: 's-test' });
+  assert.equal(r2.promoted, undefined);
+
+  const off = setup({ over: { promoteExperiences: false, promoteWeight: 1, promoteHits: 1 }, learning });
+  const r3 = await off.distiller.run({ sessionId: 's-test' });
+  assert.equal(r3.promoted, undefined);
+  assert.equal(calls.length, 0);
+});
+
+test('提名失败只记日志，不影响本次蒸馏写盘', async () => {
+  const ctx = setup({
+    over: { promoteExperiences: true, promoteWeight: 1, promoteHits: 1 },
+    learning: {
+      propose: () => {
+        throw new Error('learning 磁盘满了');
+      },
+    },
+  });
+  const result = await ctx.distiller.run({ sessionId: 's-test' });
+  assert.equal(result.ok, true);
+  assert.equal(result.promoted, undefined);
+  assert.equal(result.files.experiences?.added, 1);
 });
 
 test('相似度与 transcript 构造：长会话保留开头+结尾', () => {
