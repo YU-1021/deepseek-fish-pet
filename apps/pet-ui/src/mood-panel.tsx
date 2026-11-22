@@ -9,9 +9,10 @@ import { PresenceSettingsPanel } from './presence-panel';
 import { VoiceSettingsPanel } from './voice-panel';
 import { AsrSettingsPanel } from './asr-panel';
 import { ReminderSettingsPanel } from './reminder-panel';
+import { AutomationSettingsPanel } from './automation-panel';
 
 type MoodConfig = { enabled: boolean; chatInjection: boolean; chatNudge: boolean; moodDecayPerHour: number; energyRecoverPerHour: number };
-type MoodSettingsPanelProps = { config: { mood?: MoodConfig; reminders?: { enabled?: boolean; maxPending?: number; catchUpHours?: number; keepFiredDays?: number } }; sessionId?: string; showValues: boolean; onShowValuesChange: (show: boolean) => void };
+type MoodSettingsPanelProps = { config: { mood?: MoodConfig; reminders?: { enabled?: boolean; maxPending?: number; catchUpHours?: number; keepFiredDays?: number }; automation?: any }; sessionId?: string; showValues: boolean; onShowValuesChange: (show: boolean) => void };
 const moodLabels: Record<MoodEntry['key'], string> = { mood: '心情', affection: '好感', energy: '精力' };
 const formatDelta = (entry: MoodEntry) => `${moodLabels[entry.key]} ${entry.delta >= 0 ? '+' : ''}${Number(entry.delta.toFixed(1))}${entry.reason ? `（${entry.reason}）` : ''}`;
 
@@ -53,7 +54,7 @@ export function MoodSettingsPanel({ config, sessionId, showValues, onShowValuesC
       <div className="mood-history"><strong>最近变化</strong>{history.length ? history.slice(0, 8).map((entry) => <div className="mood-history-row" key={`${entry.ts}-${entry.key}`}><span>{formatDelta(entry)}</span><small>{new Date(entry.ts).toLocaleString()} · {entry.source}</small></div>) : <p className="mood-muted">还没有变化记录</p>}</div>
       <p className="mood-poke-count">被戳过 {state.pokes} 次</p>
     </>}
-  </section><HooksSettingsPanel/><PresenceSettingsPanel/><VoiceSettingsPanel config={config}/><AsrSettingsPanel/><ReminderSettingsPanel config={config.reminders}/></>;
+  </section><HooksSettingsPanel/><PresenceSettingsPanel/><VoiceSettingsPanel config={config}/><AsrSettingsPanel/><ReminderSettingsPanel config={config.reminders}/><AutomationSettingsPanel config={config.automation}/></>;
 }
 
 function MoodGauge({ icon, label, tier, value, showValues }: { icon: ReactNode; label: string; tier: string; value: number; showValues: boolean }) {

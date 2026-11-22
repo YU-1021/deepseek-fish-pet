@@ -27,6 +27,9 @@ let mockAsrFeedCount = 0;
 const remindersConfig = { enabled: true, maxPending: 50, catchUpHours: 24, keepFiredDays: 7 };
 let reminders = [];
 const reminderTimers = new Map();
+const automationConfig = { enabled: process.env.MOCK_AUTOMATION_ENABLED === 'true', tickSeconds: 30, catchUpMinutes: 60, maxJobs: 50, maxRunsKept: 100, runTimeoutMs: 240000 };
+let automationJobs = [];
+let automationRuns = [];
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -121,9 +124,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze', 'automation.status', 'automation.list', 'automation.get', 'automation.create', 'automation.update', 'automation.delete', 'automation.pause', 'automation.resume', 'automation.run', 'automation.runs'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig }, automation: { ...automationConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -229,6 +232,42 @@ function handleMessage(socket, message) {
     const item = reminders.find((entry) => entry.id === input.params?.id);
     if (!item) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '提醒不存在' } }); return; }
     item.at = Date.now() + (input.params?.minutes ?? 5) * 60000; item.inMinutes = input.params?.minutes ?? 5; item.snoozes += 1; armReminder(item); data = item; publishEvent('reminder.snoozed', { item });
+  } else if (input.method === 'automation.status') {
+    const scheduled = automationJobs.filter((job) => job.enabled && job.nextRunAt).sort((a, b) => a.nextRunAt - b.nextRunAt);
+    data = { enabled: automationConfig.enabled, jobs: automationJobs.length, enabledJobs: automationJobs.filter((job) => job.enabled).length, running: false, nextAt: scheduled[0]?.nextRunAt ?? null, lastRunAt: automationRuns[0]?.finishedAt ?? null };
+  } else if (input.method === 'automation.list') {
+    data = { jobs: [...automationJobs].sort((a, b) => (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity)) };
+  } else if (input.method === 'automation.get') {
+    data = automationJobs.find((job) => job.id === input.params?.id) ?? {};
+  } else if (input.method === 'automation.create') {
+    if (!automationConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '自动化已关闭' } }); return; }
+    const schedule = input.params.schedule;
+    const scheduleText = schedule.kind === 'manual' ? '只手动运行' : schedule.kind === 'interval' ? `每 ${schedule.everyMinutes} 分钟` : schedule.kind === 'daily' ? `每天 ${schedule.atClock}` : `一次性 · ${new Date(schedule.at).toLocaleString()}`;
+    const nextRunAt = schedule.kind === 'manual' ? null : schedule.kind === 'interval' ? Date.now() + schedule.everyMinutes * 60000 : schedule.kind === 'daily' ? Date.now() + 86400000 : new Date(schedule.at).getTime();
+    const job = { id: `mock-job-${Date.now()}`, name: String(input.params.name ?? '自主任务').slice(0, 40), prompt: input.params.prompt, schedule, scheduleText, enabled: true, createdAt: Date.now(), updatedAt: Date.now(), nextRunAt, nextInMinutes: nextRunAt ? Math.ceil((nextRunAt - Date.now()) / 60000) : null, lastRunAt: null, lastStatus: null, runCount: 0, sessionId: null };
+    automationJobs.push(job); data = job; publishEvent('automation.job.created', { job });
+  } else if (input.method === 'automation.update' || input.method === 'automation.pause' || input.method === 'automation.resume') {
+    if (!automationConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '自动化已关闭' } }); return; }
+    const job = automationJobs.find((entry) => entry.id === input.params?.id);
+    if (!job) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '任务不存在' } }); return; }
+    if (input.method === 'automation.update') { Object.assign(job, input.params, { updatedAt: Date.now() }); if (input.params.schedule) job.scheduleText = input.params.schedule.kind; }
+    if (input.method === 'automation.pause') job.enabled = false;
+    if (input.method === 'automation.resume') job.enabled = true;
+    data = job; publishEvent('automation.job.updated', { job });
+  } else if (input.method === 'automation.delete') {
+    if (!automationConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '自动化已关闭' } }); return; }
+    const before = automationJobs.length; automationJobs = automationJobs.filter((job) => job.id !== input.params?.id);
+    if (before === automationJobs.length) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '任务不存在' } }); return; }
+    data = { deleted: true, id: input.params.id }; publishEvent('automation.job.deleted', { id: input.params.id });
+  } else if (input.method === 'automation.run') {
+    if (!automationConfig.enabled) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '自动化已关闭' } }); return; }
+    const job = automationJobs.find((entry) => entry.id === input.params?.id);
+    if (!job) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '任务不存在' } }); return; }
+    const startedAt = Date.now(); const run = { id: `mock-run-${startedAt}`, jobId: job.id, jobName: job.name, startedBy: 'user', status: 'running', startedAt, finishedAt: null, durationMs: null, output: null, error: null, usage: null };
+    publishEvent('automation.run.started', { run }); run.status = 'succeeded'; run.finishedAt = Date.now(); run.durationMs = run.finishedAt - startedAt; run.output = `模拟完成：${job.prompt.slice(0, 120)}`; run.usage = { promptTokens: 120, completionTokens: 42, totalTokens: 162 }; job.runCount += 1; job.lastRunAt = run.finishedAt; job.lastStatus = run.status; automationRuns.unshift(run); data = run; publishEvent('automation.run.succeeded', { run });
+  } else if (input.method === 'automation.runs') {
+    const all = automationRuns.filter((run) => !input.params?.id || run.jobId === input.params.id);
+    data = { runs: all.slice(0, input.params?.limit ?? 50) };
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {
