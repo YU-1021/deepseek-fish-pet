@@ -14,9 +14,11 @@ import { WorkspaceGit } from '../../memory/git.js';
 import { MemoryService } from '../../memory/service.js';
 import { registerMemoryMethods } from './memory.js';
 import type { DistilledContext } from '../../memory/distill.js';
+import type { MemoryDistiller } from '../../memory/distill-runner.js';
 
 interface SetupOptions {
   inject?: () => DistilledContext;
+  distill?: MemoryDistiller;
 }
 
 function setup(opts: SetupOptions = {}): { reg: MethodRegistry; service: MemoryService; dir: string; events: Array<{ event: string; data: Record<string, unknown> }> } {
@@ -32,7 +34,11 @@ function setup(opts: SetupOptions = {}): { reg: MethodRegistry; service: MemoryS
   });
   service.ensure();
   const reg = new MethodRegistry();
-  registerMemoryMethods(reg, { memory: service, ...(opts.inject === undefined ? {} : { inject: opts.inject }) });
+  registerMemoryMethods(reg, {
+    memory: service,
+    ...(opts.inject === undefined ? {} : { inject: opts.inject }),
+    ...(opts.distill === undefined ? {} : { distill: opts.distill }),
+  });
   return { reg, service, dir, events };
 }
 
@@ -49,13 +55,14 @@ async function call(reg: MethodRegistry, name: string, params: unknown): Promise
   return m.handler(params, ctx);
 }
 
-test('注册 14 个 memory.* 方法，参数校验生效', async () => {
+test('注册 15 个 memory.* 方法，参数校验生效', async () => {
   const { reg } = setup();
   const names = reg.names().filter((n) => n.startsWith('memory.'));
   assert.deepEqual(names, [
     'memory.append',
     'memory.delete',
     'memory.diff',
+    'memory.distill',
     'memory.glob',
     'memory.grep',
     'memory.history',
@@ -89,6 +96,33 @@ test('memory.inject 透传注入预览；没接注入时返回 E_UNAVAILABLE', a
   const bare = setup();
   await assert.rejects(
     async () => call(bare.reg, 'memory.inject', {}),
+    (err: unknown) => err instanceof PetdError && err.code === 'E_UNAVAILABLE'
+  );
+});
+
+test('memory.distill 透传蒸馏；没接时返回 E_UNAVAILABLE', async () => {
+  const fakeResult = {
+    ok: true,
+    reason: 'manual',
+    sessionId: 's-1',
+    turns: 6,
+    files: {},
+  };
+  let called: { sessionId?: string; reason?: string } | undefined;
+  const distiller = {
+    run: async (input: { sessionId?: string; reason?: string }) => {
+      called = input;
+      return fakeResult;
+    },
+  } as unknown as MemoryDistiller;
+  const wired = setup({ distill: distiller });
+  const result = (await call(wired.reg, 'memory.distill', { sessionId: 's-1', reason: 'manual' })) as typeof fakeResult;
+  assert.equal(result.ok, true);
+  assert.deepEqual(called, { sessionId: 's-1', reason: 'manual' });
+
+  const bare = setup();
+  await assert.rejects(
+    async () => call(bare.reg, 'memory.distill', {}),
     (err: unknown) => err instanceof PetdError && err.code === 'E_UNAVAILABLE'
   );
 });

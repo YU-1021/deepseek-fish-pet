@@ -1,4 +1,4 @@
-# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 蒸馏记忆注入 + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥 + 学习闭环）
+# petd — 桌宠常驻网关（阶段 1 骨架 + 聊天 + 人格自编辑 + 工作区记忆 + 蒸馏记忆注入（含自动蒸馏） + 上下文交接 + 附件 + 语音 + 语音识别 + 情绪与状态 + 提醒与日程 + 自动化 + 技能与插件 + 感知与输入 + 智能审批门 + 静默活动 + 自我迭代审计 + DSH 双向桥 + 学习闭环）
 
 这是重构后的新进程骨架：**只跑框架，功能按需求逐个接入注册表**。当前已有：协议、网关、聊天（会话/消息/人格/LLM）、人格自编辑（SOUL.md 按小节改 + 版本/锁/历史/回滚 + AI 自演化）、工作区记忆（文本文件 + Git 版本化，前缀装配进聊天）、**蒸馏记忆注入**（永久事实/日记/会话摘要三层，按权重与预算压进提示词），以及**聊天里模型自己调工具读写记忆**（Coo 那种体验）、附件句柄、语音合成（Edge 在线神经语音 + 本机 SAPI 离线兜底）、语音识别与唤醒词（本地 whisper.cpp + Silero VAD，离线可用）、**情绪与状态**（心情/好感/精力，带离线回落、聊天行为指导与模型评估），**提醒与日程**（一次性提醒、到点事件、稍后提醒；聊天里也能让模型自己设提醒），以及**自动化/自主任务**（cron 式定时任务：按间隔/每天/一次性/手动，让 petd 自己在专用会话里跑一轮聊天，带运行记录与事件；聊天里也能让模型自己排任务），以及**技能与插件**（SKILL.md 技能按需加载、声明式插件贡献技能与额外提示词，聊天里模型能自己查/用技能），以及**感知与输入（CUA）**（照 Coo 的形状：截屏/窗口列表/鼠标键盘操作，13 个聊天工具 + 权限门/用户让位/终端保护/只读开关/暂停控制；默认关闭），以及**智能审批门（hooks）**（危险动作先过规则网，其次由模型评风险：低/中风险自动放行、只有高风险才先问一次（也可切换成「只看规则」）；规则可增删改、可按参数关键字拦截，批准后可记住本连接；拒绝或超时都不执行；默认开启且工具与网关方法两侧都拦），以及**静默活动（presence）**（大部分时间自己安静待着：按间隔/夜间安静/用户闲置/每日上限挑个小动作，只广播 `presence.activity` 给前端做小动画；不聊天、不朗读、不调模型），以及**自我迭代审计**（AI 只能写带 `.agent.*` 后缀的动态文件；每次外圈变更记进 `state/agent-audit.jsonl`，人可按记录把某个文件回滚到变更前；代码/配置/密钥永远拒绝），以及**DSH 双向桥（dsh）**（把桌宠和 DeepSeek Harness 接起来：只读尾读你桌面 GUI 的会话日志，得到「空闲/思考中/正在用工具」；也能起一个私有 SDK runtime，把任务交给 DSH 并等它回答；审批默认一律拒绝，安全第一），以及**学习闭环（learning）**（AI 只能把想学的写成候选提案，主人批准/灰度后才进提示词或变成正式技能；全程审计、可回滚，AI 自己批准不了、也写不了正式技能）。
 
@@ -14,7 +14,7 @@
     - 会话：`session.create` / `session.list` / `session.get` / `session.rename` / `session.delete`
     - 聊天：`chat.send`（自动建会话、带人格与历史、持久化、广播 `chat.*` 事件；模型可在回复前调记忆工具，见下节；可带 `attachments` 附件句柄）
     - 人格：`persona.get` / `persona.patch` / `persona.lock` / `persona.history` / `persona.rollback` / `persona.evolve`
-    - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.restore` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff` / `memory.inject`（蒸馏记忆注入预览）
+    - 记忆：`memory.status` / `memory.tree` / `memory.list` / `memory.read` / `memory.write` / `memory.append` / `memory.delete` / `memory.move` / `memory.restore` / `memory.glob` / `memory.grep` / `memory.history` / `memory.diff` / `memory.inject`（蒸馏记忆注入预览）/ `memory.distill`（把会话蒸馏成摘要/日记/事实/经验）
     - 附件：`blob.put` / `blob.list` / `blob.info` / `blob.get` / `blob.preview` / `blob.delete`
     - 语音：`voice.status` / `voice.voices` / `voice.speak`（合成音频以 base64 返回，`chat.send` 可带 `speak`）
     - 语音识别：`asr.status` / `asr.models` / `asr.download` / `asr.transcribe` / `asr.listen.start` / `asr.listen.feed` / `asr.listen.stop`（本地 whisper.cpp + Silero VAD；流式监听→切句→识别→唤醒词→可选自动回聊天）
@@ -196,6 +196,15 @@
       "diaryChars": 320,
       "medium": 8,
       "mediumChars": 320
+    },
+    "distill": {
+      "enabled": true,
+      "minMessages": 4,
+      "maxInputChars": 12000,
+      "similarity": 0.72,
+      "maxTokens": 1200,
+      "temperature": 0.3,
+      "autoOnHandoff": true
     }
   }
 }
@@ -206,6 +215,12 @@
 - `memory.inject.facts` / `factChars`：最多注入几条永久事实、单条最多多少字（超出截断）。
 - `memory.inject.diaryDays` / `diaryChars`：注入最近几天的日记、单篇最多多少字。
 - `memory.inject.medium` / `mediumChars`：注入最近几条会话摘要、单条最多多少字。
+- `memory.distill.enabled`：自动蒸馏总开关（关闭后 `memory.distill` 报 `E_UNAVAILABLE`，交接后也不触发）。
+- `memory.distill.minMessages`：至少多少条消息才值得蒸馏（太短不花 token）。
+- `memory.distill.maxInputChars`：送进模型的对话正文上限，超了保留开头一小段 + 结尾大部分。
+- `memory.distill.similarity`：事实/经验的相似度阈值（0.5–1，默认 0.72），够像就合并权重而不是新增一条。
+- `memory.distill.maxTokens` / `temperature`：单次蒸馏的输出上限与温度（默认 1200 / 0.3，要稳定）。
+- `memory.distill.autoOnHandoff`：`chat.handoff` 交接笔记完成后是否后台自动蒸馏一次（默认开）。
 
 - `thinkingDisabled`：V4.1-Flash 默认开思考会拖慢首字且按输出价计费，默认显式关掉。
 - `chat.maxToolRounds`：一轮聊天里最多允许几轮「模型调工具 → 结果回灌」（0 = 关闭记忆工具）。
@@ -329,7 +344,8 @@
 - **预算**：`config.memory.inject.budgetChars`（默认 7000，500–8000）；超预算**先丢摘要、再丢日记、最后丢事实**（事实尽量保留），单条超长按 `factChars/diaryChars/mediumChars` 截断。
 - **顺序即记忆维护约定**：注入段自带说明「这是自动整理的记忆，细节以工作区文件为准，不要整份重写」；`memory/` 目录在文件清单里折叠，模型需要细节仍可用记忆工具去读。
 - **预览**：`memory.inject`（read）返回 `{enabled,text,used,dropped}`，pet-ui 设置页可以直接看「下一轮会注入什么」。
-- **手动维护**：表格行可以直接手改/加行，注入只读不改写文件；蒸馏管线（自动写这三层）留待下一步接入。
+- **手动维护**：表格行可以直接手改/加行，注入只读不改写文件；自动写入走下面的「自动蒸馏」。
+- **自动蒸馏**：`memory.distill {sessionId?, reason?}`（write，一次模型调用）把会话整理成 `{summary, diary, facts[], experiences[]}`，分别写 `memory/medium/`、`memory/diary/`、`memory/facts.md`、`memory/experiences.md`；`sessionId` 省略时取最近一次有消息的会话。事实/经验按「权重累加 + 相似合并（默认阈值 0.72）+ 出现次数+1」更新，不按时间淘汰；同一天再蒸馏日记只追加、不覆盖。默认 `minMessages=4`、太短直接跳过（不花 token）。`chat.handoff` 完成后若 `memory.distill.autoOnHandoff=true` 会在后台自动跑一次，失败只记日志、不影响交接结果。成功后广播 `memory.distilled` 事件（data 带 sessionId/reason/turns/files）。
 
 ## 聊天里自动读写记忆（工具循环）
 
@@ -616,7 +632,7 @@ ws.on('message', (m) => {
 
 ```bat
 cd packages/protocol && node --test "dist/**/*.test.js"   :: 10/10
-cd apps/petd && node --test "dist/**/*.test.js"          :: 397/397（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复）
+cd apps/petd && node --test "dist/**/*.test.js"          :: 406/406（网关/聊天/工具循环/交接/人格+SOUL分层/记忆/蒸馏注入/附件/语音/ASR/情绪/提醒/自动化/技能/插件/CUA/暂停/审批门+智能风险评审/静默活动/自我迭代写盘守卫+审计/按文件回滚/DSH 桥（协议/运行时/观察/方法/审批）/学习闭环（服务/网关/工具/提示词）/记忆并发与按版本恢复/自动蒸馏（会话→摘要/日记/事实/经验合并））
 cd apps/petd && node scripts/smoke.mjs                   :: 网关端到端冒烟
 cd apps/petd && node scripts/chat-smoke.mjs --home D:\x  :: 聊天端到端（真 LLM，保留 home 便于检查 SOUL.md/sessions）
 cd apps/petd && node scripts/persona-smoke.mjs --home D:\x :: 人格端到端（真 LLM 一次 evolve，保留 home 便于检查 SOUL.md/persona-state.json）

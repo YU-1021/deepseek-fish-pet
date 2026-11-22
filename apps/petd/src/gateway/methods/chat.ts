@@ -75,6 +75,8 @@ const Speech = Type.Object({
 
 export interface ChatMethodDeps {
   chat: ChatService;
+  /** 交接笔记完成后、后台跑一次记忆蒸馏（不阻塞响应；失败只记日志） */
+  distillAfterHandoff?: (sessionId: string) => void;
 }
 
 export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): void {
@@ -217,7 +219,9 @@ export function registerChatMethods(reg: MethodRegistry, deps: ChatMethodDeps): 
     },
     async (params) => {
       const p = params as { sessionId: string };
-      return deps.chat.handoff(p.sessionId);
+      const result = await deps.chat.handoff(p.sessionId);
+      deps.distillAfterHandoff?.(p.sessionId);
+      return result;
     }
   );
 }

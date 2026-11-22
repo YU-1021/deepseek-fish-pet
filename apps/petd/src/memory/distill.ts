@@ -35,6 +35,16 @@ export const FACTS_HEADER = [
   '| --- | --- | --- | --- | --- |',
 ];
 
+/** 技能经验候选的表头（第 3 阶段会把权重够高的提名成学习提案，等人批准）。 */
+export const EXPERIENCES_HEADER = [
+  '# 技能经验候选',
+  '',
+  '（程序从对话里整理的「怎么做事」经验；权重够高时会被提名成学习提案，主人批准后才生效。）',
+  '',
+  '| 经验 | 权重 | 标签 | 出现 | 最近 |',
+  '| --- | --- | --- | --- | --- |',
+];
+
 export interface FactEntry {
   text: string;
   /** 1–10，越大越重要（注入时按它排序） */
@@ -122,8 +132,8 @@ function escapeCell(text: string): string {
   return text.replace(/\|/g, '｜').replace(/\r?\n/g, ' ').trim();
 }
 
-/** 解析 memory/facts.md 里的表格行；坏行忽略（不报错，注入不能因为一条坏数据挂掉）。 */
-export function parseFacts(markdown: string): FactEntry[] {
+/** 解析表格行（事实/经验同形）；坏行忽略（不报错，注入不能因为一条坏数据挂掉）。 */
+function parseTable(markdown: string, headerCell: string): FactEntry[] {
   const rows: FactEntry[] = [];
   for (const line of markdown.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -135,7 +145,7 @@ export function parseFacts(markdown: string): FactEntry[] {
       .map((c) => c.trim());
     if (cells.length < 2) continue;
     const text = cells[0];
-    if (!text || /^-+$/.test(text) || text === '事实') continue;
+    if (!text || /^-+$/.test(text) || text === headerCell) continue;
     const weight = Number.parseInt(cells[1] ?? '', 10);
     rows.push({
       text,
@@ -148,10 +158,9 @@ export function parseFacts(markdown: string): FactEntry[] {
   return rows;
 }
 
-/** 按权重排序渲染回 Markdown 表格（写文件时用；注入只读不写）。 */
-export function renderFacts(entries: readonly FactEntry[]): string {
+function renderTable(entries: readonly FactEntry[], header: readonly string[]): string {
   const sorted = [...entries].sort(compareFacts);
-  const lines = [...FACTS_HEADER];
+  const lines = [...header];
   for (const entry of sorted) {
     lines.push(
       `| ${escapeCell(entry.text)} | ${entry.weight} | ${entry.tags.map(escapeCell).join('、')} | ${entry.hits} | ${escapeCell(
@@ -161,6 +170,26 @@ export function renderFacts(entries: readonly FactEntry[]): string {
   }
   lines.push('');
   return lines.join('\n');
+}
+
+/** 解析 memory/facts.md。 */
+export function parseFacts(markdown: string): FactEntry[] {
+  return parseTable(markdown, '事实');
+}
+
+/** 按权重排序渲染回 Markdown 表格（写文件时用；注入只读不写）。 */
+export function renderFacts(entries: readonly FactEntry[]): string {
+  return renderTable(entries, FACTS_HEADER);
+}
+
+/** 解析 memory/experiences.md（与事实同形状）。 */
+export function parseExperiences(markdown: string): FactEntry[] {
+  return parseTable(markdown, '经验');
+}
+
+/** 渲染技能经验候选表格。 */
+export function renderExperiences(entries: readonly FactEntry[]): string {
+  return renderTable(entries, EXPERIENCES_HEADER);
 }
 
 /** 排序：权重降序 → 最近出现降序 → 文本升序（同分稳定）。 */

@@ -9,6 +9,7 @@ import { PetdError } from '@petd/protocol';
 import type { MethodRegistry } from '../registry.js';
 import type { MemoryService } from '../../memory/service.js';
 import type { DistilledContext } from '../../memory/distill.js';
+import type { MemoryDistiller } from '../../memory/distill-runner.js';
 
 const Entry = Type.Object({
   name: Type.String(),
@@ -47,6 +48,8 @@ export interface MemoryMethodDeps {
   memory: MemoryService;
   /** 蒸馏记忆注入预览（pet-ui 调试/设置页用）；未接时 memory.inject 返回 E_UNAVAILABLE */
   inject?: () => DistilledContext;
+  /** 自动蒸馏（把会话整理成摘要/日记/事实/经验）；未接时 memory.distill 返回 E_UNAVAILABLE */
+  distill?: MemoryDistiller;
 }
 
 export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDeps): void {
@@ -310,6 +313,58 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     () => {
       if (deps.inject === undefined) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有接蒸馏记忆注入');
       return deps.inject();
+    }
+  );
+
+  reg.register(
+    {
+      name: 'memory.distill',
+      scope: 'write',
+      description: '把一次会话蒸馏成摘要/日记/事实/经验（会花一次模型调用；默认取最近一次有消息的会话）',
+      params: Type.Object({
+        sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+        reason: Type.Optional(Type.String({ maxLength: 80 })),
+      }),
+      result: Type.Object({
+        ok: Type.Boolean(),
+        reason: Type.String(),
+        sessionId: Type.Optional(Type.String()),
+        turns: Type.Integer(),
+        skipped: Type.Optional(Type.Union([Type.Literal('too-short'), Type.Literal('empty')])),
+        files: Type.Object({
+          medium: Type.Optional(Type.Object({ path: Type.String(), commit: Type.Union([Type.String(), Type.Null()]) })),
+          diary: Type.Optional(Type.Object({ path: Type.String(), commit: Type.Union([Type.String(), Type.Null()]) })),
+          facts: Type.Optional(
+            Type.Object({
+              path: Type.String(),
+              commit: Type.Union([Type.String(), Type.Null()]),
+              added: Type.Integer(),
+              merged: Type.Integer(),
+            })
+          ),
+          experiences: Type.Optional(
+            Type.Object({
+              path: Type.String(),
+              commit: Type.Union([Type.String(), Type.Null()]),
+              added: Type.Integer(),
+              merged: Type.Integer(),
+            })
+          ),
+        }),
+        usage: Type.Optional(
+          Type.Object({ promptTokens: Type.Optional(Type.Integer()), completionTokens: Type.Optional(Type.Integer()) })
+        ),
+      }),
+      timeoutMs: 120_000,
+      idempotent: false,
+    },
+    async (params) => {
+      if (deps.distill === undefined) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有接自动蒸馏');
+      const p = (params ?? {}) as { sessionId?: string; reason?: string };
+      return deps.distill.run({
+        ...(p.sessionId === undefined ? {} : { sessionId: p.sessionId }),
+        ...(p.reason === undefined ? {} : { reason: p.reason }),
+      });
     }
   );
 }

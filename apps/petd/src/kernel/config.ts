@@ -309,6 +309,23 @@ export interface PetdConfig {
       /** 单条摘要最多多少字（超出截断） */
       mediumChars: number;
     };
+    /** 自动蒸馏：把一段对话整理成摘要/日记/事实/经验，写进 memory/（旧桌宠记忆层第二步） */
+    distill: {
+      /** 总开关（关闭后 memory.distill 报 E_UNAVAILABLE，交接后也不触发） */
+      enabled: boolean;
+      /** 至少多少条消息才值得蒸馏（太短不花 token） */
+      minMessages: number;
+      /** 送进模型的对话正文最多多少字（超了保留开头一小段 + 结尾大部分） */
+      maxInputChars: number;
+      /** 相似度阈值 0.5–1：高于它视为同一条事实/经验，合并而不是新增 */
+      similarity: number;
+      /** 单次蒸馏的最大输出 token */
+      maxTokens: number;
+      /** 蒸馏用温度（要稳定，别太高） */
+      temperature: number;
+      /** chat.handoff 交接完成后自动蒸馏一次 */
+      autoOnHandoff: boolean;
+    };
   };
 }
 
@@ -486,6 +503,15 @@ export const DEFAULT_CONFIG: PetdConfig = {
       diaryChars: 320,
       medium: 8,
       mediumChars: 320,
+    },
+    distill: {
+      enabled: true,
+      minMessages: 4,
+      maxInputChars: 12_000,
+      similarity: 0.72,
+      maxTokens: 1200,
+      temperature: 0.3,
+      autoOnHandoff: true,
     },
   },
 };
@@ -1003,6 +1029,33 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
           if (typeof mch === 'number' && Number.isInteger(mch) && mch >= 40 && mch <= 2000) out.memory.inject.mediumChars = mch;
           else if (mch !== undefined) warnings.push('memory.inject.mediumChars 非法，回默认 320');
         } else warnings.push('memory.inject 段必须是对象，回默认');
+      }
+      const distillRaw = memoryRaw['distill'];
+      if (distillRaw !== undefined) {
+        if (isObject(distillRaw)) {
+          const md = distillRaw;
+          const den = md['enabled'];
+          if (typeof den === 'boolean') out.memory.distill.enabled = den;
+          else if (den !== undefined) warnings.push('memory.distill.enabled 非法，回默认 true');
+          const mm = md['minMessages'];
+          if (typeof mm === 'number' && Number.isInteger(mm) && mm >= 1 && mm <= 200) out.memory.distill.minMessages = mm;
+          else if (mm !== undefined) warnings.push('memory.distill.minMessages 非法，回默认 4');
+          const mic = md['maxInputChars'];
+          if (typeof mic === 'number' && Number.isInteger(mic) && mic >= 500 && mic <= 60_000) out.memory.distill.maxInputChars = mic;
+          else if (mic !== undefined) warnings.push('memory.distill.maxInputChars 非法，回默认 12000');
+          const sim = md['similarity'];
+          if (typeof sim === 'number' && Number.isFinite(sim) && sim >= 0.5 && sim <= 1) out.memory.distill.similarity = sim;
+          else if (sim !== undefined) warnings.push('memory.distill.similarity 非法，回默认 0.72');
+          const mt = md['maxTokens'];
+          if (typeof mt === 'number' && Number.isInteger(mt) && mt >= 100 && mt <= 8000) out.memory.distill.maxTokens = mt;
+          else if (mt !== undefined) warnings.push('memory.distill.maxTokens 非法，回默认 1200');
+          const tp = md['temperature'];
+          if (typeof tp === 'number' && Number.isFinite(tp) && tp >= 0 && tp <= 1.5) out.memory.distill.temperature = tp;
+          else if (tp !== undefined) warnings.push('memory.distill.temperature 非法，回默认 0.3');
+          const aoh = md['autoOnHandoff'];
+          if (typeof aoh === 'boolean') out.memory.distill.autoOnHandoff = aoh;
+          else if (aoh !== undefined) warnings.push('memory.distill.autoOnHandoff 非法，回默认 true');
+        } else warnings.push('memory.distill 段必须是对象，回默认');
       }
     } else warnings.push('memory 段必须是对象，回默认');
   }
