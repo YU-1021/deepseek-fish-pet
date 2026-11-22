@@ -24,6 +24,9 @@ const asrModels = [
 ];
 let mockAsrStream = '';
 let mockAsrFeedCount = 0;
+const remindersConfig = { enabled: true, maxPending: 50, catchUpHours: 24, keepFiredDays: 7 };
+let reminders = [];
+const reminderTimers = new Map();
 
 function mockWavBase64(durationMs = 450) {
   const sampleRate = 8000;
@@ -91,6 +94,18 @@ function publishEvent(event, data) {
   for (const socket of clients) send(socket, payload);
 }
 
+function armReminder(item) {
+  const old = reminderTimers.get(item.id);
+  if (old) clearTimeout(old);
+  const timer = setTimeout(() => {
+    if (Date.now() < item.at) { armReminder(item); return; }
+    reminders = reminders.filter((entry) => entry.id !== item.id);
+    reminderTimers.delete(item.id);
+    publishEvent('reminder.due', { item, firedLateMs: Math.max(0, Date.now() - item.at) });
+  }, Math.max(1, Math.min(2_147_000_000, item.at - Date.now())));
+  timer.unref?.(); reminderTimers.set(item.id, timer);
+}
+
 function handleMessage(socket, message) {
   const input = JSON.parse(message);
   if (input.type === 'connect') {
@@ -106,9 +121,9 @@ function handleMessage(socket, message) {
 
   let data = { pong: true };
   if (input.method === 'health.status') {
-    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop'] };
+    data = { server: { version: '0.1.0-mock' }, methods: ['health.ping', 'health.status', 'config.get', 'session.list', 'session.get', 'chat.send', 'mood.status', 'mood.history', 'mood.adjust', 'mood.poke', 'mood.evaluate', 'hooks.status', 'hooks.list', 'hooks.get', 'hooks.create', 'hooks.update', 'hooks.delete', 'hooks.toggle', 'hooks.assess', 'approval.list', 'approval.answer', 'presence.status', 'presence.list', 'presence.run_once', 'voice.status', 'voice.voices', 'voice.speak', 'asr.status', 'asr.models', 'asr.download', 'asr.transcribe', 'asr.listen.start', 'asr.listen.feed', 'asr.listen.stop', 'reminder.status', 'reminder.list', 'reminder.create', 'reminder.cancel', 'reminder.snooze'] };
   } else if (input.method === 'config.get') {
-    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat } };
+    data = { version: '0.1.0-mock', gateway: { host: '127.0.0.1', port }, log: { level: 'info' }, mood: { enabled: moodEnabled, chatInjection: true, chatNudge: true, moodDecayPerHour: 2, energyRecoverPerHour: 8 }, hooks: { ...hooksConfig, risk: { enabled: hooksConfig.riskEnabled } }, presence: { ...presenceConfig }, voice: { ...voiceConfig }, asr: { ...asrConfig, autoChat: asrConfig.autoChat }, reminders: { ...remindersConfig } };
   } else if (input.method === 'mood.status') {
     data = { enabled: moodEnabled, state: { ...mood } };
   } else if (input.method === 'hooks.status') {
@@ -191,6 +206,29 @@ function handleMessage(socket, message) {
     mockAsrStream = ''; data = { segments: [] };
   } else if (input.method === 'asr.transcribe') {
     data = { text: '这是本地识别的模拟文本。', language: 'zh', durationMs: 1200, tookMs: 220, wake: null };
+  } else if (input.method === 'reminder.status') {
+    const sorted = [...reminders].sort((a, b) => a.at - b.at);
+    data = { enabled: remindersConfig.enabled, pending: reminders.length, nextAt: sorted[0]?.at ?? null, armed: true };
+  } else if (input.method === 'reminder.list') {
+    data = { items: [...reminders].sort((a, b) => a.at - b.at) };
+  } else if (input.method === 'reminder.create') {
+    if (!remindersConfig.enabled || reminders.length >= remindersConfig.maxPending) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_UNAVAILABLE', message: '提醒功能已关闭或已达待响上限' } }); return; }
+    const now = Date.now(); let at;
+    if (Number.isFinite(input.params?.inMinutes)) at = now + input.params.inMinutes * 60000;
+    else if (typeof input.params?.atClock === 'string') {
+      const [hours, mins] = input.params.atClock.split(':').map(Number); const date = new Date(); date.setHours(hours, mins, 0, 0); if (date.getTime() <= now) date.setDate(date.getDate() + 1); at = date.getTime();
+    } else at = typeof input.params?.at === 'number' ? input.params.at : Date.parse(input.params?.at);
+    if (!Number.isFinite(at) || at <= now || !String(input.params?.text ?? '').trim()) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_BAD_PARAMS', message: '提醒时间或内容无效' } }); return; }
+    const item = { id: `mock-reminder-${Date.now()}`, text: String(input.params.text).slice(0, 300), at: Math.floor(at), inMinutes: Math.max(0, Math.ceil((at - now) / 60000)), createdAt: now, snoozes: 0, source: 'user' };
+    reminders.push(item); armReminder(item); data = item; publishEvent('reminder.created', { item });
+  } else if (input.method === 'reminder.cancel') {
+    const item = reminders.find((entry) => entry.id === input.params?.id);
+    if (!item) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '提醒不存在' } }); return; }
+    clearTimeout(reminderTimers.get(item.id)); reminderTimers.delete(item.id); reminders = reminders.filter((entry) => entry.id !== item.id); data = item; publishEvent('reminder.cancelled', { item });
+  } else if (input.method === 'reminder.snooze') {
+    const item = reminders.find((entry) => entry.id === input.params?.id);
+    if (!item) { send(socket, { type: 'res', id: input.id, ok: false, error: { code: 'E_NOT_FOUND', message: '提醒不存在' } }); return; }
+    item.at = Date.now() + (input.params?.minutes ?? 5) * 60000; item.inMinutes = input.params?.minutes ?? 5; item.snoozes += 1; armReminder(item); data = item; publishEvent('reminder.snoozed', { item });
   } else if (input.method === 'mood.history') {
     data = { entries: moodHistory.slice(0, input.params?.limit ?? 20) };
   } else if (['mood.adjust', 'mood.poke', 'mood.evaluate'].includes(input.method)) {

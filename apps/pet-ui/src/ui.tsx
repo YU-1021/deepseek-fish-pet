@@ -3,6 +3,7 @@ import type { FormEvent, KeyboardEvent, PointerEvent as ReactPointerEvent } from
 import { Activity, BookOpen, Bot, MessageCircle, Paperclip, PawPrint, Plus, Send, Settings2, Sparkles, Volume2, VolumeX, Wifi, WifiOff, X } from 'lucide-react';
 import { request, subscribeEvents, usePetdStatus } from './petd';
 import { MoodSettingsPanel } from './mood-panel';
+import { ReminderCoordinator } from './reminder-panel';
 import './voice-chat.css';
 import { ApprovalCoordinator, ApprovalOverlay } from './hooks-panel';
 import { useMoodNumberPreference, useMoodState } from './mood';
@@ -181,6 +182,7 @@ export function App() {
 
   return <main className="shell">
     <ApprovalCoordinator/>
+    <ReminderCoordinator/>
     <aside className="rail"><div className="brand"><PawPrint size={22}/></div><button className={`rail-button ${view === 'chat' ? 'active' : ''}`} onClick={() => setView('chat')} title="对话"><MessageCircle/></button><button className={`rail-button ${view === 'persona' ? 'active' : ''}`} onClick={() => void openView('persona')} title="人格"><Sparkles/></button><button className={`rail-button ${view === 'memory' ? 'active' : ''}`} onClick={() => setView('memory')} title="记忆"><BookOpen/></button><button className={`rail-button ${view === 'settings' ? 'active' : ''}`} onClick={() => void openView('settings')} title="设置"><Settings2/></button><div className="rail-bottom"><Bot/></div></aside>
     {view === 'memory' ? <MemoryPanel connected={status.state === 'connected'} onUseAttachment={(attachment) => { if (pendingAttachments.some((item) => item.handle === attachment.handle)) { setView('chat'); return true; } if (pendingAttachments.length >= 10) return false; setPendingAttachments((items) => [...items, attachment]); setView('chat'); return true; }} onRemoveAttachment={(handle) => setPendingAttachments((items) => items.filter((item) => item.handle !== handle))} /> : <>
     <section className="conversation-list"><div className="list-head"><div><span className="eyebrow">PET COMPANION</span><h1>{view === 'chat' ? '对话' : view === 'persona' ? '人格' : '设置'}</h1></div>{view === 'chat' && <button className="new-chat" onClick={() => void newChat()} title="新建对话"><Plus size={18}/></button>}</div>
