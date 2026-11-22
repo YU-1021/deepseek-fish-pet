@@ -15,8 +15,8 @@ export const LISTING_DIR_CAP = 10;
 /** 前缀清单总字符上限；超了退化成「顶层目录 + 份数」。 */
 export const LISTING_MAX_CHARS = 6000;
 
-/** 总是折叠成一行计数的目录（历史/附件/归档不占常驻前缀）。 */
-export const FOLD_DIRS = new Set(['handoffs', 'blobs', 'archive']);
+/** 总是折叠成一行计数的目录（历史/附件/归档/蒸馏记忆不占常驻前缀）。 */
+export const FOLD_DIRS = new Set(['handoffs', 'blobs', 'archive', 'memory']);
 
 /** 常驻文件：整份进前缀，不允许删除或整份移动。 */
 export const RESIDENT_FILES = ['PARTNER.md'];
@@ -25,7 +25,7 @@ export const RESIDENT_FILES = ['PARTNER.md'];
 export const PARTNER_MAX_CHARS = 4000;
 
 /** 首次启动播种的目录骨架。 */
-export const SEED_DIRS = ['partner', 'notes', 'handoffs', 'archive', 'blobs'];
+export const SEED_DIRS = ['partner', 'notes', 'handoffs', 'archive', 'blobs', 'memory/diary', 'memory/medium'];
 
 /** 首次启动播种的文件（只创建不覆盖）。 */
 export const SEED_FILES: ReadonlyArray<readonly [string, string]> = [
@@ -56,6 +56,27 @@ export const SEED_FILES: ReadonlyArray<readonly [string, string]> = [
       '',
     ].join('\n'),
   ],
+  [
+    'memory/facts.md',
+    [
+      '# 记住的事',
+      '',
+      '（程序按权重挑这些事实注入对话；手改也可以，一行一条，别删表头。）',
+      '',
+      '| 事实 | 权重 | 标签 | 出现 | 最近 |',
+      '| --- | --- | --- | --- | --- |',
+      '',
+    ].join('\n'),
+  ],
+  [
+    'memory/experiences.md',
+    [
+      '# 学到的做事经验',
+      '',
+      '（程序蒸馏出来的程序性经验候选；够稳的会走学习闭环变成技能文件。）',
+      '',
+    ].join('\n'),
+  ],
 ];
 
 /** 记忆维护约定：拼进系统提示词，约束模型自己怎么整理文件。 */
@@ -67,6 +88,7 @@ export const MEMORY_NOTE = [
   '承诺和没做完的事写进 todo.md 并带日期；做完就删。',
   '跟时间有关的内容，日期写进文件名（例如 log/2026-11.md，每月一个）；正文写具体日期，不要写「今天」「明天」。',
   '长文件把旧内容移到 archive/ 归档；archive/ 在清单里折叠成一行，但仍然能被 grep 搜到。',
+  '`memory/` 目录是程序维护的蒸馏记忆（facts.md 永久事实、diary/ 日记、medium/ 会话摘要），注入的是加工后的内容；不要整份重写它，想补一条事实就按表格格式加一行。',
 ].join('\n');
 
 /** 读 PARTNER.md；不存在或读失败返回 null。 */
@@ -136,10 +158,14 @@ export function buildWorkspaceListing(memory: WorkspaceMemory, opts: { maxChars?
 }
 
 /**
- * 生成聊天系统提示词：人格 SOUL（调用方给） + 关于主人 + 记忆约定 + 工作区清单。
+ * 生成聊天系统提示词：人格 SOUL（调用方给） + 关于主人 + 蒸馏记忆 + 记忆约定 + 工作区清单。
  * 每次发消息前现算，用户手改文件后下一轮立即生效。
  */
-export function buildChatSystemPrompt(memory: WorkspaceMemory, personaContent: string): string {
+export function buildChatSystemPrompt(
+  memory: WorkspaceMemory,
+  personaContent: string,
+  opts: { distilled?: string } = {}
+): string {
   const sections: string[] = [];
   const persona = personaContent.trim();
   if (persona) sections.push(persona);
@@ -154,6 +180,9 @@ export function buildChatSystemPrompt(memory: WorkspaceMemory, personaContent: s
       sections.push(`## 关于主人\n\n${capped}`);
     }
   }
+
+  const distilled = opts.distilled?.trim() ?? '';
+  if (distilled) sections.push(distilled);
 
   sections.push(`## 记忆维护约定\n\n${MEMORY_NOTE}`);
   sections.push(`## 工作区文件（你的长期记忆）\n\n${buildWorkspaceListing(memory)}`);

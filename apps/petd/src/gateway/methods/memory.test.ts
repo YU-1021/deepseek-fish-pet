@@ -13,8 +13,13 @@ import { WorkspaceMemory } from '../../memory/store.js';
 import { WorkspaceGit } from '../../memory/git.js';
 import { MemoryService } from '../../memory/service.js';
 import { registerMemoryMethods } from './memory.js';
+import type { DistilledContext } from '../../memory/distill.js';
 
-function setup(): { reg: MethodRegistry; service: MemoryService; dir: string; events: Array<{ event: string; data: Record<string, unknown> }> } {
+interface SetupOptions {
+  inject?: () => DistilledContext;
+}
+
+function setup(opts: SetupOptions = {}): { reg: MethodRegistry; service: MemoryService; dir: string; events: Array<{ event: string; data: Record<string, unknown> }> } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'petd-mem-methods-'));
   const memory = new WorkspaceMemory({ dir });
   const git = new WorkspaceGit(dir);
@@ -27,7 +32,7 @@ function setup(): { reg: MethodRegistry; service: MemoryService; dir: string; ev
   });
   service.ensure();
   const reg = new MethodRegistry();
-  registerMemoryMethods(reg, { memory: service });
+  registerMemoryMethods(reg, { memory: service, ...(opts.inject === undefined ? {} : { inject: opts.inject }) });
   return { reg, service, dir, events };
 }
 
@@ -44,7 +49,7 @@ async function call(reg: MethodRegistry, name: string, params: unknown): Promise
   return m.handler(params, ctx);
 }
 
-test('注册 13 个 memory.* 方法，参数校验生效', async () => {
+test('注册 14 个 memory.* 方法，参数校验生效', async () => {
   const { reg } = setup();
   const names = reg.names().filter((n) => n.startsWith('memory.'));
   assert.deepEqual(names, [
@@ -54,6 +59,7 @@ test('注册 13 个 memory.* 方法，参数校验生效', async () => {
     'memory.glob',
     'memory.grep',
     'memory.history',
+    'memory.inject',
     'memory.list',
     'memory.move',
     'memory.read',
@@ -66,6 +72,25 @@ test('注册 13 个 memory.* 方法，参数校验生效', async () => {
   assert.equal(reg.validate('memory.write', { path: 'a.md', content: '内容' }), null);
   assert.ok(reg.validate('memory.write', { path: 'a.md', content: '内容', expectedContentHash: 'abc' }), 'hash 必须 64 位 hex');
   assert.ok(reg.validate('memory.restore', { path: 'a.md' }), 'restore 缺 hash 应该校验失败');
+});
+
+test('memory.inject 透传注入预览；没接注入时返回 E_UNAVAILABLE', async () => {
+  const preview: DistilledContext = {
+    enabled: true,
+    text: '## 记住的事（按重要性）\n\n- 主人喜欢安静',
+    used: { facts: 1, diary: 0, medium: 0 },
+    dropped: { facts: 0, diary: 0, medium: 0 },
+  };
+  const wired = setup({ inject: () => preview });
+  const result = (await call(wired.reg, 'memory.inject', {})) as DistilledContext;
+  assert.equal(result.text, preview.text);
+  assert.deepEqual(result.used, preview.used);
+
+  const bare = setup();
+  await assert.rejects(
+    async () => call(bare.reg, 'memory.inject', {}),
+    (err: unknown) => err instanceof PetdError && err.code === 'E_UNAVAILABLE'
+  );
 });
 
 test('status/tree/list：播种后可用', async () => {

@@ -301,6 +301,33 @@ try {
   const denyBad = await call(ws, client, 'memory.write', { path: 'a.md' });
   check(denyBad.ok === false && denyBad.error.code === 'E_BAD_PARAMS', '缺 content 被参数校验拒绝');
 
+  // 蒸馏记忆注入：写事实/日记 → memory.inject 预览里出现、按权重排序
+  const injectEmpty = await call(ws, client, 'memory.inject', {});
+  check(injectEmpty.ok && typeof injectEmpty.data.text === 'string', 'memory.inject 可读');
+  await call(ws, client, 'memory.write', {
+    path: 'memory/facts.md',
+    content: [
+      '# 记住的事',
+      '',
+      '| 事实 | 权重 | 标签 | 出现 | 最近 |',
+      '| --- | --- | --- | --- | --- |',
+      '| 主人喜欢安静 | 6 | 偏好 | 1 | 2026-11-20 |',
+      '| 主人在写桌宠 | 9 | 项目 | 2 | 2026-11-21 |',
+    ].join('\n'),
+  });
+  const lastWrite = await call(ws, client, 'memory.write', {
+    path: 'memory/diary/2026-11-21.md',
+    content: '今天把记忆注入接上了。',
+  });
+  const inject = await call(ws, client, 'memory.inject', {});
+  check(inject.ok && inject.data.used.facts === 2 && inject.data.used.diary >= 1, '注入预览统计事实/日记条数');
+  check(
+    inject.data.text.includes('主人在写桌宠') && inject.data.text.indexOf('主人在写桌宠') < inject.data.text.indexOf('主人喜欢安静'),
+    '注入按权重排序'
+  );
+  check(inject.data.text.includes('今天把记忆注入接上了'), '日记进了注入正文');
+  check(inject.data.text.indexOf('## 记住的事') < inject.data.text.indexOf('## 最近的日记'), '注入顺序 事实→日记');
+
   // 重启后仍在
   ws.close();
   ws = null;
@@ -313,10 +340,12 @@ try {
   ({ ws } = await connect(ready2.port, readToken(), 'petd-memory-smoke-2'));
   const client2 = makeClient(ws);
   const status2 = await call(ws, client2, 'memory.status');
-  check(status2.ok && status2.data.git.head === removed.data.commit, '重启后 Git HEAD 停在最后一次写入');
+  check(status2.ok && status2.data.git.head === lastWrite.data.commit, '重启后 Git HEAD 停在最后一次写入');
   check(status2.data.git.dirty === false, '重启后工作区干净');
   const listAfter = await call(ws, client2, 'memory.list');
   check(listAfter.ok && listAfter.data.entries.some((e) => e.path === 'MEMORY.md'), '重启后工作区仍在');
+  const inject2 = await call(ws, client2, 'memory.inject', {});
+  check(inject2.ok && inject2.data.used.facts === 2, '重启后蒸馏记忆仍在');
 
   ws.close();
   const exit2 = await petd.stop();

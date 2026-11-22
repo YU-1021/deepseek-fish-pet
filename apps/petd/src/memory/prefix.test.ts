@@ -61,6 +61,25 @@ test('PARTNER.md 太长时截断并留下提示', () => {
   assert.ok(prompt.length < PARTNER_MAX_CHARS * 3);
 });
 
+test('系统提示词：蒸馏记忆插在关于主人之后、约定之前', () => {
+  const memory = makeMemory();
+  memory.writeFileAtomic('PARTNER.md', '# 画像\n\n称呼：master\n');
+  const prompt = buildChatSystemPrompt(memory, '人格', { distilled: '## 记住的事（按重要性）\n\n- 主人喜欢安静' });
+  const partnerAt = prompt.indexOf('## 关于主人');
+  const distilledAt = prompt.indexOf('## 记住的事（按重要性）');
+  const noteAt = prompt.indexOf('## 记忆维护约定');
+  assert.ok(partnerAt >= 0 && distilledAt > partnerAt && noteAt > distilledAt);
+  assert.match(prompt, /主人喜欢安静/);
+  // 没传 distilled 时不留空段
+  const bare = buildChatSystemPrompt(memory, '人格');
+  assert.doesNotMatch(bare, /记住的事（按重要性）/);
+});
+
+test('清单：memory/ 蒸馏目录折叠成计数行', () => {
+  const memory = makeMemory();
+  assert.match(buildWorkspaceListing(memory), /memory\/ （2 份）/);
+});
+
 test('常驻文件判定', () => {
   assert.equal(isResident('PARTNER.md'), true);
   assert.equal(isResident('partner/PARTNER.md'), false);

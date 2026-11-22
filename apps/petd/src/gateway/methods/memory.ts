@@ -5,8 +5,10 @@
  * 写路径约定：写/追加/删除/移动成功后都会产生一次 Git 提交（见 MemoryService）。
  */
 import { Type } from '@sinclair/typebox';
+import { PetdError } from '@petd/protocol';
 import type { MethodRegistry } from '../registry.js';
 import type { MemoryService } from '../../memory/service.js';
+import type { DistilledContext } from '../../memory/distill.js';
 
 const Entry = Type.Object({
   name: Type.String(),
@@ -43,6 +45,8 @@ const Force = Type.Optional(Type.Boolean());
 
 export interface MemoryMethodDeps {
   memory: MemoryService;
+  /** 蒸馏记忆注入预览（pet-ui 调试/设置页用）；未接时 memory.inject 返回 E_UNAVAILABLE */
+  inject?: () => DistilledContext;
 }
 
 export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDeps): void {
@@ -287,6 +291,25 @@ export function registerMemoryMethods(reg: MethodRegistry, deps: MemoryMethodDep
     (params) => {
       const p = params as { hash: string; path?: string };
       return { diff: deps.memory.diff(p.hash, { ...(p.path === undefined ? {} : { path: p.path }) }) };
+    }
+  );
+
+  reg.register(
+    {
+      name: 'memory.inject',
+      scope: 'read',
+      description: '预览下一轮聊天会注入的蒸馏记忆（永久事实/日记/会话摘要），调试与设置页用',
+      params: Type.Object({}),
+      result: Type.Object({
+        enabled: Type.Boolean(),
+        text: Type.String(),
+        used: Type.Object({ facts: Type.Integer(), diary: Type.Integer(), medium: Type.Integer() }),
+        dropped: Type.Object({ facts: Type.Integer(), diary: Type.Integer(), medium: Type.Integer() }),
+      }),
+    },
+    () => {
+      if (deps.inject === undefined) throw new PetdError('E_UNAVAILABLE', '这个 petd 没有接蒸馏记忆注入');
+      return deps.inject();
     }
   );
 }

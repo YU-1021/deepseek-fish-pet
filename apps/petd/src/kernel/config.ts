@@ -289,6 +289,27 @@ export interface PetdConfig {
     /** 拼进系统提示词的学习结果最多多少字 */
     promptMaxChars: number;
   };
+  memory: {
+    /** 蒸馏记忆注入：永久事实 → 日记 → 会话摘要 三层压进系统提示词 */
+    inject: {
+      /** 总开关（关闭后提示词里不带任何蒸馏内容，只留工作区清单） */
+      enabled: boolean;
+      /** 注入正文总字符预算（超了先丢摘要、再丢日记、最后丢事实） */
+      budgetChars: number;
+      /** 永久事实最多注入几条 */
+      facts: number;
+      /** 单条事实最多多少字（超出截断） */
+      factChars: number;
+      /** 日记注入最近几天 */
+      diaryDays: number;
+      /** 单篇日记最多多少字（超出截断） */
+      diaryChars: number;
+      /** 会话摘要注入最近几条 */
+      medium: number;
+      /** 单条摘要最多多少字（超出截断） */
+      mediumChars: number;
+    };
+  };
 }
 
 export const DEFAULT_CONFIG: PetdConfig = {
@@ -454,6 +475,18 @@ export const DEFAULT_CONFIG: PetdConfig = {
     grayDays: 3,
     maxPending: 20,
     promptMaxChars: 2000,
+  },
+  memory: {
+    inject: {
+      enabled: true,
+      budgetChars: 7000,
+      facts: 40,
+      factChars: 160,
+      diaryDays: 7,
+      diaryChars: 320,
+      medium: 8,
+      mediumChars: 320,
+    },
   },
 };
 
@@ -937,6 +970,41 @@ export function normalizeConfig(raw: unknown): { config: PetdConfig; warnings: s
       if (typeof pm === 'number' && Number.isInteger(pm) && pm >= 0 && pm <= 20_000) out.learning.promptMaxChars = pm;
       else if (pm !== undefined) warnings.push('learning.promptMaxChars 非法，回默认 2000');
     } else warnings.push('learning 段必须是对象，回默认');
+  }
+  const memoryRaw = raw['memory'];
+  if (memoryRaw !== undefined) {
+    if (isObject(memoryRaw)) {
+      const injectRaw = memoryRaw['inject'];
+      if (injectRaw !== undefined) {
+        if (isObject(injectRaw)) {
+          const mi = injectRaw;
+          const en = mi['enabled'];
+          if (typeof en === 'boolean') out.memory.inject.enabled = en;
+          else if (en !== undefined) warnings.push('memory.inject.enabled 非法，回默认 true');
+          const bc = mi['budgetChars'];
+          if (typeof bc === 'number' && Number.isInteger(bc) && bc >= 500 && bc <= 8000) out.memory.inject.budgetChars = bc;
+          else if (bc !== undefined) warnings.push('memory.inject.budgetChars 非法，回默认 7000');
+          const fc = mi['facts'];
+          if (typeof fc === 'number' && Number.isInteger(fc) && fc >= 0 && fc <= 200) out.memory.inject.facts = fc;
+          else if (fc !== undefined) warnings.push('memory.inject.facts 非法，回默认 40');
+          const fch = mi['factChars'];
+          if (typeof fch === 'number' && Number.isInteger(fch) && fch >= 40 && fch <= 2000) out.memory.inject.factChars = fch;
+          else if (fch !== undefined) warnings.push('memory.inject.factChars 非法，回默认 160');
+          const dd = mi['diaryDays'];
+          if (typeof dd === 'number' && Number.isInteger(dd) && dd >= 0 && dd <= 60) out.memory.inject.diaryDays = dd;
+          else if (dd !== undefined) warnings.push('memory.inject.diaryDays 非法，回默认 7');
+          const dch = mi['diaryChars'];
+          if (typeof dch === 'number' && Number.isInteger(dch) && dch >= 40 && dch <= 2000) out.memory.inject.diaryChars = dch;
+          else if (dch !== undefined) warnings.push('memory.inject.diaryChars 非法，回默认 320');
+          const md = mi['medium'];
+          if (typeof md === 'number' && Number.isInteger(md) && md >= 0 && md <= 50) out.memory.inject.medium = md;
+          else if (md !== undefined) warnings.push('memory.inject.medium 非法，回默认 8');
+          const mch = mi['mediumChars'];
+          if (typeof mch === 'number' && Number.isInteger(mch) && mch >= 40 && mch <= 2000) out.memory.inject.mediumChars = mch;
+          else if (mch !== undefined) warnings.push('memory.inject.mediumChars 非法，回默认 320');
+        } else warnings.push('memory.inject 段必须是对象，回默认');
+      }
+    } else warnings.push('memory 段必须是对象，回默认');
   }
   out.version = CONFIG_VERSION;
   return { config: out, warnings };
