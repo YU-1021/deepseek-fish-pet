@@ -29,7 +29,7 @@ export function SkillsSettingsPanel({ config }: { config: any }) {
   }
   useEffect(() => { void refresh(); }, [connection.state]);
   useEffect(() => {
-    const unsubscribe = subscribeEvents((frame) => { if (frame.event === 'plugin.changed') void refresh(); });
+    const unsubscribe = subscribeEvents((frame) => { if (frame.event === 'plugin.changed' || frame.event === 'learning.approved' || frame.event === 'learning.rolledback') void refresh(); });
     return () => { unsubscribe(); };
   }, [connection.state]);
   function resetEditor() { setSelected(null); setName(''); setDescription(''); setKeywords(''); setBody(''); setAlways(false); setEditing(false); }
