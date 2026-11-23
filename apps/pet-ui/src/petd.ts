@@ -8,7 +8,7 @@ let snapshot: Snapshot = { state: 'connecting' };
 let socket: WebSocket | undefined;
 let requestId = 0;
 let retry = 0;
-declare global { interface Window { petdBootstrap?: { read: () => Promise<{ port?: number; token?: string; version?: string; error?: string }>; toggleIgnoreMouse: (ignore: boolean) => Promise<void>; showChat: () => Promise<void> } } }
+declare global { interface Window { petdBootstrap?: { read: () => Promise<{ port?: number; token?: string; version?: string; error?: string }>; setMemoryWorkspace: (workspace: string) => Promise<boolean>; getBlobThumbnail: (meta: { name: string; sha256: string }) => Promise<string>; getBlobFileUrl: (meta: { name: string }) => Promise<string>; showChat: () => Promise<void>; showPetMenu: () => Promise<void>; startDrag: (initialDelta?: { x: number; y: number }) => Promise<void>; endDrag: () => Promise<void>; updatePetHitRegions: (regions: Array<{ x: number; y: number; width: number; height: number }>) => void; openApprovalWindow?: () => Promise<boolean>; closeApprovalWindow?: () => Promise<boolean>; openCuaPermissionWindow?: (permission: any) => Promise<boolean>; readCuaPermission?: () => Promise<any>; clearCuaPermission?: (id?: string) => Promise<boolean>; onCuaPermission?: (callback: (permission: any) => void) => () => void; openDshApprovalWindow?: (approval: any) => Promise<boolean>; readDshApproval?: () => Promise<any>; clearDshApproval?: (id?: string) => Promise<boolean>; onDshApproval?: (callback: (approval: any) => void) => () => void; resizePet?: (height: number) => Promise<number>; readGameCapture?: (filePath: string) => Promise<string> } } }
 const pending = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: number }>();
 const publish = (next: Snapshot) => { snapshot = next; listeners.forEach((fn) => fn()); };
 const delays = [1000, 2000, 5000];
@@ -31,13 +31,14 @@ function connect() {
         if (!task) return;
         window.clearTimeout(task.timer); pending.delete(frame.id);
         if (frame.ok) task.resolve(frame.data);
-        else task.reject(Object.assign(new Error(frame.error?.message ?? 'petd 请求失败'), { code: frame.error?.code }));
+        else task.reject(Object.assign(new Error(frame.error?.message ?? 'petd 请求失败'), { code: frame.error?.code, details: frame.error?.details }));
       } else if (frame.type === 'event') events.forEach((listener) => listener(frame));
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       for (const task of pending.values()) { window.clearTimeout(task.timer); task.reject(new Error('petd 连接已断开')); }
       pending.clear();
-      scheduleReconnect('连接已断开');
+      const reason = event.reason ? `：${event.reason}` : '';
+      scheduleReconnect(`连接已断开（${event.code}${reason}）`);
     };
     socket.onerror = () => publish({ state: 'offline', error: '无法连接 petd，请检查服务是否启动' });
   }).catch((error: Error) => scheduleReconnect(error.message));
@@ -57,4 +58,4 @@ export function request(method: string, params: unknown, timeout = 120000): Prom
 }
 export function subscribeEvents(listener: (frame: Frame) => void) { events.add(listener); return () => events.delete(listener); }
 export function usePetdStatus() { return useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => snapshot); }
-if (!new URLSearchParams(window.location.search).has('pet')) connect();
+connect();

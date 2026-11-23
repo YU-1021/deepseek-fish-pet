@@ -1,1 +1,6 @@
-.pet-float,.pet-hint{-webkit-app-region:no-drag}
+.pet-hint{-webkit-app-region:no-drag}
+.pet-art-target{-webkit-app-region:no-drag}
+.pet-reply-bubble{width:260px;max-width:calc(100vw - 20px);margin:6px auto 10px;padding:9px 13px;border-radius:14px;background:#fff;color:#2b3450;font:13px/1.5 "Microsoft YaHei",sans-serif;box-shadow:0 4px 14px rgba(30,40,80,.25);text-align:left;box-sizing:border-box;overflow-wrap:break-word;word-break:break-word;animation:pet-reply-in .18s ease-out both;-webkit-app-region:no-drag}
+.pet-reply-bubble .en{font-weight:600}
+.pet-reply-bubble .zh{font-size:11px;color:#6b7490;margin-top:3px}
+@keyframes pet-reply-in{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
